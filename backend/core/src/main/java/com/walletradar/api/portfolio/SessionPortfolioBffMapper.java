@@ -122,7 +122,11 @@ public class SessionPortfolioBffMapper {
                                 position.unsupportedValuationReason(),
                                 position.domain(),
                                 position.venueId(),
-                                position.subAccount()
+                                position.subAccount(),
+                                position.breakEvenUsd(),
+                                position.lockedSurplusUsd(),
+                                position.incomeReceivedUsd(),
+                                position.attributionTargetFamily()
                         ))
                         .toList()
         );

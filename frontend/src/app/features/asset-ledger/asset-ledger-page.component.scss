@@ -902,7 +902,7 @@ canvas#chart {
 
 .stats {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(7, 1fr);
   gap: 1px;
   background: var(--b0);
   border: 1px solid var(--b0);
@@ -912,6 +912,7 @@ canvas#chart {
 }
 
 .sc {
+  position: relative;
   background: var(--s1);
   padding: 10px 14px;
 }
@@ -922,6 +923,96 @@ canvas#chart {
   letter-spacing: 0.07em;
   text-transform: uppercase;
   margin-bottom: 4px;
+}
+
+.sc-l-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+// (?) hint trigger on the three AVCO cards.
+.avco-hint-btn {
+  appearance: none;
+  flex-shrink: 0;
+  width: 13px;
+  height: 13px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--b2);
+  background: var(--s2);
+  color: var(--sub);
+  font-family: var(--sans);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+
+  &:hover {
+    color: var(--text);
+    background: var(--s3);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--cmid);
+    outline-offset: 1px;
+  }
+}
+
+.sc-hint-open .avco-hint-btn {
+  color: var(--text);
+  border-color: var(--cmid);
+  background: var(--cdim);
+}
+
+// Fixed placement escapes the `.stats` overflow clip; mirrors the chart tooltip (#tip / .ti) look.
+.avco-hint {
+  position: fixed;
+  z-index: 400;
+  width: 272px;
+  max-width: calc(100vw - 24px);
+  background: var(--s1);
+  border: 1px solid var(--b2);
+  border-radius: 9px;
+  padding: 11px 13px 12px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.72);
+  font-family: var(--sans);
+}
+
+.avco-hint-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 6px;
+  letter-spacing: 0.01em;
+}
+
+.avco-hint-body {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.avco-hint-note {
+  margin: 7px 0 0;
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--sub);
+}
+
+.avco-hint-members {
+  margin: 7px 0 0;
+  padding-top: 7px;
+  border-top: 1px solid var(--b0);
+  font-size: 10px;
+  line-height: 1.45;
+  color: rgb(52, 211, 153);
 }
 
 .sc-v {
@@ -937,12 +1028,25 @@ canvas#chart {
     color: rgba(255, 255, 255, 0.72);
     font-size: 16px;
   }
+
+  &.avco-breakeven-value {
+    color: rgb(52, 211, 153);
+  }
+}
+
+.sc-emdash {
+  color: var(--sub);
+  font-weight: 700;
 }
 
 .sc-s {
   font-size: 9px;
   color: var(--sub);
   margin-top: 2px;
+
+  &.sc-s-surplus {
+    color: rgb(52, 211, 153);
+  }
 }
 
 .section-head {

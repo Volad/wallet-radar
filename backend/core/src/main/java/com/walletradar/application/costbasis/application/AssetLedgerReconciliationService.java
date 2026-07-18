@@ -272,7 +272,12 @@ class AssetLedgerReconciliationService {
                 netRealisedPnlUsd,
                 gasPaidUsd,
                 List.copyOf(uncoveredBuckets),
-                shortfallSources
+                shortfallSources,
+                null,
+                null,
+                null,
+                null,
+                List.of()
         );
     }
 

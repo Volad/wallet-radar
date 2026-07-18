@@ -1,5 +1,8 @@
 package com.walletradar.application.costbasis.application;
 
+import com.walletradar.application.costbasis.breakeven.BreakEvenAttributionLoader;
+import com.walletradar.application.costbasis.breakeven.BreakEvenAttributionService;
+import com.walletradar.application.costbasis.breakeven.BreakEvenCalculator;
 import com.walletradar.application.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.application.costbasis.domain.AssetLedgerPointRepository;
 import com.walletradar.application.costbasis.domain.LpReceiptBasisPool;
@@ -55,6 +58,8 @@ class AssetLedgerQueryServiceTest {
     private LpReceiptBasisPoolRepository lpReceiptBasisPoolRepository;
 
     private AssetLedgerQueryService service() {
+        BreakEvenAttributionService attributionService =
+                new BreakEvenAttributionService(new BreakEvenAttributionLoader(new com.fasterxml.jackson.databind.ObjectMapper()));
         return new AssetLedgerQueryService(
                 userSessionRepository,
                 assetLedgerPointRepository,
@@ -62,7 +67,9 @@ class AssetLedgerQueryServiceTest {
                 accountingUniverseService,
                 new AssetLedgerChartService(new BlendedExposureAvcoSeriesBuilder()),
                 new AssetLedgerReconciliationService(mongoOperations, cexLiveBalancePort),
-                new LpReceiptBasisPoolService(lpReceiptBasisPoolRepository)
+                new LpReceiptBasisPoolService(lpReceiptBasisPoolRepository),
+                new BreakEvenCalculator(attributionService),
+                attributionService
         );
     }
 
@@ -1858,6 +1865,126 @@ class AssetLedgerQueryServiceTest {
         assertThat(view.timeline())
                 .extracting(AssetLedgerQueryService.TimelineEntryView::avcoKind)
                 .doesNotContain("FAMILY_ROLLUP");
+    }
+
+    @Test
+    void sessionFamilyLedgerEffectiveCostSeriesTerminalReconcilesWithScalarBreakEven() {
+        // ADR-062 §3: FAMILY:ETH parent (1 ETH @ $2000 basis, no realized P&L of its own) with an
+        // attributed cmETH child (FAMILY:METH) that banked +$500 Market-lane realized profit. The
+        // scalar header credits the child's $500 to ETH → effective basis $1500 → break-even $1500/ETH.
+        // The chart series weaves the child's realized P&L chronologically, so its terminal effective
+        // cost must equal the scalar header break-even exactly.
+        UserSession session = new UserSession();
+        session.setId("session-be");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("wallet-a");
+        wallet.setNetworks(List.of(NetworkId.BASE));
+        session.setWallets(List.of(wallet));
+
+        AssetLedgerPoint ethBuy = point(
+                "1", "wallet-a", NetworkId.BASE, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.ACQUIRE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "1", "2000", "0", "0", "1", "2000"
+        );
+        ethBuy.setNormalizedType("BUY");
+        ethBuy.setBlockTimestamp(Instant.parse("2026-04-05T10:00:00Z"));
+
+        AssetLedgerPoint methSell = point(
+                "5", "wallet-a", NetworkId.BASE, "FAMILY:METH",
+                AssetLedgerPoint.BasisEffect.DISPOSE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "-2", "-5000", "500", "0", "0", "0"
+        );
+        methSell.setAssetSymbol("CMETH");
+        methSell.setFamilyDisplaySymbol("CMETH");
+        methSell.setNormalizedType("SELL");
+        methSell.setNetRealisedPnlDeltaUsd(new BigDecimal("500"));
+        methSell.setBlockTimestamp(Instant.parse("2026-04-05T10:05:00Z"));
+
+        when(userSessionRepository.findById("session-be")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-be",
+                List.of("wallet-a"),
+                List.of("wallet-a")
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-be", "FAMILY:ETH"
+        )).thenReturn(List.of(ethBuy));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-be", "FAMILY:METH"
+        )).thenReturn(List.of(methSell));
+        when(normalizedTransactionRepository.findAllById(List.of("1")))
+                .thenReturn(List.of(normalized("1", "Coinbase", "ETH", "BUY", "1", "2000")));
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(
+                balance("wallet-a", NetworkId.BASE, "ETH", "1")
+        ));
+
+        AssetLedgerQueryService.SessionAssetLedgerView view = service()
+                .findSessionFamilyLedger("session-be", "FAMILY:ETH")
+                .orElseThrow();
+
+        assertThat(view.current().breakEvenUsd()).isEqualByComparingTo("1500");
+        assertThat(view.timeline()).isNotEmpty();
+        AssetLedgerQueryService.TimelineEntryView terminal = view.timeline().get(view.timeline().size() - 1);
+        assertThat(terminal.effectiveCostAfterUsd()).isEqualByComparingTo("1500");
+        assertThat(terminal.effectiveCostAfterUsd()).isEqualByComparingTo(view.current().breakEvenUsd());
+    }
+
+    @Test
+    void sessionFamilyLedgerFamilyMemberSymbolsIncludeViewedFamilyAndAttributedChildren() {
+        // ADR-062 §3 header hint: distinct member symbols present in the ledger for FAMILY:ETH and its
+        // attributed children (viewed family's own symbols first, then children's).
+        UserSession session = new UserSession();
+        session.setId("session-members");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("wallet-a");
+        wallet.setNetworks(List.of(NetworkId.BASE));
+        session.setWallets(List.of(wallet));
+
+        AssetLedgerPoint ethBuy = point(
+                "1", "wallet-a", NetworkId.BASE, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.ACQUIRE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "1", "2000", "0", "0", "1", "2000"
+        );
+        ethBuy.setAssetSymbol("WETH");
+        ethBuy.setFamilyDisplaySymbol("ETH");
+        ethBuy.setNormalizedType("BUY");
+
+        AssetLedgerPoint methPoint = point(
+                "5", "wallet-a", NetworkId.BASE, "FAMILY:METH",
+                AssetLedgerPoint.BasisEffect.DISPOSE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "-1", "-2500", "300", "0", "0", "0"
+        );
+        methPoint.setAssetSymbol("CMETH");
+        methPoint.setFamilyDisplaySymbol("CMETH");
+        methPoint.setNetRealisedPnlDeltaUsd(new BigDecimal("300"));
+
+        when(userSessionRepository.findById("session-members")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-members",
+                List.of("wallet-a"),
+                List.of("wallet-a")
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-members", "FAMILY:ETH"
+        )).thenReturn(List.of(ethBuy));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-members", "FAMILY:METH"
+        )).thenReturn(List.of(methPoint));
+        when(normalizedTransactionRepository.findAllById(List.of("1")))
+                .thenReturn(List.of(normalized("1", "Coinbase", "WETH", "BUY", "1", "2000")));
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(
+                balance("wallet-a", NetworkId.BASE, "ETH", "1")
+        ));
+
+        AssetLedgerQueryService.SessionAssetLedgerView view = service()
+                .findSessionFamilyLedger("session-members", "FAMILY:ETH")
+                .orElseThrow();
+
+        assertThat(view.current().familyMemberSymbols()).containsExactly("WETH", "CMETH");
     }
 
     private UserSession bybitSession(String sessionId, String uid) {

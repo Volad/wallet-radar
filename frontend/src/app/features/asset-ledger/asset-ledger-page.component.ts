@@ -64,6 +64,13 @@ interface AssetCurrentView {
   readonly realisedPnlUsd: number;
   readonly netRealisedPnlUsd: number | null;
   readonly gasPaidUsd: number;
+  // ADR-062 break-even (effective-cost) metric.
+  readonly breakEvenUsd: number | null;
+  readonly lockedSurplusUsd: number;
+  readonly incomeReceivedUsd: number;
+  readonly attributionTargetFamily: string | null;
+  // ADR-062 — real member asset symbols of the viewed family present in the ledger.
+  readonly familyMemberSymbols: ReadonlyArray<string>;
 }
 
 interface LegendItemView {
@@ -78,6 +85,17 @@ interface BasisFilterView {
   readonly key: string;
   readonly label: string;
   readonly color: string;
+}
+
+// Move-basis header AVCO metric hints (presentation-only). Click-to-toggle popover copy.
+type AvcoHintKey = 'market' | 'balance' | 'blended' | 'breakeven';
+
+interface AvcoHintContent {
+  readonly title: string;
+  readonly body: string;
+  readonly footnote: string;
+  // ADR-062 — optional "Includes: …" line listing the real family member symbols (Effective-cost hint).
+  readonly members?: string;
 }
 
 type EventFamilyKey = 'lp' | 'bridge' | 'transfer' | 'lending' | 'reward' | 'staking' | 'gas';
@@ -140,6 +158,8 @@ interface MarkerView {
   readonly blendedCoveredQuantityAfter: number | null;
   readonly liquidQuantityAfter: number | null;
   readonly blendedAvcoKind: string | null;
+  // ADR-062 — effective-cost (break-even) time series for the viewed family; null → line breaks.
+  readonly effectiveCostAfterUsd: number | null;
   readonly realisedPnlDeltaUsd: number | null;
   readonly gasDeltaUsd: number | null;
   readonly basisEffects: ReadonlyArray<string>;
@@ -916,6 +936,17 @@ export class AssetLedgerPageComponent {
   readonly showBalanceAvco = signal(true);
   readonly showBlendedAvco = signal(true);
   readonly showMarketAvco = signal(true);
+  // ADR-062 — effective-cost (break-even) line; ON by default like the AVCO lines.
+  readonly showEffectiveCost = signal(true);
+
+  // Move-basis AVCO metric hint popover. Click-to-toggle, one open at a time; closes on outside
+  // click, Escape, or scroll. Position is captured from the trigger button (fixed placement so the
+  // popover escapes the `.stats` overflow clip). Presentation-only.
+  readonly openAvcoHintKey = signal<AvcoHintKey | null>(null);
+  readonly avcoHintPosition = signal<{ readonly left: number; readonly top: number }>({
+    left: 0,
+    top: 0,
+  });
 
   @ViewChild('chartCanvas') private chartCanvasRef?: ElementRef<HTMLCanvasElement>;
   @ViewChild('qtyChartCanvas') private qtyChartCanvasRef?: ElementRef<HTMLCanvasElement>;
@@ -1432,7 +1463,7 @@ export class AssetLedgerPageComponent {
   }
 
   /** Flip an AVCO chart-line visibility toggle and re-render the main canvas (presentation-only). */
-  toggleAvcoLine(line: 'balance' | 'blended' | 'market'): void {
+  toggleAvcoLine(line: 'balance' | 'blended' | 'market' | 'effective'): void {
     switch (line) {
       case 'balance':
         this.showBalanceAvco.update((value) => !value);
@@ -1442,6 +1473,9 @@ export class AssetLedgerPageComponent {
         break;
       case 'market':
         this.showMarketAvco.update((value) => !value);
+        break;
+      case 'effective':
+        this.showEffectiveCost.update((value) => !value);
         break;
     }
     this.renderChart();
@@ -1654,11 +1688,98 @@ export class AssetLedgerPageComponent {
     await this.copyText(txHash, `tx:${txHash}`);
   }
 
+  toggleAvcoHint(key: AvcoHintKey, event: MouseEvent): void {
+    // Keep the toggle self-contained so the document click listener does not immediately re-close it.
+    event.stopPropagation();
+    if (this.openAvcoHintKey() === key) {
+      this.openAvcoHintKey.set(null);
+      return;
+    }
+    const trigger = event.currentTarget;
+    if (trigger instanceof HTMLElement) {
+      const rect = trigger.getBoundingClientRect();
+      const width = 272;
+      const left = Math.max(12, Math.min(rect.left, window.innerWidth - width - 12));
+      this.avcoHintPosition.set({ left, top: rect.bottom + 8 });
+    }
+    this.openAvcoHintKey.set(key);
+  }
+
+  closeAvcoHint(): void {
+    if (this.openAvcoHintKey() !== null) {
+      this.openAvcoHintKey.set(null);
+    }
+  }
+
+  avcoHintContent(
+    key: AvcoHintKey,
+    symbol: string,
+    familyMemberSymbols: ReadonlyArray<string> = []
+  ): AvcoHintContent {
+    const asset = symbol.trim().length > 0 ? symbol.trim() : 'the asset';
+    switch (key) {
+      case 'market':
+        return {
+          title: 'Market AVCO',
+          body: `Average cost per ${asset} for tax/market accounting. Purchases count at the price you paid; non-purchase inflows (rewards, LP fees, cross-asset conversions) count at their market value on arrival.`,
+          footnote:
+            'Example: buy 1 ETH @ $2,000, then receive a 0.1 ETH reward when ETH = $3,000 → ($2,000 + $300) / 1.1 = $2,090/ETH.',
+        };
+      case 'balance':
+        return {
+          title: 'Balance AVCO',
+          body: `Net (real-capital) average cost of the ${asset} that is currently LIQUID in your balance — excludes ${asset} parked in LP, lending, bridge or derivative positions. It carries your entry cost through internal moves and treats rewards as free capital.`,
+          footnote:
+            'Note: when the liquid pool is nearly empty, a fresh buy snaps this line to the spot price — expected.',
+        };
+      case 'blended':
+        return {
+          title: 'Blended AVCO',
+          body: `Net average cost across your TOTAL ${asset} exposure — liquid balance PLUS ${asset} parked in positions (LP / lending / loops), valued at its entry cost until you withdraw. This matches the dashboard token card.`,
+          footnote:
+            'Example: hold 4 ETH @ $2,500 and deposit 3 into an LP → Balance counts only the 1 liquid ETH, while Blended still counts all 4 @ $2,500.',
+        };
+      case 'breakeven': {
+        const uniqueMembers = [
+          ...new Set(familyMemberSymbols.map((member) => member.trim()).filter((member) => member.length > 0)),
+        ];
+        return {
+          title: 'Effective cost',
+          body: `Effective cost per ${asset} after crediting the realized TRADING PROFIT you already took on ${asset} (and on economically-related assets). It never exceeds Market AVCO — only realized profit lowers it; realized losses never raise it. Uses the Market lane, so zero-basis income (rewards, yield, funding) is excluded. Floored at $0 — profit beyond the remaining basis is reported separately as surplus.`,
+          footnote:
+            'Example: ETH AVCO $3,029, but +$2,540 realized cmETH profit was rotated in → effective cost ≈ $2,364/ETH.',
+          members: uniqueMembers.length > 0 ? `Includes: ${uniqueMembers.join(', ')}` : undefined,
+        };
+      }
+    }
+  }
+
+  // ADR-062: strip the `FAMILY:` prefix for display (e.g. `FAMILY:ETH` → `ETH`).
+  attributionParentLabel(target: string | null): string {
+    if (target === null) {
+      return '';
+    }
+    const trimmed = target.trim();
+    return trimmed.startsWith('FAMILY:') ? trimmed.slice('FAMILY:'.length) : trimmed;
+  }
+
+  @HostListener('document:keydown.escape')
+  onDocumentEscape(): void {
+    this.closeAvcoHint();
+  }
+
   @HostListener('document:click', ['$event'])
   onDocumentClick(event: MouseEvent): void {
     const target = event.target;
     if (!(target instanceof Element)) {
       return;
+    }
+    if (
+      this.openAvcoHintKey() !== null &&
+      target.closest('.avco-hint-btn') === null &&
+      target.closest('.avco-hint') === null
+    ) {
+      this.closeAvcoHint();
     }
     if (target.closest('#tip') !== null || target.closest('#chart') !== null || target.closest('#qty-chart') !== null || target.closest('#pnl-chart') !== null) {
       return;
@@ -1839,6 +1960,11 @@ export class AssetLedgerPageComponent {
         realisedPnlUsd: ledger.current.realisedPnlUsd ?? 0,
         netRealisedPnlUsd: ledger.current.netRealisedPnlUsd,
         gasPaidUsd: ledger.current.gasPaidUsd ?? 0,
+        breakEvenUsd: ledger.current.breakEvenUsd ?? null,
+        lockedSurplusUsd: ledger.current.lockedSurplusUsd ?? 0,
+        incomeReceivedUsd: ledger.current.incomeReceivedUsd ?? 0,
+        attributionTargetFamily: ledger.current.attributionTargetFamily ?? null,
+        familyMemberSymbols: ledger.current.familyMemberSymbols ?? [],
       },
       legendItems,
       markers,
@@ -1923,6 +2049,7 @@ export class AssetLedgerPageComponent {
         blendedCoveredQuantityAfter: entry.blendedCoveredQuantityAfter,
         liquidQuantityAfter: entry.liquidQuantityAfter ?? entry.quantityAfter ?? null,
         blendedAvcoKind: entry.blendedAvcoKind ?? null,
+        effectiveCostAfterUsd: entry.effectiveCostAfterUsd ?? null,
         realisedPnlDeltaUsd: entry.realisedPnlDeltaUsd,
         gasDeltaUsd: entry.gasDeltaUsd,
         basisEffects: entry.basisEffects,
@@ -2159,6 +2286,7 @@ export class AssetLedgerPageComponent {
       blendedCoveredQuantityAfter: last.blendedCoveredQuantityAfter,
       liquidQuantityAfter: last.liquidQuantityAfter,
       blendedAvcoKind: last.blendedAvcoKind,
+      effectiveCostAfterUsd: last.effectiveCostAfterUsd,
       realisedPnlDeltaUsd: ordered.reduce((sum, leg) => sum + (leg.realisedPnlDeltaUsd ?? 0), 0) || null,
       basisEffects,
       basisSummary: basisEffects.length > 0 ? basisEffects.join(' · ') : 'No basis effect',
@@ -3308,6 +3436,7 @@ export class AssetLedgerPageComponent {
       ...windowMarkers.map((marker) => marker.netAvcoAfterUsd).filter((value): value is number => value !== null),
       ...windowMarkers.map((marker) => marker.blendedNetAvcoAfterUsd).filter((value): value is number => value !== null),
       ...windowMarkers.map((marker) => marker.blendedAvcoAfterUsd).filter((value): value is number => value !== null),
+      ...windowMarkers.map((marker) => marker.effectiveCostAfterUsd).filter((value): value is number => value !== null),
     ];
     const minValue = values.length === 0 ? 0 : Math.min(...values) * 0.85;
     const maxValue = values.length === 0 ? 1 : Math.max(...values) * 1.1;
@@ -3361,6 +3490,19 @@ export class AssetLedgerPageComponent {
         lineCap: 'round',
         breakSelector: (marker) =>
           marker.blendedCoveredQuantityAfter === null || marker.blendedCoveredQuantityAfter <= POOL_EPSILON_ETH,
+      });
+    }
+
+    // Effective cost (break-even) — ADR-062: emerald green, dash-dot pattern (distinct from
+    // Market/Balance/Blended without relying on hue). Breaks where the value is null (covered qty
+    // drained), like the Market/Balance lines. Drawn before Market/Balance so those stay on top.
+    if (this.showEffectiveCost()) {
+      this.renderAvcoSeries(ctx, windowMarkers, projectX, projectY, {
+        selector: (marker) => marker.effectiveCostAfterUsd,
+        stroke: 'rgba(52,211,153,.92)',
+        lineWidth: 1.6,
+        dash: [6, 3, 1, 3],
+        lineCap: 'round',
       });
     }
 

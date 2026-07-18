@@ -99,6 +99,11 @@ interface TokenFamilyRow {
   readonly unrealizedPnlPct: number;
   readonly unrealizedPnlUsd: number;
   readonly realizedPnlUsd: number;
+  // ADR-062 break-even (effective-cost) metric — family-level (identical across a family's positions).
+  readonly breakEvenUsd: number | null;
+  readonly lockedSurplusUsd: number;
+  readonly incomeReceivedUsd: number;
+  readonly attributionTargetFamily: string | null;
   readonly issue: IssueCode;
   readonly networkIds: ReadonlyArray<NetworkId>;
   readonly walletIds: ReadonlyArray<WalletId>;
@@ -652,6 +657,10 @@ export class DashboardComponent {
       totalNetCostBasisUsd: number;
       unrealizedPnlUsd: number;
       realizedPnlUsd: number;
+      breakEvenUsd: number | null;
+      lockedSurplusUsd: number;
+      incomeReceivedUsd: number;
+      attributionTargetFamily: string | null;
       priceSource: PriceSource | null;
       pricedAt: string | null;
       stalenessSeconds: number | null;
@@ -682,6 +691,10 @@ export class DashboardComponent {
           totalNetCostBasisUsd,
           unrealizedPnlUsd: position.unrealizedPnlUsd,
           realizedPnlUsd: position.realizedPnlUsd,
+          breakEvenUsd: position.breakEvenUsd,
+          lockedSurplusUsd: position.lockedSurplusUsd,
+          incomeReceivedUsd: position.incomeReceivedUsd,
+          attributionTargetFamily: position.attributionTargetFamily,
           priceSource: position.priceSource,
           pricedAt: position.pricedAt,
           stalenessSeconds: position.stalenessSeconds,
@@ -704,6 +717,12 @@ export class DashboardComponent {
       existing.totalNetCostBasisUsd += totalNetCostBasisUsd;
       existing.unrealizedPnlUsd += position.unrealizedPnlUsd;
       existing.realizedPnlUsd += position.realizedPnlUsd;
+      // ADR-062 metrics are family-level (identical across a family's positions); keep the first
+      // non-null value so a wallet/network split does not drop the break-even attribution.
+      existing.breakEvenUsd = existing.breakEvenUsd ?? position.breakEvenUsd;
+      existing.attributionTargetFamily = existing.attributionTargetFamily ?? position.attributionTargetFamily;
+      existing.lockedSurplusUsd = existing.lockedSurplusUsd || position.lockedSurplusUsd;
+      existing.incomeReceivedUsd = existing.incomeReceivedUsd || position.incomeReceivedUsd;
       existing.priceSource = this.pickPriceSource(existing, position);
       existing.pricedAt = this.pickLatestPricedAt(existing.pricedAt, position.pricedAt);
       existing.stalenessSeconds = this.pickSmallestStaleness(existing.stalenessSeconds, position.stalenessSeconds);
@@ -742,6 +761,10 @@ export class DashboardComponent {
           unrealizedPnlPct,
           unrealizedPnlUsd: group.unrealizedPnlUsd,
           realizedPnlUsd: group.realizedPnlUsd,
+          breakEvenUsd: group.breakEvenUsd,
+          lockedSurplusUsd: group.lockedSurplusUsd,
+          incomeReceivedUsd: group.incomeReceivedUsd,
+          attributionTargetFamily: group.attributionTargetFamily,
           issue: group.issue,
           networkIds: [...group.networkIds],
           walletIds: [...group.walletIds],
@@ -1422,6 +1445,15 @@ export class DashboardComponent {
 
   avcoTooltip(asset: TokenFamilyRow): string {
     return `Net AVCO: ${this.formatUsdFull(asset.netAvcoUsd)}. Market AVCO: ${this.formatUsdFull(asset.avcoUsd)}.`;
+  }
+
+  // ADR-062: strip the `FAMILY:` prefix for display (e.g. `FAMILY:ETH` → `ETH`).
+  attributionParentLabel(target: string | null): string {
+    if (target === null) {
+      return '';
+    }
+    const trimmed = target.trim();
+    return trimmed.startsWith('FAMILY:') ? trimmed.slice('FAMILY:'.length) : trimmed;
   }
 
   private formatDuration(seconds: number): string {

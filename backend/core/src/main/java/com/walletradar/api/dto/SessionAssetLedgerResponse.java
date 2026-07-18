@@ -42,7 +42,20 @@ public record SessionAssetLedgerResponse(
             BigDecimal netRealisedPnlUsd,
             BigDecimal gasPaidUsd,
             List<UncoveredBucket> uncoveredBuckets,
-            List<ShortfallSource> shortfallSources
+            List<ShortfallSource> shortfallSources,
+            /** ADR-062 break-even (effective-cost) per unit; null when covered quantity is zero. */
+            BigDecimal breakEvenUsd,
+            /** ADR-062 realized profit already past break-even. */
+            BigDecimal lockedSurplusUsd,
+            /** ADR-062 informational zero-basis income booked against this family's cluster. */
+            BigDecimal incomeReceivedUsd,
+            /** ADR-062 parent family this family's realized P&L contributes to; null when self. */
+            String attributionTargetFamily,
+            /**
+             * ADR-062 §3 header hint: distinct member asset symbols actually present in the ledger for
+             * this family and its attributed children (viewed family's symbols first). Read-model only.
+             */
+            List<String> familyMemberSymbols
     ) {
     }
 
@@ -111,7 +124,14 @@ public record SessionAssetLedgerResponse(
             BigDecimal blendedNetAvcoAfterUsd,
             BigDecimal blendedCoveredQuantityAfter,
             BigDecimal liquidQuantityAfter,
-            String blendedAvcoKind
+            String blendedAvcoKind,
+            /**
+             * ADR-062 §3 effective-cost (break-even) time series for the viewed family. Per point:
+             * {@code max(marketBasis(t) − max(cumulativeAttributedMarketPnl(t), 0), 0) / coveredQty(t)}
+             * over the blended total-exposure covered/basis; null when covered quantity is zero.
+             * Its terminal value reconciles with the header {@code breakEvenUsd}.
+             */
+            BigDecimal effectiveCostAfterUsd
     ) {
     }
 

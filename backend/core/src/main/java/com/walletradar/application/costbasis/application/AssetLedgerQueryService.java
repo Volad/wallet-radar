@@ -1,6 +1,8 @@
 package com.walletradar.application.costbasis.application;
 
 import com.walletradar.application.costbasis.application.port.AssetLedgerReadPort;
+import com.walletradar.application.costbasis.breakeven.BreakEvenAttributionService;
+import com.walletradar.application.costbasis.breakeven.BreakEvenCalculator;
 import com.walletradar.application.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.application.costbasis.domain.AssetLedgerPointRepository;
 import com.walletradar.application.costbasis.domain.LpReceiptBasisPool;
@@ -17,6 +19,7 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.math.MathContext;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -46,6 +49,8 @@ public class AssetLedgerQueryService implements AssetLedgerReadPort {
     private final AssetLedgerChartService chartService;
     private final AssetLedgerReconciliationService reconciliationService;
     private final LpReceiptBasisPoolService lpReceiptBasisPoolService;
+    private final BreakEvenCalculator breakEvenCalculator;
+    private final BreakEvenAttributionService breakEvenAttributionService;
 
     @Override
     public Optional<SessionAssetLedgerView> findSessionFamilyLedger(String sessionId, String familyIdentity) {
@@ -84,6 +89,11 @@ public class AssetLedgerQueryService implements AssetLedgerReadPort {
                 loadCrossFamilySettlementPoints(universeScope.accountingUniverseId(), familyIdentity, points);
         Map<String, BlendedExposureAvcoSeriesBuilder.EthOriginHolding> familyOriginHoldingByCorrelationId =
                 loadFamilyOriginHoldingsByCorrelationId(universeScope.accountingUniverseId(), familyIdentity);
+        // ADR-062 §3: load the attributed cluster children ONCE (reused for the scalar header offset,
+        // the woven chart-series offset, and the family-member-symbol hint). Zero RPC; each child family
+        // rides the existing asset_ledger_universe_family_order_idx.
+        ChildAttributionData childAttribution =
+                loadChildAttributionData(universeScope.accountingUniverseId(), familyIdentity);
         AssetLedgerChartService.ChartProjection chartProjection =
                 chartService.buildTimelineProjection(
                         familyIdentity,
@@ -92,7 +102,8 @@ public class AssetLedgerQueryService implements AssetLedgerReadPort {
                         lpReceiptSupersetPoints,
                         crossFamilySettlementPoints,
                         familyOriginHoldingByCorrelationId,
-                        normalizedById
+                        normalizedById,
+                        childAttribution.pnlEvents()
                 );
         CurrentStateView currentState = reconciliationService.currentStateView(
                 session,
@@ -101,6 +112,13 @@ public class AssetLedgerQueryService implements AssetLedgerReadPort {
                 chartProjection.totalRealisedPnlUsd(),
                 chartProjection.totalNetRealisedPnlUsd(),
                 chartProjection.totalGasPaidUsd()
+        );
+        currentState = enrichWithBreakEven(
+                currentState,
+                familyIdentity,
+                representativeSymbol(familyIdentity, points),
+                familyMemberSymbols(points, childAttribution.childSymbols()),
+                childAttribution.childInputs()
         );
         FullSessionCurrentView fullSessionCurrent = reconciliationService.fullSessionCurrentView(points, familyIdentity);
         return new SessionAssetLedgerView(
@@ -126,6 +144,134 @@ public class AssetLedgerQueryService implements AssetLedgerReadPort {
             normalizedById.put(transaction.getId(), transaction);
         }
         return normalizedById;
+    }
+
+    /**
+     * ADR-062 §3: enriches the move-basis header with break-even (effective-cost) fields. The SELF
+     * family uses the reconciled current-state basis/coverage plus the chart-projected realized P&L.
+     * Cross-family attribution is done correctly here: when the viewed family is a parent target
+     * (e.g. {@code FAMILY:ETH}), each redirected child family's Market-lane realized P&L is loaded via
+     * the existing {@code asset_ledger_universe_family_order_idx} and credited to the parent, so
+     * exited children (e.g. cmETH → ETH) still lower the parent's break-even. Zero RPC / zero Mongo
+     * mutation.
+     */
+    private CurrentStateView enrichWithBreakEven(
+            CurrentStateView currentState,
+            String familyIdentity,
+            String representativeSymbol,
+            List<String> familyMemberSymbols,
+            List<BreakEvenCalculator.FamilyBreakEvenInput> childInputs
+    ) {
+        List<BreakEvenCalculator.FamilyBreakEvenInput> inputs = new ArrayList<>();
+        inputs.add(new BreakEvenCalculator.FamilyBreakEvenInput(
+                familyIdentity,
+                representativeSymbol,
+                zeroIfNull(currentState.totalCostBasisUsd()),
+                zeroIfNull(currentState.coveredQuantity()),
+                zeroIfNull(currentState.realisedPnlUsd()),
+                zeroIfNull(currentState.netRealisedPnlUsd())
+        ));
+        inputs.addAll(childInputs);
+        BreakEvenCalculator.BreakEvenResult result = breakEvenCalculator.compute(inputs).get(familyIdentity);
+        if (result == null) {
+            return currentState.withBreakEven(null, null, null, null, familyMemberSymbols);
+        }
+        return currentState.withBreakEven(
+                result.breakEvenUsd(),
+                result.lockedSurplusUsd(),
+                result.incomeReceivedUsd(),
+                result.attributionTargetFamily(),
+                familyMemberSymbols
+        );
+    }
+
+    /**
+     * ADR-062 §3: loads the attributed cluster children once and derives the three read-model
+     * artifacts that depend on them — the scalar break-even inputs (Market/Net realized P&L totals per
+     * child family), the woven chart-series offset events (per-point Market-lane realized P&L keyed by
+     * replay ordering), and the child asset symbols for the header member hint. Zero RPC / zero Mongo
+     * mutation; each child family reuses the existing {@code asset_ledger_universe_family_order_idx}.
+     */
+    private ChildAttributionData loadChildAttributionData(String accountingUniverseId, String familyIdentity) {
+        List<BreakEvenCalculator.FamilyBreakEvenInput> childInputs = new ArrayList<>();
+        List<AssetLedgerChartService.AttributedRealizedPnlEvent> pnlEvents = new ArrayList<>();
+        LinkedHashSet<String> childSymbols = new LinkedHashSet<>();
+        for (String childFamily : breakEvenAttributionService.resolveChildFamilies(familyIdentity)) {
+            BigDecimal marketPnl = BigDecimal.ZERO;
+            BigDecimal netPnl = BigDecimal.ZERO;
+            if (accountingUniverseId != null && !accountingUniverseId.isBlank()) {
+                List<AssetLedgerPoint> childPoints = assetLedgerPointRepository
+                        .findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                                accountingUniverseId,
+                                childFamily
+                        );
+                for (AssetLedgerPoint point : childPoints) {
+                    BigDecimal marketDelta = zeroIfNull(point.getRealisedPnlDeltaUsd());
+                    marketPnl = marketPnl.add(marketDelta, MC);
+                    netPnl = netPnl.add(zeroIfNull(point.getNetRealisedPnlDeltaUsd()), MC);
+                    if (marketDelta.signum() != 0) {
+                        pnlEvents.add(new AssetLedgerChartService.AttributedRealizedPnlEvent(
+                                point.getBlockTimestamp(),
+                                point.getTransactionIndex(),
+                                point.getReplaySequence(),
+                                marketDelta
+                        ));
+                    }
+                    addSymbol(childSymbols, point.getAssetSymbol());
+                }
+            }
+            childInputs.add(new BreakEvenCalculator.FamilyBreakEvenInput(
+                    childFamily,
+                    BreakEvenAttributionService.representativeSymbolFor(childFamily, null),
+                    BigDecimal.ZERO,
+                    BigDecimal.ZERO,
+                    marketPnl,
+                    netPnl
+            ));
+        }
+        return new ChildAttributionData(childInputs, pnlEvents, List.copyOf(childSymbols));
+    }
+
+    /**
+     * ADR-062 §3: distinct member asset symbols actually present in the ledger for the viewed family
+     * and its attributed children. The viewed family's own symbols come first (in ledger order),
+     * followed by the children's; symbols are uppercased and blanks dropped.
+     */
+    private static List<String> familyMemberSymbols(List<AssetLedgerPoint> points, List<String> childSymbols) {
+        LinkedHashSet<String> symbols = new LinkedHashSet<>();
+        for (AssetLedgerPoint point : points) {
+            addSymbol(symbols, point.getAssetSymbol());
+        }
+        for (String childSymbol : childSymbols) {
+            addSymbol(symbols, childSymbol);
+        }
+        return List.copyOf(symbols);
+    }
+
+    private static void addSymbol(LinkedHashSet<String> symbols, String symbol) {
+        if (symbol == null) {
+            return;
+        }
+        String normalized = symbol.trim().toUpperCase(java.util.Locale.ROOT);
+        if (!normalized.isBlank()) {
+            symbols.add(normalized);
+        }
+    }
+
+    private record ChildAttributionData(
+            List<BreakEvenCalculator.FamilyBreakEvenInput> childInputs,
+            List<AssetLedgerChartService.AttributedRealizedPnlEvent> pnlEvents,
+            List<String> childSymbols
+    ) {
+    }
+
+    private static String representativeSymbol(String familyIdentity, List<AssetLedgerPoint> points) {
+        for (AssetLedgerPoint point : points) {
+            if (point.getFamilyDisplaySymbol() != null && !point.getFamilyDisplaySymbol().isBlank()) {
+                return point.getFamilyDisplaySymbol();
+            }
+        }
+        return BreakEvenAttributionService.representativeSymbolFor(familyIdentity, null);
     }
 
     /**
@@ -331,7 +477,21 @@ public class AssetLedgerQueryService implements AssetLedgerReadPort {
                                    BigDecimal totalCostBasisUsd, BigDecimal avcoUsd, BigDecimal netTotalCostBasisUsd,
                                    BigDecimal netAvcoUsd, BigDecimal realisedPnlUsd, BigDecimal netRealisedPnlUsd,
                                    BigDecimal gasPaidUsd, List<UncoveredBucketView> uncoveredBuckets,
-                                   List<ShortfallSourceView> shortfallSources) {}
+                                   List<ShortfallSourceView> shortfallSources,
+                                   // ADR-062 break-even (effective-cost) header fields (nullable, read-model only).
+                                   BigDecimal breakEvenUsd, BigDecimal lockedSurplusUsd,
+                                   BigDecimal incomeReceivedUsd, String attributionTargetFamily,
+                                   // ADR-062 §3 header hint: real member symbols of the family + attributed children.
+                                   List<String> familyMemberSymbols) {
+        public CurrentStateView withBreakEven(BigDecimal breakEvenUsd, BigDecimal lockedSurplusUsd,
+                                              BigDecimal incomeReceivedUsd, String attributionTargetFamily,
+                                              List<String> familyMemberSymbols) {
+            return new CurrentStateView(quantity, coveredQuantity, uncoveredQuantity, totalCostBasisUsd, avcoUsd,
+                    netTotalCostBasisUsd, netAvcoUsd, realisedPnlUsd, netRealisedPnlUsd, gasPaidUsd, uncoveredBuckets,
+                    shortfallSources, breakEvenUsd, lockedSurplusUsd, incomeReceivedUsd, attributionTargetFamily,
+                    familyMemberSymbols);
+        }
+    }
     public record UncoveredBucketView(String walletAddress, String networkId, String assetSymbol, String assetContract,
                                       BigDecimal quantity, BigDecimal coveredQuantity, BigDecimal uncoveredQuantity,
                                       String uncoveredReason, String latestTxHash, String latestNormalizedType,
@@ -353,7 +513,9 @@ public class AssetLedgerQueryService implements AssetLedgerReadPort {
                                     BigDecimal blendedAvcoBeforeUsd, BigDecimal blendedAvcoAfterUsd,
                                     BigDecimal blendedNetAvcoBeforeUsd, BigDecimal blendedNetAvcoAfterUsd,
                                     BigDecimal blendedCoveredQuantityAfter, BigDecimal liquidQuantityAfter,
-                                    String blendedAvcoKind) {}
+                                    String blendedAvcoKind,
+                                    // ADR-062 §3 — effective-cost (break-even) time series (nullable).
+                                    BigDecimal effectiveCostAfterUsd) {}
     public record EventOverlayView(String eventGroupId, String normalizedTransactionId, String txHash,
                                    Instant blockTimestamp, String normalizedType, String protocolName,
                                    String lifecycleKind, List<String> walletAddresses, List<String> networkIds,

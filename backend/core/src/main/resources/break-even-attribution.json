@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "_comment": "ADR-062 break-even (effective-cost) attribution plane. Maps a CLUSTER:* or FAMILY:* source key to a target FAMILY:* whose break-even receives the source's Market-lane realized P&L. Explicit FAMILY:* entries override CLUSTER:* entries. Each family resolves to exactly one target (partition; no double count). Read-model only — does not affect AVCO/replay (ADR-054).",
+  "attributions": [
+    {
+      "source": "CLUSTER:ETH_STAKING",
+      "target": "FAMILY:ETH",
+      "note": "Realized P&L on staked-ETH derivatives (mETH/cmETH/stETH/wstETH/rETH/cbETH/…) contributes to ETH effective cost. Families stay separate for AVCO."
+    },
+    {
+      "source": "CLUSTER:SOL_STAKING",
+      "target": "FAMILY:SOL",
+      "note": "Realized P&L on staked-SOL derivatives (bbSOL/…) contributes to SOL effective cost. Families stay separate for AVCO."
+    },
+    {
+      "source": "CLUSTER:AVAX_STAKING",
+      "target": "FAMILY:AVAX",
+      "note": "Realized P&L on staked-AVAX derivatives (sAVAX/…) contributes to AVAX effective cost. Families stay separate for AVCO."
+    }
+  ]
+}

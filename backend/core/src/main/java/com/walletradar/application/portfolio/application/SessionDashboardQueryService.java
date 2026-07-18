@@ -2,6 +2,8 @@ package com.walletradar.application.portfolio.application;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import com.walletradar.application.costbasis.breakeven.BreakEvenAttributionService;
+import com.walletradar.application.costbasis.breakeven.BreakEvenCalculator;
 import com.walletradar.application.costbasis.support.CexUmbrellaSupport;
 import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
 import com.walletradar.application.costbasis.support.AccountingAssetIdentitySupport;
@@ -78,6 +80,7 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
     private final CexLiveBalancePort cexLiveBalancePort;
     private final CurrentPriceReadService currentPriceReadService;
     private final PortfolioConservationGate portfolioConservationGate;
+    private final BreakEvenCalculator breakEvenCalculator;
     private final Cache<String, SessionDashboardView> sessionDashboardCache = Caffeine.newBuilder()
             .maximumSize(64)
             .expireAfterWrite(45, TimeUnit.SECONDS)
@@ -111,9 +114,15 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
         LinkedHashSet<String> enabledCexVenueRefs = new LinkedHashSet<>(CexUmbrellaSupport.enabledCexAccountRefs(session));
 
         Map<BucketKey, AssetLedgerPoint> latestPointByBucket = latestLedgerPointByBucket(scopedLedgerPoints);
-        Map<FamilyRowKey, BigDecimal> realisedPnlByFamily = realisedPnlByFamily(
+        Map<FamilyRowKey, BigDecimal> realisedPnlByFamily = pnlDeltaByFamily(
                 scopedLedgerPoints,
-                enabledCexVenueRefs
+                enabledCexVenueRefs,
+                AssetLedgerPoint::getRealisedPnlDeltaUsd
+        );
+        Map<FamilyRowKey, BigDecimal> netRealisedPnlByFamily = pnlDeltaByFamily(
+                scopedLedgerPoints,
+                enabledCexVenueRefs,
+                AssetLedgerPoint::getNetRealisedPnlDeltaUsd
         );
         BigDecimal totalRealisedPnlUsd = scopedLedgerPoints.stream()
                 .map(AssetLedgerPoint::getRealisedPnlDeltaUsd)
@@ -256,7 +265,7 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                 responseTime
         );
 
-        List<TokenPositionView> tokenPositions = rows.entrySet().stream()
+        List<TokenPositionView> baseTokenPositions = rows.entrySet().stream()
                 .map(entry -> entry.getValue().toView(
                         resolvePrice(latestPricesBySymbol, entry.getValue().priceLookupCandidates()),
                         zeroIfNull(realisedPnlByFamily.get(entry.getKey()))
@@ -273,6 +282,28 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                         TokenPositionView::marketValueUsd,
                         Comparator.nullsLast(BigDecimal::compareTo)
                 ).reversed())
+                .toList();
+
+        // ADR-062: break-even (effective-cost) enrichment. Realized P&L of fully-exited children
+        // (e.g. cmETH → FAMILY:ETH) still credits the parent even without a held row, so the input
+        // set is the union of displayed families and any family that carries realized P&L.
+        Map<String, BreakEvenCalculator.BreakEvenResult> breakEvenByFamily = computeBreakEvenByFamily(
+                baseTokenPositions,
+                realisedPnlByFamily,
+                netRealisedPnlByFamily
+        );
+        List<TokenPositionView> tokenPositions = baseTokenPositions.stream()
+                .map(view -> {
+                    BreakEvenCalculator.BreakEvenResult result = breakEvenByFamily.get(view.familyIdentity());
+                    return result == null
+                            ? view.withBreakEven(null, null, null, null)
+                            : view.withBreakEven(
+                                    result.breakEvenUsd(),
+                                    result.lockedSurplusUsd(),
+                                    result.incomeReceivedUsd(),
+                                    result.attributionTargetFamily()
+                            );
+                })
                 .toList();
 
         BigDecimal portfolioValueUsd = tokenPositions.stream()
@@ -636,9 +667,10 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
         return latest;
     }
 
-    private Map<FamilyRowKey, BigDecimal> realisedPnlByFamily(
+    private Map<FamilyRowKey, BigDecimal> pnlDeltaByFamily(
             List<AssetLedgerPoint> points,
-            LinkedHashSet<String> enabledCexVenueRefs
+            LinkedHashSet<String> enabledCexVenueRefs,
+            java.util.function.Function<AssetLedgerPoint, BigDecimal> deltaExtractor
     ) {
         Map<FamilyRowKey, BigDecimal> totals = new LinkedHashMap<>();
         for (AssetLedgerPoint point : points) {
@@ -669,9 +701,59 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                     point.getNetworkId(),
                     familyIdentity
             );
-            totals.merge(key, zeroIfNull(point.getRealisedPnlDeltaUsd()), (left, right) -> left.add(right, MC));
+            totals.merge(key, zeroIfNull(deltaExtractor.apply(point)), (left, right) -> left.add(right, MC));
         }
         return totals;
+    }
+
+    private Map<String, BreakEvenCalculator.BreakEvenResult> computeBreakEvenByFamily(
+            List<TokenPositionView> positions,
+            Map<FamilyRowKey, BigDecimal> realisedPnlByFamily,
+            Map<FamilyRowKey, BigDecimal> netRealisedPnlByFamily
+    ) {
+        Map<String, BigDecimal> marketBasisByFamily = new LinkedHashMap<>();
+        Map<String, BigDecimal> coveredByFamily = new LinkedHashMap<>();
+        Map<String, String> symbolByFamily = new LinkedHashMap<>();
+        for (TokenPositionView position : positions) {
+            String family = position.familyIdentity();
+            if (blank(family)) {
+                continue;
+            }
+            marketBasisByFamily.merge(family, zeroIfNull(position.provableBasisUsd()), (left, right) -> left.add(right, MC));
+            coveredByFamily.merge(family, zeroIfNull(position.coveredQuantity()), (left, right) -> left.add(right, MC));
+            symbolByFamily.putIfAbsent(family, position.symbol());
+        }
+        Map<String, BigDecimal> marketPnlByFamily = aggregatePnlByFamily(realisedPnlByFamily);
+        Map<String, BigDecimal> netPnlByFamily = aggregatePnlByFamily(netRealisedPnlByFamily);
+
+        LinkedHashSet<String> families = new LinkedHashSet<>();
+        families.addAll(marketBasisByFamily.keySet());
+        families.addAll(marketPnlByFamily.keySet());
+        families.addAll(netPnlByFamily.keySet());
+        List<BreakEvenCalculator.FamilyBreakEvenInput> inputs = new ArrayList<>();
+        for (String family : families) {
+            inputs.add(new BreakEvenCalculator.FamilyBreakEvenInput(
+                    family,
+                    BreakEvenAttributionService.representativeSymbolFor(family, symbolByFamily.get(family)),
+                    zeroIfNull(marketBasisByFamily.get(family)),
+                    zeroIfNull(coveredByFamily.get(family)),
+                    zeroIfNull(marketPnlByFamily.get(family)),
+                    zeroIfNull(netPnlByFamily.get(family))
+            ));
+        }
+        return breakEvenCalculator.compute(inputs);
+    }
+
+    private static Map<String, BigDecimal> aggregatePnlByFamily(Map<FamilyRowKey, BigDecimal> byRow) {
+        Map<String, BigDecimal> byFamily = new LinkedHashMap<>();
+        for (Map.Entry<FamilyRowKey, BigDecimal> entry : byRow.entrySet()) {
+            String family = entry.getKey().familyIdentity();
+            if (blank(family)) {
+                continue;
+            }
+            byFamily.merge(family, zeroIfNull(entry.getValue()), (left, right) -> left.add(right, MC));
+        }
+        return byFamily;
     }
 
     private static String fallbackFamilyIdentity(NetworkId networkId, String assetSymbol, String assetContract) {
@@ -814,7 +896,15 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
             /** CEX venue id (e.g. "bybit", "dzengi"); null for on-chain wallets. */
             String venueId,
             /** CEX sub-account kind (e.g. "FUND", "UTA", "EARN"); null if not applicable. */
-            String subAccount
+            String subAccount,
+            /** ADR-062 break-even (effective-cost) per unit; null when covered quantity is zero. */
+            BigDecimal breakEvenUsd,
+            /** ADR-062 realized profit already past break-even (effective basis floored at zero). */
+            BigDecimal lockedSurplusUsd,
+            /** ADR-062 informational zero-basis income booked against this family's cluster. */
+            BigDecimal incomeReceivedUsd,
+            /** ADR-062 parent family this row's realized P&L contributes to; null when self. */
+            String attributionTargetFamily
     ) {
         public BigDecimal marketValueUsd() {
             return marketValueUsd == null ? BigDecimal.ZERO : marketValueUsd;
@@ -822,6 +912,21 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
 
         public BigDecimal provableBasisUsd() {
             return avcoUsd.multiply(coveredQuantity, MC);
+        }
+
+        public TokenPositionView withBreakEven(
+                BigDecimal breakEvenUsd,
+                BigDecimal lockedSurplusUsd,
+                BigDecimal incomeReceivedUsd,
+                String attributionTargetFamily
+        ) {
+            return new TokenPositionView(
+                    familyIdentity, symbol, name, quantity, coveredQuantity, priceUsd, marketValueUsd,
+                    priceSource, pricedAt, stalenessSeconds, isLiveQuote, priceIssue, avcoUsd, netAvcoUsd,
+                    unrealizedPnlPct, unrealizedPnlUsd, realizedPnlUsd, networkId, walletAddress, issue,
+                    valuationModel, valuationUnderlyingSymbol, unsupportedValuationReason, domain, venueId,
+                    subAccount, breakEvenUsd, lockedSurplusUsd, incomeReceivedUsd, attributionTargetFamily
+            );
         }
     }
 
@@ -1018,7 +1123,11 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                     effectivePriceSnapshot.unsupportedValuationReason(),
                     walletRef.domain().name(),
                     walletRef.venueId(),
-                    walletRef.subAccount()
+                    walletRef.subAccount(),
+                    null,
+                    null,
+                    null,
+                    null
             );
         }
     }

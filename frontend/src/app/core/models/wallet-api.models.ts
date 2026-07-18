@@ -287,6 +287,16 @@ export interface SessionAssetLedgerCurrentResponse {
   readonly realisedPnlUsd: number | null;
   readonly netRealisedPnlUsd: number | null;
   readonly gasPaidUsd: number | null;
+  /** ADR-062 break-even (effective-cost) metric. Effective per-unit cost after crediting realized trading P&L; null when no covered qty. */
+  readonly breakEvenUsd: number | null;
+  /** ADR-062: realized profit beyond remaining basis (>0 means already past break-even). */
+  readonly lockedSurplusUsd: number;
+  /** ADR-062: zero-basis income (yield/rewards/funding) booked to this family's cluster; informational. */
+  readonly incomeReceivedUsd: number;
+  /** ADR-062: when non-null, this family's realized P&L is credited to that parent family (e.g. FAMILY:ETH). */
+  readonly attributionTargetFamily: string | null;
+  /** ADR-062: real member asset symbols of this family present in the ledger (e.g. ['ETH','WETH','WSTETH']). */
+  readonly familyMemberSymbols: ReadonlyArray<string>;
 }
 
 export interface SessionAssetLedgerFullSessionCurrentResponse {
@@ -344,6 +354,12 @@ export interface SessionAssetLedgerTimelineEntryResponse {
   readonly liquidQuantityAfter: number | null;
   /** PRIMARY_FLOW = blended covered-weighted AVCO; UNAVAILABLE = total exposure drained (line breaks). */
   readonly blendedAvcoKind: string | null;
+  /**
+   * ADR-062: effective-cost per remaining unit at this timeline point for the viewed family
+   * (`max(marketBasis(t) − max(cumulativeAttributedMarketPnl(t), 0), 0) / coveredQty(t)`). Null when
+   * covered qty is ~0 → the effective-cost line breaks. Terminal value reconciles with `current.breakEvenUsd`.
+   */
+  readonly effectiveCostAfterUsd: number | null;
   readonly fromAddress: string | null;
   readonly toAddress: string | null;
   readonly memberNormalizedTransactionIds: ReadonlyArray<string>;
@@ -462,6 +478,14 @@ export interface SessionDashboardTokenPositionResponse {
   readonly unrealizedPnlPct: number;
   readonly unrealizedPnlUsd: number;
   readonly realizedPnlUsd: number;
+  /** ADR-062 break-even (effective-cost) metric. Effective per-unit cost after crediting realized trading P&L; null when no covered qty. */
+  readonly breakEvenUsd: number | null;
+  /** ADR-062: realized profit beyond remaining basis (>0 means already past break-even). */
+  readonly lockedSurplusUsd: number;
+  /** ADR-062: zero-basis income (yield/rewards/funding) booked to this family's cluster; informational. */
+  readonly incomeReceivedUsd: number;
+  /** ADR-062: when non-null, this family's realized P&L is credited to that parent family (e.g. FAMILY:ETH). */
+  readonly attributionTargetFamily: string | null;
   /** On-chain chain ID (e.g. 'ETHEREUM') or CEX venue ID (e.g. 'BYBIT'). Use `domain` field to distinguish. */
   readonly networkId: string;
   readonly walletAddress: string;

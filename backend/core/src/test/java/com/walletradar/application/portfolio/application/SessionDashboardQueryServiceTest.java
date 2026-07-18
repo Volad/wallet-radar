@@ -1,5 +1,8 @@
 package com.walletradar.application.portfolio.application;
 
+import com.walletradar.application.costbasis.breakeven.BreakEvenAttributionLoader;
+import com.walletradar.application.costbasis.breakeven.BreakEvenAttributionService;
+import com.walletradar.application.costbasis.breakeven.BreakEvenCalculator;
 import com.walletradar.application.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.application.costbasis.domain.OnChainBalance;
 import com.walletradar.domain.common.NetworkId;
@@ -57,7 +60,9 @@ class SessionDashboardQueryServiceTest {
                 accountingUniverseService,
                 cexLiveBalancePort,
                 currentPriceReadService,
-                portfolioConservationGate
+                portfolioConservationGate,
+                new BreakEvenCalculator(new BreakEvenAttributionService(
+                        new BreakEvenAttributionLoader(new com.fasterxml.jackson.databind.ObjectMapper())))
         );
         lenient().when(portfolioConservationGate.evaluate(any())).thenReturn(
                 new PortfolioConservationGate.ConservationResult(

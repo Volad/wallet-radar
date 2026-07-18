@@ -49,7 +49,8 @@ class AssetLedgerChartService {
             List<AssetLedgerPoint> lpReceiptSupersetPoints,
             List<AssetLedgerPoint> crossFamilySettlementPoints,
             Map<String, BlendedExposureAvcoSeriesBuilder.EthOriginHolding> familyOriginHoldingByCorrelationId,
-            Map<String, NormalizedTransaction> normalizedById
+            Map<String, NormalizedTransaction> normalizedById,
+            List<AttributedRealizedPnlEvent> attributedChildPnlEvents
     ) {
         List<EventAccumulator> groupedEvents = groupPoints(timelinePoints, normalizedById);
         List<DisplayEventAccumulator> displayEvents = collapseDisplayEvents(groupedEvents);
@@ -58,6 +59,17 @@ class AssetLedgerChartService {
         Map<BucketKey, BucketAvcoState> liveAvcoBuckets = new LinkedHashMap<>();
         BigDecimal previousAvcoAfterUsd = null;
         BigDecimal previousNetAvcoAfterUsd = null;
+        // ADR-062 §3: effective-cost (break-even) series state. The offset woven per point is the
+        // viewed family's own cumulative Market-lane realized P&L plus its attributed cluster
+        // children's cumulative Market-lane realized P&L, merged chronologically by replay-ordering.
+        List<AttributedRealizedPnlEvent> childPnlEvents = attributedChildPnlEvents == null
+                ? List.of()
+                : attributedChildPnlEvents.stream()
+                .sorted(Comparator.comparing(AttributedRealizedPnlEvent::orderingKey, BlendedExposureAvcoSeriesBuilder.OrderingKey.COMPARATOR))
+                .toList();
+        int childPnlCursor = 0;
+        BigDecimal cumulativeSelfMarketPnl = BigDecimal.ZERO;
+        BigDecimal cumulativeChildMarketPnl = BigDecimal.ZERO;
         // RC-E3 / ADR-061: additive blended total-exposure series reconstructed from the family
         // superset. The spot Method-B lane above is untouched and stays byte-identical.
         BlendedExposureAvcoSeriesBuilder.BlendedSeriesSession blendedSession =
@@ -97,6 +109,20 @@ class AssetLedgerChartService {
                     series.netBasisTotal()
             );
 
+            // ADR-062 §3: weave the viewed family's own + attributed children's Market-lane realized
+            // P&L by replay-ordering key. At the terminal event drain any remaining child events so the
+            // series terminal offset equals the scalar header's attributed realized P&L exactly.
+            cumulativeSelfMarketPnl = cumulativeSelfMarketPnl.add(zeroIfNull(accumulator.realisedPnlDeltaUsd), MC);
+            BlendedExposureAvcoSeriesBuilder.OrderingKey eventKey = eventOrderingKey(accumulator);
+            while (childPnlCursor < childPnlEvents.size()
+                    && (eventIndex == lastEventIndex || childPnlEventAtOrBefore(childPnlEvents.get(childPnlCursor), eventKey))) {
+                cumulativeChildMarketPnl = cumulativeChildMarketPnl.add(
+                        zeroIfNull(childPnlEvents.get(childPnlCursor).marketRealisedPnlDeltaUsd()), MC);
+                childPnlCursor++;
+            }
+            BigDecimal cumulativeAttributedMarketPnl = cumulativeSelfMarketPnl.add(cumulativeChildMarketPnl, MC);
+            BigDecimal effectiveCostAfterUsd = effectiveCostAfterUsd(blended, cumulativeAttributedMarketPnl);
+
             timeline.add(new AssetLedgerQueryService.TimelineEntryView(
                     accumulator.blockTimestamp,
                     accumulator.txHash,
@@ -130,7 +156,8 @@ class AssetLedgerChartService {
                     blended.netAvco(),
                     blended.coveredQuantity(),
                     state.quantity,
-                    blended.avcoKind()
+                    blended.avcoKind(),
+                    effectiveCostAfterUsd
             ));
             previousAvcoAfterUsd = avcoAfterUsd;
             previousNetAvcoAfterUsd = netAvcoAfterUsd;
@@ -170,6 +197,50 @@ class AssetLedgerChartService {
             BigDecimal totalNetRealisedPnlUsd,
             BigDecimal totalGasPaidUsd
     ) {
+    }
+
+    /**
+     * ADR-062 §3: a single attributed-child Market-lane realized-P&L delta, positioned by its
+     * replay-ordering key so it can be woven chronologically into the viewed family's timeline.
+     */
+    record AttributedRealizedPnlEvent(
+            Instant blockTimestamp,
+            Integer transactionIndex,
+            Long replaySequence,
+            BigDecimal marketRealisedPnlDeltaUsd
+    ) {
+        BlendedExposureAvcoSeriesBuilder.OrderingKey orderingKey() {
+            return new BlendedExposureAvcoSeriesBuilder.OrderingKey(blockTimestamp, transactionIndex, replaySequence);
+        }
+    }
+
+    private static boolean childPnlEventAtOrBefore(
+            AttributedRealizedPnlEvent event,
+            BlendedExposureAvcoSeriesBuilder.OrderingKey eventKey
+    ) {
+        return BlendedExposureAvcoSeriesBuilder.OrderingKey.COMPARATOR.compare(event.orderingKey(), eventKey) <= 0;
+    }
+
+    /**
+     * ADR-062 §3 per-point effective cost over the blended total-exposure covered/basis:
+     * {@code max(marketBasis(t) − max(cumulativeAttributedMarketPnl(t), 0), 0) / coveredQty(t)}.
+     * Null (UNAVAILABLE) when the blended market series has no covered quantity.
+     */
+    private static BigDecimal effectiveCostAfterUsd(
+            BlendedExposureAvcoSeriesBuilder.BlendedPoint blended,
+            BigDecimal cumulativeAttributedMarketPnl
+    ) {
+        if (blended == null || blended.marketAvco() == null) {
+            return null;
+        }
+        BigDecimal coveredQuantity = blended.coveredQuantity();
+        if (coveredQuantity == null || coveredQuantity.signum() <= 0) {
+            return null;
+        }
+        BigDecimal marketBasis = blended.marketAvco().multiply(coveredQuantity, MC);
+        BigDecimal attributedOffset = zeroIfNull(cumulativeAttributedMarketPnl).max(BigDecimal.ZERO);
+        BigDecimal effectiveBasis = marketBasis.subtract(attributedOffset, MC).max(BigDecimal.ZERO);
+        return effectiveBasis.divide(coveredQuantity, MC);
     }
 
     private AssetLedgerQueryService.LedgerPointView toRawPoint(AssetLedgerPoint point) {

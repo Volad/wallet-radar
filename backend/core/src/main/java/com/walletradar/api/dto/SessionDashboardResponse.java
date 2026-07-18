@@ -66,7 +66,15 @@ public record SessionDashboardResponse(
             /** CEX venue id (e.g. "bybit", "dzengi"); null for on-chain wallets. */
             String venueId,
             /** CEX sub-account kind (e.g. "FUND", "UTA", "EARN"); null if not applicable. */
-            String subAccount
+            String subAccount,
+            /** ADR-062 break-even (effective-cost) per unit; null when covered quantity is zero. */
+            BigDecimal breakEvenUsd,
+            /** ADR-062 realized profit already past break-even. */
+            BigDecimal lockedSurplusUsd,
+            /** ADR-062 informational zero-basis income booked against this family's cluster. */
+            BigDecimal incomeReceivedUsd,
+            /** ADR-062 parent family this row's realized P&L contributes to; null when self. */
+            String attributionTargetFamily
     ) {
     }
 }

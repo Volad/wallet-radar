@@ -178,6 +178,14 @@ export interface TokenPosition {
   readonly unrealizedPnlPct: number;
   readonly unrealizedPnlUsd: number;
   readonly realizedPnlUsd: number;
+  /** ADR-062 break-even (effective-cost) per unit; null when no covered qty. */
+  readonly breakEvenUsd: number | null;
+  /** ADR-062: realized profit beyond remaining basis (>0 means already past break-even). */
+  readonly lockedSurplusUsd: number;
+  /** ADR-062: zero-basis income (yield/rewards/funding) booked to this family's cluster; informational. */
+  readonly incomeReceivedUsd: number;
+  /** ADR-062: parent family this family's realized P&L is credited to (e.g. FAMILY:ETH); null when self. */
+  readonly attributionTargetFamily: string | null;
   readonly networkId: NetworkId;
   readonly walletId: WalletId;
   readonly issue: IssueCode;
