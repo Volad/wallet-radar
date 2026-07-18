@@ -1,6 +1,8 @@
 # Capability & behavior SPI
 
-> **Status:** Design contracts for Track A5 and Track B. Interfaces marked **design-ready** exist as stubs; wiring is incremental.
+> **Core invariant (ADR-052): venue specificity ends at normalization.**
+> Post-normalization packages (`costbasis`, `portfolio`, `pricing`, `linking`, `api`, frontend) must NOT depend on `VenueRegistry`, `VenueDescriptor`, or any concrete venue descriptor.
+> Adding a new CEX venue requires zero post-normalization edits — enforced by `ModuleDependencyArchTest` and `VenuePrefixGuardTest`.
 
 WalletRadar extension points group into **capabilities** (what a module can do) and **behaviors** (how pipeline stages react). This page catalogs SPIs and links to worked guides.
 
@@ -15,36 +17,47 @@ WalletRadar extension points group into **capabilities** (what a module can do) 
 | Replay handler | `costbasis.application.replay.handler` | application | [Replay overview](../pipeline/replay/01-overview.md) |
 | Network adapter | `platform.networks` | platform | [add-a-network](extensibility/add-a-network.md) |
 
-## CEX ledger SPI (B1)
+## CEX ledger SPI (B1 / ADR-052)
 
-Design-ready interfaces in `com.walletradar.application.cex.port`:
+Interfaces in `com.walletradar.application.cex.port`.
+
+### Segregated capabilities (VenueDescriptor composes all four)
+
+| Interface | Responsibility |
+|-----------|---------------|
+| `VenueIdentity` (extends `CexVenueProfile`) | `venueId`, `providerCode`, `source()`, ownership predicates, `accountKindSuffixes()` |
+| `VenueWalletModel` | `umbrellaKey`, `expandBackfillRefs`, `dashboardWalletRefs`; no-op default for flat venues |
+| `VenueLiveBalanceCapability` | `Optional<CexLiveBalancePort> liveBalancePort()` |
+| `VenueExternalCapitalPolicy` | Decides at normalization time: is this flow an external-capital boundary? What is its eligible USD basis? |
+
+`VenueRegistry @Component` holds `List<VenueDescriptor>` and is **ingestion-plane only** — injected into normalization, backfill, and the live-balance routing port. Never injected into `costbasis`, `portfolio`, `pricing`, `linking`, or `api`.
 
 ### `CexVenueProfile`
 
-Declares venue identity and stream topology before any API calls.
+Declares venue identity and stream topology.
 
-- `venueId()` — stable slug (`bybit`)
+- `venueId()` — stable upper-case slug (`BYBIT`, `DZENGI`)
 - `supportedStreams()` — logical streams (e.g. `FUNDING_HISTORY`, `UNIVERSAL_TRANSFER`)
 - `accountKindSuffixes()` — wallet ref suffixes (`:FUND`, `:UTA`, `:EARN`)
 
-### `CexLedgerSource`
+### `CexLedgerSource` / `CexLedgerEvent`
 
-Pages immutable extracted evidence for one stream × account scope.
+Pages immutable extracted evidence; normalized view of one extracted row before canonical builder mapping.
 
-- `venueProfile()` — profile reference
-- `streamId()` — stream within venue
-- `fetchPage(CexLedgerCursor cursor)` — returns `CexLedgerPage` of events
+### Normalization boundary contract
 
-### `CexLedgerEvent`
+The canonical builder stamps these venue-neutral fields on every `NormalizedTransaction`:
 
-Normalized view of one extracted row **before** canonical builder mapping.
+| Field | Source | Consumed by |
+|-------|--------|-------------|
+| `walletDomainKind` | `WalletRef.parse(walletAddress).domain()` | universe, reconciliation |
+| `venueId` | `WalletRef.parse(walletAddress).venueId()` | dashboard, API DTO |
+| `subAccount` | `WalletRef.parse(walletAddress).subAccount()` | replay, conservation |
+| `umbrellaKey` | `WalletRef.parse(walletAddress).umbrellaKey()` | umbrella aggregation |
+| `externalCapitalBoundary` | `VenueExternalCapitalPolicy` | conservation NEC |
+| `externalCapitalEligibleUsd` | `VenueExternalCapitalPolicy` | conservation NEC |
 
-- `sourceRowId()` — stable id in venue raw/extracted store
-- `eventTime()` — venue timestamp
-- `originalType()` — venue-native type string
-- `payload()` — opaque structured map for mapper
-
-**Boundary rule:** costbasis and portfolio import `CexLiveBalancePort` / read ports only — never `CexLedgerSource`.
+**Global boundary rule (supersedes old "Boundary rule"): `costbasis`, `portfolio`, `pricing`, `linking`, and `api` read the neutral contract only — never `VenueRegistry`, `VenueDescriptor`, `CexLedgerSource`, or any concrete venue descriptor.**
 
 ## Network family SPI (B2)
 

@@ -6,6 +6,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.application.normalization.pipeline.classification.OnChainClassificationResult;
 import com.walletradar.application.normalization.pipeline.classification.reason.ClarificationPolicyService;
+import com.walletradar.application.normalization.pipeline.classification.support.TokenMetadataRegistry;
 import com.walletradar.domain.transaction.normalized.LeverageBorrowAnnotation;
 import com.walletradar.application.costbasis.support.leverage.AaveDebtLoanCorrelationSupport;
 import com.walletradar.application.costbasis.support.leverage.LeverageAcquisitionDetector;
@@ -862,13 +863,8 @@ public class OnChainNormalizedTransactionBuilder {
         if (normalized == null) {
             return 18;
         }
-        return switch (normalized) {
-            case "0xb8ce59fc3717ada4c02eadf9682a9e934f625ebb",
-                 "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
-                 "0xff970a61a04b1ca14834a43f5de4533ebddb5cc8" -> 6;
-            case "0x2a52b289ba68bbd02676640aa9f605700c9e5699" -> 18;
-            default -> 18;
-        };
+        Integer decimals = TokenMetadataRegistry.builderDecimals(normalized);
+        return decimals != null ? decimals : 18;
     }
 
     private String tokenSymbol(String contract) {
@@ -876,13 +872,8 @@ public class OnChainNormalizedTransactionBuilder {
         if (normalized == null) {
             return null;
         }
-        return switch (normalized) {
-            case "0xb8ce59fc3717ada4c02eadf9682a9e934f625ebb" -> "USDT0";
-            case "0x2a52b289ba68bbd02676640aa9f605700c9e5699" -> "wstUSR";
-            case "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
-                 "0xff970a61a04b1ca14834a43f5de4533ebddb5cc8" -> "USDC";
-            default -> contract;
-        };
+        String symbol = TokenMetadataRegistry.builderSymbol(normalized);
+        return symbol != null ? symbol : contract;
     }
 
     private int clarificationAttemptBaseline(OnChainRawTransactionView view) {

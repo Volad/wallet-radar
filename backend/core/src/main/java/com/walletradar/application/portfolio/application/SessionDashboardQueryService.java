@@ -2,7 +2,9 @@ package com.walletradar.application.portfolio.application;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
-import com.walletradar.application.costbasis.support.BybitUmbrellaSupport;
+import com.walletradar.application.costbasis.breakeven.BreakEvenAttributionService;
+import com.walletradar.application.costbasis.breakeven.BreakEvenCalculator;
+import com.walletradar.application.costbasis.support.CexUmbrellaSupport;
 import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
 import com.walletradar.application.costbasis.support.AccountingAssetIdentitySupport;
 import com.walletradar.application.costbasis.support.OutOfScopeFamilySupport;
@@ -12,11 +14,15 @@ import com.walletradar.application.costbasis.support.AssetLedgerSupport;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.common.PriceSource;
 import com.walletradar.domain.session.UserSession;
+import com.walletradar.domain.wallet.WalletDomainKind;
+import com.walletradar.domain.wallet.WalletRef;
 import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.application.costbasis.application.port.CexLiveBalancePort;
 import com.walletradar.application.pricing.domain.CanonicalAssetCatalog;
 import com.walletradar.application.pricing.persistence.CurrentPriceQuoteDocument;
 import com.walletradar.application.pricing.persistence.HistoricalPriceDocument;
+import com.walletradar.application.pricing.latest.CurrentPriceReadService;
+import com.walletradar.application.pricing.latest.ResolvedPrice;
 import com.walletradar.application.portfolio.application.port.SessionDashboardReadPort;
 import com.walletradar.application.session.application.AccountingUniverseService;
 import lombok.RequiredArgsConstructor;
@@ -63,7 +69,7 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
     private static final String VALUATION_AAVE_INDEX_ACCRUING = "AAVE_INDEX_ACCRUING";
     private static final String VALUATION_GMX_MARKET_TOKEN_SNAPSHOT = "GMX_MARKET_TOKEN_SNAPSHOT";
     private static final String PRICE_SOURCE_PROTOCOL_SNAPSHOT = "PROTOCOL_SNAPSHOT";
-    private static final long CURRENT_QUOTE_STALE_AFTER_SECONDS = 15 * 60;
+    private static final long CURRENT_QUOTE_STALE_AFTER_SECONDS = 90 * 60;
     private static final BigDecimal AVCO_CAP_COVERAGE_THRESHOLD = new BigDecimal("0.05");
     private static final BigDecimal MINIMUM_POSITION_VALUE_USD = new BigDecimal("0.01");
     private static final BigDecimal AVCO_CAP_PRICE_MULTIPLIER = BigDecimal.TEN;
@@ -72,7 +78,9 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
     private final MongoOperations mongoOperations;
     private final AccountingUniverseService accountingUniverseService;
     private final CexLiveBalancePort cexLiveBalancePort;
+    private final CurrentPriceReadService currentPriceReadService;
     private final PortfolioConservationGate portfolioConservationGate;
+    private final BreakEvenCalculator breakEvenCalculator;
     private final Cache<String, SessionDashboardView> sessionDashboardCache = Caffeine.newBuilder()
             .maximumSize(64)
             .expireAfterWrite(45, TimeUnit.SECONDS)
@@ -103,10 +111,19 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                 .filter(balance -> allowedScope.includes(balance.getWalletAddress(), balance.getNetworkId()))
                 .toList();
 
-        LinkedHashSet<String> enabledBybitVenueRefs = new LinkedHashSet<>(BybitUmbrellaSupport.enabledBybitAccountRefs(session));
+        LinkedHashSet<String> enabledCexVenueRefs = new LinkedHashSet<>(CexUmbrellaSupport.enabledCexAccountRefs(session));
 
         Map<BucketKey, AssetLedgerPoint> latestPointByBucket = latestLedgerPointByBucket(scopedLedgerPoints);
-        Map<FamilyRowKey, BigDecimal> realisedPnlByFamily = realisedPnlByFamily(scopedLedgerPoints, enabledBybitVenueRefs);
+        Map<FamilyRowKey, BigDecimal> realisedPnlByFamily = pnlDeltaByFamily(
+                scopedLedgerPoints,
+                enabledCexVenueRefs,
+                AssetLedgerPoint::getRealisedPnlDeltaUsd
+        );
+        Map<FamilyRowKey, BigDecimal> netRealisedPnlByFamily = pnlDeltaByFamily(
+                scopedLedgerPoints,
+                enabledCexVenueRefs,
+                AssetLedgerPoint::getNetRealisedPnlDeltaUsd
+        );
         BigDecimal totalRealisedPnlUsd = scopedLedgerPoints.stream()
                 .map(AssetLedgerPoint::getRealisedPnlDeltaUsd)
                 .filter(Objects::nonNull)
@@ -173,26 +190,24 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
             accumulator.addBalance(currentQuantity, latestPoint, balance.getAssetSymbol());
         }
 
-        if (!enabledBybitVenueRefs.isEmpty()) {
+        if (!enabledCexVenueRefs.isEmpty()) {
             for (Map.Entry<BucketKey, AssetLedgerPoint> ledgerEntry : latestPointByBucket.entrySet()) {
                 BucketKey bucketKey = ledgerEntry.getKey();
-                if (!BybitUmbrellaSupport.bybitLedgerMatchesEnabledVenue(bucketKey.walletAddress(), enabledBybitVenueRefs)) {
+                if (!CexUmbrellaSupport.cexLedgerMatchesEnabledVenue(bucketKey.walletAddress(), enabledCexVenueRefs)) {
                     continue;
                 }
                 AssetLedgerPoint latestPoint = ledgerEntry.getValue();
-                // Cycle/5 N15: Bybit umbrella uses raw `quantityAfter` (no shortfall subtraction). Cycle/2 E1's
-                // shortfall clamp accidentally hides genuine UTA / FUND inventory behind historical AVCO
-                // coverage gaps unrelated to current holdings; the umbrella is reconciled against live Bybit
-                // balances downstream via `BybitLiveBalanceService` clamping in `clampBybitUmbrellaToLive`.
-                BigDecimal currentQuantity = BybitUmbrellaSupport.bybitRawQuantityAfter(latestPoint);
+                // CEX umbrella uses raw quantityAfter (no shortfall subtraction) and is reconciled
+                // against live balances downstream in clampCexUmbrellaToLive.
+                BigDecimal currentQuantity = CexUmbrellaSupport.cexRawQuantityAfter(latestPoint);
                 if (currentQuantity.signum() <= 0) {
                     continue;
                 }
                 if (AccountingAssetFamilySupport.isLpReceiptSymbol(latestPoint.getAssetSymbol())) {
                     continue;
                 }
-                if (isBareBybitUmbrellaWallet(bucketKey.walletAddress())
-                        && hasBybitVenueSubLedgerForFamily(
+                if (isBareCexUmbrellaWallet(bucketKey.walletAddress())
+                        && hasCexVenueSubLedgerForFamily(
                         latestPointByBucket,
                         bucketKey.walletAddress(),
                         resolvedFamilyIdentity(
@@ -201,7 +216,7 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                                 latestPoint.getAssetSymbol(),
                                 latestPoint.getAssetContract()
                         ),
-                        enabledBybitVenueRefs
+                        enabledCexVenueRefs
                 )) {
                     continue;
                 }
@@ -217,7 +232,7 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                 String rowSymbol = blank(familyDisplaySymbol)
                         ? normalizeSymbol(latestPoint.getAssetSymbol())
                         : familyDisplaySymbol;
-                String aggregatedWallet = BybitUmbrellaSupport.ledgerWalletKeyForAggregation(bucketKey.walletAddress(), enabledBybitVenueRefs);
+                String aggregatedWallet = CexUmbrellaSupport.ledgerWalletKeyForAggregation(bucketKey.walletAddress(), enabledCexVenueRefs);
                 FamilyRowKey rowKey = new FamilyRowKey(
                         aggregatedWallet,
                         bucketKey.networkId(),
@@ -237,13 +252,11 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
             }
         }
 
-        // Cycle/5 N15 + Cycle/18: reconcile each Bybit umbrella accumulator's quantity against the
-        // authoritative live {@code /v5/...} balance for the integration. Phantom positions
-        // (ledger > live) are clamped down; ledger shortfalls (ledger < live) are inflated up so
-        // the dashboard always displays the real Bybit holding. AVCO metrics are scaled
-        // proportionally on clamp-down and left unchanged on inflate (the gap is uncovered).
-        clampBybitUmbrellaToLive(rows, session, enabledBybitVenueRefs);
-        addMissingLiveBybitRows(rows, session, enabledBybitVenueRefs);
+        // Reconcile each CEX umbrella accumulator's quantity against the authoritative live balance.
+        // Phantom positions (ledger > live) are clamped down; ledger shortfalls (ledger < live) are
+        // inflated up. AVCO metrics are scaled proportionally on clamp-down and unchanged on inflate.
+        clampCexUmbrellaToLive(rows, session, enabledCexVenueRefs);
+        addMissingLiveCexRows(rows, session);
 
         Map<String, DashboardPriceSnapshot> latestPricesBySymbol = loadLatestPrices(
                 rows.values().stream()
@@ -252,7 +265,7 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                 responseTime
         );
 
-        List<TokenPositionView> tokenPositions = rows.entrySet().stream()
+        List<TokenPositionView> baseTokenPositions = rows.entrySet().stream()
                 .map(entry -> entry.getValue().toView(
                         resolvePrice(latestPricesBySymbol, entry.getValue().priceLookupCandidates()),
                         zeroIfNull(realisedPnlByFamily.get(entry.getKey()))
@@ -269,6 +282,28 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                         TokenPositionView::marketValueUsd,
                         Comparator.nullsLast(BigDecimal::compareTo)
                 ).reversed())
+                .toList();
+
+        // ADR-062: break-even (effective-cost) enrichment. Realized P&L of fully-exited children
+        // (e.g. cmETH → FAMILY:ETH) still credits the parent even without a held row, so the input
+        // set is the union of displayed families and any family that carries realized P&L.
+        Map<String, BreakEvenCalculator.BreakEvenResult> breakEvenByFamily = computeBreakEvenByFamily(
+                baseTokenPositions,
+                realisedPnlByFamily,
+                netRealisedPnlByFamily
+        );
+        List<TokenPositionView> tokenPositions = baseTokenPositions.stream()
+                .map(view -> {
+                    BreakEvenCalculator.BreakEvenResult result = breakEvenByFamily.get(view.familyIdentity());
+                    return result == null
+                            ? view.withBreakEven(null, null, null, null)
+                            : view.withBreakEven(
+                                    result.breakEvenUsd(),
+                                    result.lockedSurplusUsd(),
+                                    result.incomeReceivedUsd(),
+                                    result.attributionTargetFamily()
+                            );
+                })
                 .toList();
 
         BigDecimal portfolioValueUsd = tokenPositions.stream()
@@ -300,9 +335,6 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                     wallet.getNetworks() == null ? List.of() : wallet.getNetworks().stream().map(Enum::name).toList()
             ));
         }
-        List<String> bybitNetworksForFilter = sessionNetworkNames.isEmpty()
-                ? List.of()
-                : List.copyOf(sessionNetworkNames);
         if (session.getIntegrations() != null) {
             for (UserSession.SessionIntegration integration : session.getIntegrations()) {
                 if (integration == null || integration.getStatus() == UserSession.IntegrationStatus.DISABLED) {
@@ -312,13 +344,16 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                 if (accountRef == null || accountRef.isBlank()) {
                     continue;
                 }
-                if (!accountRef.toUpperCase(Locale.ROOT).startsWith("BYBIT:")) {
+                WalletRef ref = WalletRef.parse(accountRef);
+                if (ref.domain() != WalletDomainKind.CEX) {
                     continue;
                 }
-                String label = blank(integration.getDisplayName()) ? "Bybit" : integration.getDisplayName();
-                for (String bybitWalletRef : BybitUmbrellaSupport.bybitDashboardWalletRefs(accountRef)) {
-                    wallets.add(new WalletView(normalizeAddress(bybitWalletRef), label, null, bybitNetworksForFilter));
-                }
+                String venueLabel = ref.venueId().substring(0, 1).toUpperCase(Locale.ROOT)
+                        + ref.venueId().substring(1).toLowerCase(Locale.ROOT);
+                String label = blank(integration.getDisplayName()) ? venueLabel : integration.getDisplayName();
+                String walletRef = ref.umbrellaKey().toLowerCase(Locale.ROOT);
+                String venueNetwork = ref.venueId().toUpperCase(Locale.ROOT);
+                wallets.add(new WalletView(walletRef, label, null, List.of(venueNetwork)));
             }
         }
 
@@ -363,37 +398,29 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
     }
 
     /**
-     * Cycle/5 N15: returns the raw post-replay quantity for a Bybit ledger point, without subtracting
-     * historical AVCO shortfall. The umbrella is reconciled against live Bybit balances downstream
-     * by {@link #clampBybitUmbrellaToLive}, which is the authoritative defence against phantom
-     * inventory — shortfall accretion should not pre-emptively clip genuine current holdings.
+     * For each CEX umbrella accumulator, compares the ledger-computed quantity against the
+     * authoritative live balance for that integration. Phantom positions (ledger > live) are
+     * clamped; ledger shortfalls (ledger < live) are inflated. AVCO metrics are scaled proportionally.
      */
-    /**
-     * Cycle/5 N15: for each Bybit umbrella accumulator (walletAddress = {@code bybit:<UID>}) compares
-     * the ledger-computed quantity against the live {@code /v5/account/wallet-balance} +
-     * {@code /v5/asset/transfer/query-account-coins-balance} + {@code /v5/earn/position} sum for that
-     * integration. If the ledger quantity exceeds the live quantity, clamps to live; if the live
-     * quantity is zero, removes the row entirely. Ledger quantities below live are left untouched —
-     * the dashboard never claims more inventory than ledger captures, but never claims phantoms
-     * either.
-     */
-    private void clampBybitUmbrellaToLive(
+    private void clampCexUmbrellaToLive(
             Map<FamilyRowKey, TokenPositionAccumulator> rows,
             UserSession session,
-            Set<String> enabledBybitVenueRefs
+            Set<String> enabledCexVenueRefs
     ) {
-        if (enabledBybitVenueRefs.isEmpty() || session.getIntegrations() == null) {
+        if (enabledCexVenueRefs.isEmpty() || session.getIntegrations() == null) {
             return;
         }
         Map<String, Map<String, BigDecimal>> liveByAccountRef = new LinkedHashMap<>();
-        Map<String, CexLiveBalancePort.Availability> liveAvailabilityByAccountRef =
-                new LinkedHashMap<>();
+        Map<String, CexLiveBalancePort.Availability> liveAvailabilityByAccountRef = new LinkedHashMap<>();
         for (UserSession.SessionIntegration integration : session.getIntegrations()) {
             if (integration == null
                     || integration.getStatus() == UserSession.IntegrationStatus.DISABLED
                     || integration.getAccountRef() == null
-                    || integration.getIntegrationId() == null
-                    || !integration.getAccountRef().toUpperCase(Locale.ROOT).startsWith("BYBIT:")) {
+                    || integration.getIntegrationId() == null) {
+                continue;
+            }
+            WalletRef ref = WalletRef.parse(integration.getAccountRef());
+            if (ref.domain() != WalletDomainKind.CEX) {
                 continue;
             }
             Optional<CexLiveBalancePort.SnapshotView> snapshotView =
@@ -417,12 +444,15 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
             Map.Entry<FamilyRowKey, TokenPositionAccumulator> entry = iterator.next();
             FamilyRowKey key = entry.getKey();
             TokenPositionAccumulator accumulator = entry.getValue();
-            if (key.walletAddress() == null || !key.walletAddress().startsWith("bybit:")) {
+            if (key.walletAddress() == null) {
+                continue;
+            }
+            WalletRef walletRef = WalletRef.parse(key.walletAddress());
+            if (walletRef.domain() != WalletDomainKind.CEX) {
                 continue;
             }
             Map<String, BigDecimal> live = liveByAccountRef.get(key.walletAddress());
-            CexLiveBalancePort.Availability availability =
-                    liveAvailabilityByAccountRef.get(key.walletAddress());
+            CexLiveBalancePort.Availability availability = liveAvailabilityByAccountRef.get(key.walletAddress());
             if (availability == CexLiveBalancePort.Availability.KNOWN_EMPTY) {
                 iterator.remove();
                 continue;
@@ -431,7 +461,7 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                 // No authoritative live snapshot yet — preserve ledger rows.
                 continue;
             }
-            BigDecimal liveQty = BybitUmbrellaSupport.liveQuantityForCandidates(
+            BigDecimal liveQty = CexUmbrellaSupport.liveQuantityForCandidates(
                     live,
                     accumulator.priceLookupCandidates(),
                     accumulator.priceLookupSymbol()
@@ -458,28 +488,27 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
     }
 
     /**
-     * Cycle/18: creates dashboard rows for Bybit assets that appear in the live balance but have
-     * no ledger entries at all (e.g. newly purchased assets before a pipeline run, or assets
-     * whose entire ledger history was excluded by normalization). These rows have zero AVCO
-     * coverage and are flagged as {@link #ISSUE_MISSING_REPLAY_POINT}.
+     * Creates dashboard rows for CEX assets that appear in the live balance but have no ledger entries.
      */
-    private void addMissingLiveBybitRows(
+    private void addMissingLiveCexRows(
             Map<FamilyRowKey, TokenPositionAccumulator> rows,
-            UserSession session,
-            Set<String> enabledBybitVenueRefs
+            UserSession session
     ) {
-        if (enabledBybitVenueRefs.isEmpty() || session.getIntegrations() == null) {
+        if (session.getIntegrations() == null) {
             return;
         }
         for (UserSession.SessionIntegration integration : session.getIntegrations()) {
             if (integration == null
                     || integration.getStatus() == UserSession.IntegrationStatus.DISABLED
                     || integration.getAccountRef() == null
-                    || integration.getIntegrationId() == null
-                    || !integration.getAccountRef().toUpperCase(Locale.ROOT).startsWith("BYBIT:")) {
+                    || integration.getIntegrationId() == null) {
                 continue;
             }
-            String umbrellaWallet = normalizeAddress(integration.getAccountRef());
+            WalletRef ref = WalletRef.parse(integration.getAccountRef());
+            if (ref.domain() != WalletDomainKind.CEX) {
+                continue;
+            }
+            String umbrellaWallet = ref.umbrellaKey().toLowerCase(Locale.ROOT);
             Map<String, BigDecimal> live = cexLiveBalancePort.getSnapshotView(integration.getIntegrationId())
                     .map(CexLiveBalancePort.SnapshotView::umbrella)
                     .orElse(Map.of());
@@ -496,7 +525,10 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                 if (normalizedSymbol.isBlank()) {
                     continue;
                 }
-                String familyIdentity = "SYMBOL:" + normalizedSymbol;
+                String familyIdentity = AccountingAssetFamilySupport.continuityIdentity(normalizedSymbol, null);
+                if (familyIdentity == null || familyIdentity.isBlank()) {
+                    familyIdentity = "SYMBOL:" + normalizedSymbol;
+                }
                 FamilyRowKey rowKey = new FamilyRowKey(umbrellaWallet, null, familyIdentity);
                 if (rows.containsKey(rowKey)) {
                     continue;
@@ -554,49 +586,53 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
         return mongoOperations.find(query, AssetLedgerPoint.class);
     }
 
-    private Map<String, DashboardPriceSnapshot> loadLatestPrices(Collection<String> symbols, Instant responseTime) {
+    private Map<String, DashboardPriceSnapshot> loadLatestPrices(
+            Collection<String> symbols,
+            Instant responseTime
+    ) {
         if (symbols.isEmpty()) {
             return Map.of();
         }
         Map<String, DashboardPriceSnapshot> latestPrices = new LinkedHashMap<>();
+
+        // Stablecoin pins — handled locally to avoid mock dependencies in tests
         for (String symbol : symbols) {
             if (CanonicalAssetCatalog.isUsdStablecoin(null, null, symbol, null)) {
                 latestPrices.put(normalizeSymbol(symbol), DashboardPriceSnapshot.stablecoin(responseTime));
             }
         }
 
-        Query currentQuery = Query.query(Criteria.where("symbol").in(symbols))
-                .with(Sort.by(
-                        Sort.Order.desc("pricedAt"),
-                        Sort.Order.desc("fetchedAt")
-                ));
-        List<CurrentPriceQuoteDocument> currentQuotes = mongoOperations.find(currentQuery, CurrentPriceQuoteDocument.class);
-        if (currentQuotes != null) {
-            for (CurrentPriceQuoteDocument document : currentQuotes) {
-                String symbol = normalizeSymbol(document.getSymbol());
-                if (latestPrices.containsKey(symbol)) {
-                    continue;
-                }
-                DashboardPriceSnapshot snapshot = DashboardPriceSnapshot.current(document, responseTime);
-                if (snapshot.priceUsd() != null) {
-                    latestPrices.put(symbol, snapshot);
+        // Resolve current prices via shared service (multi-source selection)
+        Map<String, ResolvedPrice> resolved = currentPriceReadService.resolveLatest(symbols);
+        for (Map.Entry<String, ResolvedPrice> entry : resolved.entrySet()) {
+            String sym = normalizeSymbol(entry.getKey());
+            if (!latestPrices.containsKey(sym)) {
+                latestPrices.put(sym, DashboardPriceSnapshot.fromResolved(entry.getValue(), responseTime));
+            }
+        }
+
+        // Historical fallback for symbols not covered by the latest-price refresh subsystem
+        Set<String> missing = new java.util.LinkedHashSet<>();
+        for (String symbol : symbols) {
+            if (!latestPrices.containsKey(normalizeSymbol(symbol))) {
+                missing.add(symbol);
+            }
+        }
+        if (!missing.isEmpty()) {
+            Query historicalQuery = Query.query(Criteria.where("symbol").in(missing))
+                    .with(Sort.by(
+                            Sort.Order.desc("bucketStart"),
+                            Sort.Order.desc("fetchedAt")
+                    ));
+            List<HistoricalPriceDocument> historicalPrices = mongoOperations.find(historicalQuery, HistoricalPriceDocument.class);
+            if (historicalPrices != null) {
+                for (HistoricalPriceDocument document : historicalPrices) {
+                    String symbol = normalizeSymbol(document.getSymbol());
+                    latestPrices.putIfAbsent(symbol, DashboardPriceSnapshot.historicalFallback(document, responseTime));
                 }
             }
         }
 
-        Query historicalQuery = Query.query(Criteria.where("symbol").in(symbols))
-                .with(Sort.by(
-                        Sort.Order.desc("bucketStart"),
-                        Sort.Order.desc("fetchedAt")
-                ));
-        List<HistoricalPriceDocument> historicalPrices = mongoOperations.find(historicalQuery, HistoricalPriceDocument.class);
-        if (historicalPrices == null) {
-            return latestPrices;
-        }
-        for (HistoricalPriceDocument document : historicalPrices) {
-            String symbol = normalizeSymbol(document.getSymbol());
-            latestPrices.putIfAbsent(symbol, DashboardPriceSnapshot.historicalFallback(document, responseTime));
-        }
         return latestPrices;
     }
 
@@ -631,20 +667,28 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
         return latest;
     }
 
-    private Map<FamilyRowKey, BigDecimal> realisedPnlByFamily(
+    private Map<FamilyRowKey, BigDecimal> pnlDeltaByFamily(
             List<AssetLedgerPoint> points,
-            LinkedHashSet<String> enabledBybitVenueRefs
+            LinkedHashSet<String> enabledCexVenueRefs,
+            java.util.function.Function<AssetLedgerPoint, BigDecimal> deltaExtractor
     ) {
         Map<FamilyRowKey, BigDecimal> totals = new LinkedHashMap<>();
         for (AssetLedgerPoint point : points) {
             if (blank(point.getAccountingFamilyIdentity())) {
                 continue;
             }
+            String aggregatedWallet;
             if (point.getNetworkId() == null) {
-                String wallet = normalizeAddress(point.getWalletAddress());
-                if (!wallet.startsWith("bybit:")) {
+                // CEX wallets have no networkId; filter and aggregate by umbrella key.
+                if (!CexUmbrellaSupport.cexLedgerMatchesEnabledVenue(point.getWalletAddress(), enabledCexVenueRefs)) {
                     continue;
                 }
+                aggregatedWallet = CexUmbrellaSupport.ledgerWalletKeyForAggregation(
+                        point.getWalletAddress(),
+                        enabledCexVenueRefs
+                );
+            } else {
+                aggregatedWallet = normalizeAddress(point.getWalletAddress());
             }
             String familyIdentity = resolvedFamilyIdentity(
                     point,
@@ -653,13 +697,63 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                     point.getAssetContract()
             );
             FamilyRowKey key = new FamilyRowKey(
-                    BybitUmbrellaSupport.ledgerWalletKeyForAggregation(point.getWalletAddress(), enabledBybitVenueRefs),
+                    aggregatedWallet,
                     point.getNetworkId(),
                     familyIdentity
             );
-            totals.merge(key, zeroIfNull(point.getRealisedPnlDeltaUsd()), (left, right) -> left.add(right, MC));
+            totals.merge(key, zeroIfNull(deltaExtractor.apply(point)), (left, right) -> left.add(right, MC));
         }
         return totals;
+    }
+
+    private Map<String, BreakEvenCalculator.BreakEvenResult> computeBreakEvenByFamily(
+            List<TokenPositionView> positions,
+            Map<FamilyRowKey, BigDecimal> realisedPnlByFamily,
+            Map<FamilyRowKey, BigDecimal> netRealisedPnlByFamily
+    ) {
+        Map<String, BigDecimal> marketBasisByFamily = new LinkedHashMap<>();
+        Map<String, BigDecimal> coveredByFamily = new LinkedHashMap<>();
+        Map<String, String> symbolByFamily = new LinkedHashMap<>();
+        for (TokenPositionView position : positions) {
+            String family = position.familyIdentity();
+            if (blank(family)) {
+                continue;
+            }
+            marketBasisByFamily.merge(family, zeroIfNull(position.provableBasisUsd()), (left, right) -> left.add(right, MC));
+            coveredByFamily.merge(family, zeroIfNull(position.coveredQuantity()), (left, right) -> left.add(right, MC));
+            symbolByFamily.putIfAbsent(family, position.symbol());
+        }
+        Map<String, BigDecimal> marketPnlByFamily = aggregatePnlByFamily(realisedPnlByFamily);
+        Map<String, BigDecimal> netPnlByFamily = aggregatePnlByFamily(netRealisedPnlByFamily);
+
+        LinkedHashSet<String> families = new LinkedHashSet<>();
+        families.addAll(marketBasisByFamily.keySet());
+        families.addAll(marketPnlByFamily.keySet());
+        families.addAll(netPnlByFamily.keySet());
+        List<BreakEvenCalculator.FamilyBreakEvenInput> inputs = new ArrayList<>();
+        for (String family : families) {
+            inputs.add(new BreakEvenCalculator.FamilyBreakEvenInput(
+                    family,
+                    BreakEvenAttributionService.representativeSymbolFor(family, symbolByFamily.get(family)),
+                    zeroIfNull(marketBasisByFamily.get(family)),
+                    zeroIfNull(coveredByFamily.get(family)),
+                    zeroIfNull(marketPnlByFamily.get(family)),
+                    zeroIfNull(netPnlByFamily.get(family))
+            ));
+        }
+        return breakEvenCalculator.compute(inputs);
+    }
+
+    private static Map<String, BigDecimal> aggregatePnlByFamily(Map<FamilyRowKey, BigDecimal> byRow) {
+        Map<String, BigDecimal> byFamily = new LinkedHashMap<>();
+        for (Map.Entry<FamilyRowKey, BigDecimal> entry : byRow.entrySet()) {
+            String family = entry.getKey().familyIdentity();
+            if (blank(family)) {
+                continue;
+            }
+            byFamily.merge(family, zeroIfNull(entry.getValue()), (left, right) -> left.add(right, MC));
+        }
+        return byFamily;
     }
 
     private static String fallbackFamilyIdentity(NetworkId networkId, String assetSymbol, String assetContract) {
@@ -690,7 +784,7 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
     }
 
     private static DashboardPriceSnapshot resolvePrice(Map<String, DashboardPriceSnapshot> latestPricesBySymbol, String symbol) {
-        return resolvePrice(latestPricesBySymbol, BybitUmbrellaSupport.priceLookupCandidates(symbol));
+        return resolvePrice(latestPricesBySymbol, CexUmbrellaSupport.priceLookupCandidates(symbol));
     }
 
     private static DashboardPriceSnapshot resolvePrice(
@@ -796,7 +890,21 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
             String issue,
             String valuationModel,
             String valuationUnderlyingSymbol,
-            String unsupportedValuationReason
+            String unsupportedValuationReason,
+            /** Wallet domain: EVM, SOLANA, TON, or CEX. Derived from walletAddress via WalletRef. */
+            String domain,
+            /** CEX venue id (e.g. "bybit", "dzengi"); null for on-chain wallets. */
+            String venueId,
+            /** CEX sub-account kind (e.g. "FUND", "UTA", "EARN"); null if not applicable. */
+            String subAccount,
+            /** ADR-062 break-even (effective-cost) per unit; null when covered quantity is zero. */
+            BigDecimal breakEvenUsd,
+            /** ADR-062 realized profit already past break-even (effective basis floored at zero). */
+            BigDecimal lockedSurplusUsd,
+            /** ADR-062 informational zero-basis income booked against this family's cluster. */
+            BigDecimal incomeReceivedUsd,
+            /** ADR-062 parent family this row's realized P&L contributes to; null when self. */
+            String attributionTargetFamily
     ) {
         public BigDecimal marketValueUsd() {
             return marketValueUsd == null ? BigDecimal.ZERO : marketValueUsd;
@@ -804,6 +912,21 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
 
         public BigDecimal provableBasisUsd() {
             return avcoUsd.multiply(coveredQuantity, MC);
+        }
+
+        public TokenPositionView withBreakEven(
+                BigDecimal breakEvenUsd,
+                BigDecimal lockedSurplusUsd,
+                BigDecimal incomeReceivedUsd,
+                String attributionTargetFamily
+        ) {
+            return new TokenPositionView(
+                    familyIdentity, symbol, name, quantity, coveredQuantity, priceUsd, marketValueUsd,
+                    priceSource, pricedAt, stalenessSeconds, isLiveQuote, priceIssue, avcoUsd, netAvcoUsd,
+                    unrealizedPnlPct, unrealizedPnlUsd, realizedPnlUsd, networkId, walletAddress, issue,
+                    valuationModel, valuationUnderlyingSymbol, unsupportedValuationReason, domain, venueId,
+                    subAccount, breakEvenUsd, lockedSurplusUsd, incomeReceivedUsd, attributionTargetFamily
+            );
         }
     }
 
@@ -927,9 +1050,9 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
 
         private List<String> priceLookupCandidates() {
             LinkedHashSet<String> candidates = new LinkedHashSet<>();
-            candidates.addAll(BybitUmbrellaSupport.priceLookupCandidates(priceLookupSymbol()));
+            candidates.addAll(CexUmbrellaSupport.priceLookupCandidates(priceLookupSymbol()));
             if (valuationMetadata != null && !blank(valuationMetadata.underlyingSymbol())) {
-                candidates.addAll(BybitUmbrellaSupport.priceLookupCandidates(valuationMetadata.underlyingSymbol()));
+                candidates.addAll(CexUmbrellaSupport.priceLookupCandidates(valuationMetadata.underlyingSymbol()));
             }
             return List.copyOf(candidates);
         }
@@ -973,6 +1096,7 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
             BigDecimal unrealizedPnlPct = totalCostBasisUsd.signum() <= 0
                     ? BigDecimal.ZERO
                     : unrealizedPnlUsd.multiply(BigDecimal.valueOf(100), MC).divide(totalCostBasisUsd, MC);
+            WalletRef walletRef = WalletRef.parse(walletAddress);
             return new TokenPositionView(
                     familyIdentity,
                     symbol,
@@ -996,22 +1120,32 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                     issue,
                     valuationMetadata == null ? null : valuationMetadata.model(),
                     valuationMetadata == null ? null : valuationMetadata.underlyingSymbol(),
-                    effectivePriceSnapshot.unsupportedValuationReason()
+                    effectivePriceSnapshot.unsupportedValuationReason(),
+                    walletRef.domain().name(),
+                    walletRef.venueId(),
+                    walletRef.subAccount(),
+                    null,
+                    null,
+                    null,
+                    null
             );
         }
     }
 
     /**
-     * Custody venues (Bybit UTA/FUND/EARN) replay with {@code networkId == null}; the dashboard still needs a
-     * stable bucket for filters and allocation (frontend only lists explicit network ids in "all" mode).
+     * CEX wallets replay with {@code networkId == null}; derive the dashboard network label from
+     * the venue ID embedded in the wallet address via {@link WalletRef}.
      */
     private static String dashboardNetworkLabel(NetworkId networkId, String walletAddress) {
         if (networkId != null) {
             return networkId.name();
         }
-        String wallet = normalizeAddress(walletAddress);
-        if (wallet.startsWith("bybit:")) {
-            return "BYBIT";
+        if (walletAddress == null || walletAddress.isBlank()) {
+            return null;
+        }
+        WalletRef ref = WalletRef.parse(walletAddress);
+        if (ref.domain() == WalletDomainKind.CEX) {
+            return ref.venueId().toUpperCase(Locale.ROOT);
         }
         return null;
     }
@@ -1123,18 +1257,27 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
         return null;
     }
 
-    private static boolean isBareBybitUmbrellaWallet(String walletAddress) {
-        if (walletAddress == null || !walletAddress.startsWith("bybit:")) {
+    /**
+     * Returns true if {@code walletAddress} is a bare umbrella CEX address (no sub-account suffix).
+     * A bare umbrella has exactly two colon-delimited parts: {@code venue:uid}.
+     */
+    private static boolean isBareCexUmbrellaWallet(String walletAddress) {
+        if (walletAddress == null) {
             return false;
         }
-        return walletAddress.split(":", -1).length == 2;
+        WalletRef ref = WalletRef.parse(walletAddress);
+        return ref.domain() == WalletDomainKind.CEX && (ref.subAccount() == null || ref.subAccount().isBlank());
     }
 
-    private static boolean hasBybitVenueSubLedgerForFamily(
+    /**
+     * Returns true if any sub-account wallet for the given umbrella has a ledger point with the
+     * matching family and non-zero raw quantity.
+     */
+    private static boolean hasCexVenueSubLedgerForFamily(
             Map<BucketKey, AssetLedgerPoint> latestPointByBucket,
             String umbrellaWallet,
             String familyIdentity,
-            Set<String> enabledBybitVenueRefs
+            Set<String> enabledCexVenueRefs
     ) {
         if (latestPointByBucket == null || umbrellaWallet == null || familyIdentity == null) {
             return false;
@@ -1143,21 +1286,14 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
         for (Map.Entry<BucketKey, AssetLedgerPoint> entry : latestPointByBucket.entrySet()) {
             BucketKey bucketKey = entry.getKey();
             String wallet = bucketKey.walletAddress();
-            if (wallet == null || wallet.equals(base)) {
+            if (wallet == null || wallet.equals(base) || !wallet.startsWith(base + ":")) {
                 continue;
             }
-            if (!wallet.startsWith(base + ":")) {
+            WalletRef ref = WalletRef.parse(wallet);
+            if (ref.domain() != WalletDomainKind.CEX || ref.subAccount() == null || ref.subAccount().isBlank()) {
                 continue;
             }
-            String[] parts = wallet.split(":", -1);
-            if (parts.length < 3) {
-                continue;
-            }
-            String sub = parts[2];
-            if (!"fund".equals(sub) && !"uta".equals(sub) && !"earn".equals(sub)) {
-                continue;
-            }
-            if (!BybitUmbrellaSupport.bybitLedgerMatchesEnabledVenue(wallet, enabledBybitVenueRefs)) {
+            if (!CexUmbrellaSupport.cexLedgerMatchesEnabledVenue(wallet, enabledCexVenueRefs)) {
                 continue;
             }
             AssetLedgerPoint point = entry.getValue();
@@ -1170,7 +1306,7 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                     point.getAssetSymbol(),
                     point.getAssetContract()
             );
-            if (familyIdentity.equals(pointFamily) && BybitUmbrellaSupport.bybitRawQuantityAfter(point).signum() > 0) {
+            if (familyIdentity.equals(pointFamily) && CexUmbrellaSupport.cexRawQuantityAfter(point).signum() > 0) {
                 return true;
             }
         }
@@ -1239,6 +1375,20 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                     pricedAt,
                     stalenessSeconds,
                     true,
+                    priceIssue,
+                    null
+            );
+        }
+
+        private static DashboardPriceSnapshot fromResolved(ResolvedPrice resolved, Instant responseTime) {
+            Long stalenessSeconds = stalenessSeconds(resolved.pricedAt(), responseTime);
+            String priceIssue = resolved.stale() ? PRICE_ISSUE_STALE : null;
+            return new DashboardPriceSnapshot(
+                    resolved.priceUsd(),
+                    resolved.source() == null ? null : resolved.source().name(),
+                    resolved.pricedAt(),
+                    stalenessSeconds,
+                    !resolved.stale(),
                     priceIssue,
                     null
             );

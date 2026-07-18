@@ -1,8 +1,8 @@
 # Transaction Types Reference
 
-> **Last updated:** 2026-06-05
+> **Last updated:** 2026-07-16
 
-Authoritative enum: `NormalizedTransactionType.java` (51 values).
+Authoritative enum: `NormalizedTransactionType.java` (52 values).
 
 Cross-stage index. Per-stage detail also in each `pipeline/<stage>/` doc.
 
@@ -59,6 +59,7 @@ Each column in the matrix below answers "what happens to this type at that stage
 | `DERIVATIVE_ORDER_CANCEL` | Trading | TradingClassifier | Cancel refund | Refund legs | Generic | ACQUIRE/DISPOSE DERI |
 | `DERIVATIVE_POSITION_INCREASE` | Trading | GmxProtocolSemantic | Position correlation | Legs priced | Generic | DERIVATIVE |
 | `DERIVATIVE_POSITION_DECREASE` | Trading | GmxProtocolSemantic | Decrease | Legs priced | Generic DISPOSE | DERIVATIVE DISPOSE |
+| `CEX_DERIVATIVE_SETTLEMENT` | Trading | Dzengi trading position history | No continuity | Settlement legs priced | Generic derivative | DERIVATIVE |
 | `PROTOCOL_CUSTODY_DEPOSIT` | Custody | Registry CUSTODY | continuityCandidate | Deposit leg | TransferReplayHandler | CARRY_OUT CUSTODY |
 | `PROTOCOL_CUSTODY_WITHDRAW` | Custody | Registry CUSTODY | continuity | Withdraw leg | CARRY_IN CUSTODY | CARRY_IN CUSTODY |
 | `REWARD_CLAIM` | Reward | TransferClassifier / rewards | May attach lending cycle | Reward leg priced | ACQUIRE REWARD | ACQUIRE REWARD |
@@ -238,13 +239,18 @@ Typical `BasisEffect` + `LifecycleKind`: REQUEST LP. See [ledger points](ledger-
 **Family:** LP
 
 #### Meaning / when produced
-Canonical type `LP_EXIT_SETTLEMENT` assigned during on-chain or Bybit normalization.
+Canonical type `LP_EXIT_SETTLEMENT` assigned during on-chain or Bybit normalization, **or** promoted at
+linking for GMX GLV/GM keeper withdrawals (NEW-09) — see Linking.
 
 #### Normalization rules
 GmxLp / LpSemantic. See [normalization rules](../pipeline/normalization/rules/README.md).
 
 #### Linking
-correlationId. See [linking](../pipeline/linking/02-rules-and-repairs.md).
+`correlationId`. **GMX GLV/GM settlement (NEW-09):** an internal-transfer-only ETH payout from a GMX
+handler/keeper is linked to the open `gmx-lp:*` `LP_EXIT_REQUEST` by `GmxWithdrawalSettlementLinkService`,
+reclassified from the fee-refund-stamped inflow to `LP_EXIT_SETTLEMENT`, given the shared `correlationId`,
+and reshaped `BUY`→`TRANSFER` so replay reuses the REALLOCATE carry (`REALLOCATE_IN` of carried basis)
+rather than fabricating a market ACQUIRE. See [linking](../pipeline/linking/02-rules-and-repairs.md).
 
 #### Pricing
 All return legs priced. See [pricing resolver chain](../pipeline/pricing/02-resolver-chain.md).
@@ -684,7 +690,12 @@ Canonical type `BRIDGE_OUT` assigned during on-chain or Bybit normalization.
 BridgeStartClassifier. See [normalization rules](../pipeline/normalization/rules/README.md).
 
 #### Linking
-continuityCandidate; pair BRIDGE_IN. See [linking](../pipeline/linking/02-rules-and-repairs.md).
+continuityCandidate; pair BRIDGE_IN. **Cross-asset pairing (NEW-08):** `LiFiBridgePairLinkService`
+(accepting a LiFi `GAS_PAYER` relayer as trusted destination evidence) and
+`CrossNetworkBridgePairFallbackService` pair asset-changing routes (e.g. `USDC`→`ETH`) by USD-value
+proximity. Such pairs keep `continuityCandidate = false` and settle via the asset-changing REALLOCATE
+path — source disposed as `REALLOCATE_OUT`, destination restored with source carried basis. See
+[linking](../pipeline/linking/02-rules-and-repairs.md).
 
 #### Pricing
 Outbound leg; orphan fallback if no IN. See [pricing resolver chain](../pipeline/pricing/02-resolver-chain.md).
@@ -706,7 +717,11 @@ Canonical type `BRIDGE_IN` assigned during on-chain or Bybit normalization.
 BridgeSettlementClassifier / linking. See [normalization rules](../pipeline/normalization/rules/README.md).
 
 #### Linking
-continuityCandidate after repair. See [linking](../pipeline/linking/02-rules-and-repairs.md).
+continuityCandidate after repair. **Cross-asset settlement (NEW-08):** an orphan cross-asset
+`BRIDGE_IN` is paired to its `BRIDGE_OUT` by USD-value proximity within a tight window and settles via
+the asset-changing REALLOCATE path (`continuityCandidate = false`, no plain carry). **Relay payout
+(NEW-11):** registry-backed Relay `GAS_PAYER`/solver payouts (ARBITRUM `0x1619de6b…`, ZKSYNC solver)
+classify as `BRIDGE_IN`. See [linking](../pipeline/linking/02-rules-and-repairs.md).
 
 #### Pricing
 Inbound; market if orphan. See [pricing resolver chain](../pipeline/pricing/02-resolver-chain.md).
@@ -871,6 +886,28 @@ Generic DISPOSE. See [replay handlers](../pipeline/replay/02-handlers.md).
 #### Ledger output
 Typical `BasisEffect` + `LifecycleKind`: DERIVATIVE DISPOSE. See [ledger points](ledger-points-and-basis-effects.md).
 
+### CEX_DERIVATIVE_SETTLEMENT {#cex-derivative-settlement}
+
+**Family:** Trading (CEX)
+
+#### Meaning / when produced
+Canonical type `CEX_DERIVATIVE_SETTLEMENT` assigned during **Dzengi** normalization from `TRADING_POSITIONS_HISTORY` extracted rows (`DzengiCanonicalTransactionBuilder`). Represents realized derivative position settlement lines on the exchange ledger — not on-chain GMX/Perp protocol semantics.
+
+#### Normalization rules
+[Dzengi adaptation](../pipeline/normalization/rules/dzengi-adaptation.md). Leverage/CFD **fills** are excluded at extraction; only position **history** settlements become this type.
+
+#### Linking
+No custody continuity. May participate in FA-001 only when accompanied by on-chain deposit/withdraw types with `txHash` (separate types).
+
+#### Pricing
+Settlement flows priceable via execution or external sources; fiat **BYN** legs may use `PriceSource.DZENGI` ([ADR-050](../adr/ADR-050-dzengi-fiat-fx-pricing.md)).
+
+#### Replay / AVCO
+`AssetLedgerSupport` maps to `LifecycleKind.DERIVATIVE`. Treated as realized derivative PnL/settlement, not LP or lending lifecycle.
+
+#### Ledger output
+Typical `BasisEffect` + `LifecycleKind`: DERIVATIVE. See [ledger points](ledger-points-and-basis-effects.md).
+
 ### PROTOCOL_CUSTODY_DEPOSIT {#protocol-custody-deposit}
 
 **Family:** Custody
@@ -986,7 +1023,11 @@ Typical `BasisEffect` + `LifecycleKind`: ACQUIRE/CARRY_IN TRANSFER. See [ledger 
 **Family:** Transfer
 
 #### Meaning / when produced
-Canonical type `SPONSORED_GAS_IN` assigned during on-chain or Bybit normalization.
+Canonical type `SPONSORED_GAS_IN` assigned during on-chain or Bybit normalization, **or** at linking for
+basis-neutral gas refunds: **NEW-13** — a residual GMX execution-fee refund with no matching open
+`LP_EXIT_REQUEST` (demoted by `GmxExecutionFeeRefundBasisNeutralService`, strictly after the NEW-09
+settlement link); **NEW-14** — a plain native top-up from a registry `GAS_PAYER`-role EOA (e.g. the Rabby
+"Gas Fee Payer" `0x76dd6552…`). All resolve basis-neutral (`GAS_ONLY`, `costBasisDelta = 0`).
 
 #### Normalization rules
 SponsoredGasTopUpSupport. See [normalization rules](../pipeline/normalization/rules/README.md).

@@ -469,6 +469,254 @@ class BybitExtractionServiceTest {
     }
 
     @Test
+    void fundingHistoryCryptoLoansBorrowIsPromotedToBasisRelevant() {
+        // BLOCKER-6: FUND-only Crypto Loans BORROW (no UTA TX_LOG counterpart) is the authoritative
+        // loan-inflow event and must be promoted so replay opens a borrow liability.
+        IntegrationRawEvent rawEvent = rawEvent(
+                "integration-1",
+                BybitIntegrationStream.FUNDING_HISTORY,
+                "funding-crypto-loan-borrow-1",
+                """
+                        {
+                          "memberId":"33625378",
+                          "currency":"TON",
+                          "ioDirection":"I",
+                          "txnAmt":"80",
+                          "afterAmt":"80",
+                          "createTime":"1755237481",
+                          "showBusiTypeEn":"Crypto Loans",
+                          "descriptionEn":"Borrow Released"
+                        }
+                        """
+        );
+
+        List<BybitExtractedEvent> events = service.extract(rawEvent);
+
+        assertThat(events).hasSize(1);
+        BybitExtractedEvent event = events.get(0);
+        assertThat(event.getBybitType()).isEqualTo("Crypto Loans");
+        assertThat(event.getCanonicalType()).isEqualTo("BORROW");
+        assertThat(event.getQuantityRaw()).isEqualByComparingTo("80");
+        assertThat(event.getBasisRelevant()).isTrue();
+        assertThat(event.getWalletRef()).isEqualTo("BYBIT:33625378:FUND");
+    }
+
+    @Test
+    void fundingHistoryCryptoLoansRepayIsPromotedToBasisRelevant() {
+        IntegrationRawEvent rawEvent = rawEvent(
+                "integration-1",
+                BybitIntegrationStream.FUNDING_HISTORY,
+                "funding-crypto-loan-repay-1",
+                """
+                        {
+                          "memberId":"33625378",
+                          "currency":"TON",
+                          "ioDirection":"O",
+                          "txnAmt":"80.088",
+                          "afterAmt":"0",
+                          "createTime":"1755842281",
+                          "showBusiTypeEn":"Crypto Loans",
+                          "descriptionEn":"Borrow Repayment"
+                        }
+                        """
+        );
+
+        List<BybitExtractedEvent> events = service.extract(rawEvent);
+
+        assertThat(events).hasSize(1);
+        BybitExtractedEvent event = events.get(0);
+        assertThat(event.getBybitType()).isEqualTo("Crypto Loans");
+        assertThat(event.getCanonicalType()).isEqualTo("REPAY");
+        assertThat(event.getQuantityRaw()).isEqualByComparingTo("-80.088");
+        assertThat(event.getBasisRelevant()).isTrue();
+    }
+
+    @Test
+    void fundingHistoryLoansProductBorrowStaysDemotedAsTxLogShadow() {
+        // Rule 2: `Loans` product BORROW/REPAY rows shadow the authoritative UTA TRANSACTION_LOG
+        // LOANS_* stream and must stay basisRelevant=false, unlike `Crypto Loans`.
+        IntegrationRawEvent rawEvent = rawEvent(
+                "integration-1",
+                BybitIntegrationStream.FUNDING_HISTORY,
+                "funding-loans-borrow-1",
+                """
+                        {
+                          "memberId":"33625378",
+                          "currency":"MNT",
+                          "ioDirection":"I",
+                          "txnAmt":"1000",
+                          "afterAmt":"1000",
+                          "createTime":"1755237481",
+                          "showBusiTypeEn":"Loans",
+                          "descriptionEn":"Borrow Funds"
+                        }
+                        """
+        );
+
+        List<BybitExtractedEvent> events = service.extract(rawEvent);
+
+        assertThat(events).hasSize(1);
+        BybitExtractedEvent event = events.get(0);
+        assertThat(event.getBybitType()).isEqualTo("Loans");
+        assertThat(event.getCanonicalType()).isEqualTo("BORROW");
+        assertThat(event.getBasisRelevant()).isFalse();
+    }
+
+    @Test
+    void fundingHistoryLoansRepayPrincipalStaysDemotedAsTxLogShadow() {
+        IntegrationRawEvent rawEvent = rawEvent(
+                "integration-1",
+                BybitIntegrationStream.FUNDING_HISTORY,
+                "funding-loans-repay-principal-1",
+                """
+                        {
+                          "memberId":"33625378",
+                          "currency":"MNT",
+                          "ioDirection":"O",
+                          "txnAmt":"1000",
+                          "afterAmt":"0",
+                          "createTime":"1744891736",
+                          "showBusiTypeEn":"Loans",
+                          "descriptionEn":"Repay Principal"
+                        }
+                        """
+        );
+
+        List<BybitExtractedEvent> events = service.extract(rawEvent);
+
+        assertThat(events).hasSize(1);
+        BybitExtractedEvent event = events.get(0);
+        assertThat(event.getBybitType()).isEqualTo("Loans");
+        assertThat(event.getCanonicalType()).isEqualTo("REPAY");
+        assertThat(event.getBasisRelevant()).isFalse();
+    }
+
+    @Test
+    void fundingHistoryLoanInterestFeeStaysDemoted() {
+        // Rule 2: ALL loan FEE rows (interest) shadow the authoritative TX_LOG loan interest and stay
+        // demoted. Loan interest arrives under the `Loans` product as "Repay Interest".
+        IntegrationRawEvent rawEvent = rawEvent(
+                "integration-1",
+                BybitIntegrationStream.FUNDING_HISTORY,
+                "funding-crypto-loan-fee-1",
+                """
+                        {
+                          "memberId":"33625378",
+                          "currency":"TON",
+                          "ioDirection":"O",
+                          "txnAmt":"0.088",
+                          "afterAmt":"0",
+                          "createTime":"1755842281",
+                          "showBusiTypeEn":"Loans",
+                          "descriptionEn":"Repay Interest"
+                        }
+                        """
+        );
+
+        BybitExtractedEvent event = service.extract(rawEvent).get(0);
+
+        assertThat(event.getCanonicalType()).isEqualTo("FEE");
+        assertThat(event.getBasisRelevant()).isFalse();
+    }
+
+    @Test
+    void fundingHistoryLoansPledgeNegativeIsNotTreatedAsBorrowInflow() {
+        // BLOCKER-6 rule 3: the USDT "Loans / Pledge Assets" event is NEGATIVE (collateral lock
+        // OUTFLOW). It must not be promoted to a BORROW inventory inflow. It arrives under the `Loans`
+        // product and therefore stays demoted; the negative-sign guard is defense-in-depth.
+        IntegrationRawEvent rawEvent = rawEvent(
+                "integration-1",
+                BybitIntegrationStream.FUNDING_HISTORY,
+                "funding-loans-pledge-1",
+                """
+                        {
+                          "memberId":"33625378",
+                          "currency":"USDT",
+                          "ioDirection":"O",
+                          "txnAmt":"523",
+                          "afterAmt":"0",
+                          "createTime":"1744891736",
+                          "showBusiTypeEn":"Loans",
+                          "descriptionEn":"Pledge Assets"
+                        }
+                        """
+        );
+
+        BybitExtractedEvent event = service.extract(rawEvent).get(0);
+
+        assertThat(event.getBybitType()).isEqualTo("Loans");
+        assertThat(event.getCanonicalType()).isEqualTo("BORROW");
+        assertThat(event.getQuantityRaw()).isEqualByComparingTo("-523");
+        assertThat(event.getBasisRelevant()).isFalse();
+    }
+
+    @Test
+    void fundingHistoryCryptoLoansBorrowSuppressedWhenTxLogLoanCoversWindow() {
+        // BLOCKER-6 rule 4: coverage guard — if the authoritative UTA TRANSACTION_LOG already carries a
+        // LOANS_BORROW_FUNDS row for the same (uid, asset) window, the FH row must NOT be promoted
+        // (avoids double-counting a loan present on both streams).
+        when(mongoOperations.exists(any(Query.class), eq(BybitExtractedEvent.class))).thenReturn(true);
+
+        IntegrationRawEvent rawEvent = rawEvent(
+                "integration-1",
+                BybitIntegrationStream.FUNDING_HISTORY,
+                "funding-crypto-loan-borrow-covered-1",
+                """
+                        {
+                          "memberId":"33625378",
+                          "currency":"MNT",
+                          "ioDirection":"I",
+                          "txnAmt":"3532",
+                          "afterAmt":"3532",
+                          "createTime":"1744891736",
+                          "showBusiTypeEn":"Crypto Loans",
+                          "descriptionEn":"Borrow Released"
+                        }
+                        """
+        );
+
+        BybitExtractedEvent event = service.extract(rawEvent).get(0);
+
+        assertThat(event.getCanonicalType()).isEqualTo("BORROW");
+        assertThat(event.getBasisRelevant()).isFalse();
+    }
+
+    @Test
+    void refreshBasisRelevantFromRaw_reAppliesCryptoLoansPromotionIdempotently() {
+        // BLOCKER-6 rule 5: single source of truth. refreshBasisRelevantFromRaw re-extracts via the same
+        // rule, so a stale demoted Crypto Loans BORROW is re-promoted (idempotent on re-run).
+        IntegrationRawEvent raw = rawEvent(
+                "BYBIT-33625378",
+                BybitIntegrationStream.FUNDING_HISTORY,
+                "fh-crypto-loan-refresh-1",
+                """
+                        {
+                          "memberId":"33625378",
+                          "currency":"TON",
+                          "ioDirection":"I",
+                          "txnAmt":"80",
+                          "afterAmt":"80",
+                          "createTime":"1755237481",
+                          "showBusiTypeEn":"Crypto Loans",
+                          "descriptionEn":"Borrow Released"
+                        }
+                        """
+        );
+        BybitExtractedEvent fresh = service.extract(raw).get(0);
+        assertThat(fresh.getBasisRelevant()).isTrue();
+
+        fresh.setBasisRelevant(false);
+
+        when(mongoOperations.findById(eq(raw.getId()), eq(IntegrationRawEvent.class))).thenReturn(raw);
+
+        assertThat(service.refreshBasisRelevantFromRaw(fresh)).isTrue();
+        assertThat(fresh.getBasisRelevant()).isTrue();
+
+        // Second refresh is a no-op now that the flag already matches the extraction rule.
+        assertThat(service.refreshBasisRelevantFromRaw(fresh)).isFalse();
+    }
+
+    @Test
     void transactionLogCurrencyBuyBecomesSwapConvertLeg() {
         IntegrationRawEvent rawEvent = rawEvent(
                 "integration-1",

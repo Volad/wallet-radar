@@ -5,5 +5,10 @@
   "aliases": ["Uniswap", "Uniswap V3"],
   "capabilities": ["LP_POSITION_NFT", "ROUTER_SWAPS"],
   "families": ["DEX"],
-  "clarificationHints": []
+  "clarificationHints": [],
+  "semanticClassifier": "uniswap-v3",
+  "lpPresentation": {
+    "positionIdentityStrategy": "nfpm-token-id",
+    "receiptTokenPatterns": ["UNI-V3-POS"]
+  }
 }

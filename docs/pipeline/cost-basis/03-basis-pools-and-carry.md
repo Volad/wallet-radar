@@ -1,6 +1,6 @@
 # Cost Basis — Basis Pools and Carry
 
-> **Last updated:** 2026-06-05  
+> **Last updated:** 2026-07-16  
 > **Pipeline stage:** `ACCOUNTING_REPLAY`
 
 Beyond per-wallet spot buckets, replay maintains **auxiliary basis books** and **continuity carry** paths so pooled inventory does not corrupt proved corridors.
@@ -26,7 +26,18 @@ flowchart TB
 Key: `AssetKey(walletAddress, networkId, accountingAssetIdentity)`  
 State: `PositionState` — quantity, totalCostBasisUsd, perWalletAvco, uncoveredQuantity, realised PnL, gas.
 
-Exact-asset identity at rest; **family continuity** applied at carry match time via `AccountingAssetFamilySupport`.
+Exact-asset identity at rest; **canonical-token identity** (ADR-054 C1/C2 registry via
+`AccountingAssetClassificationSupport`) governs carry-vs-realize at match time. Family continuity
+(`AccountingAssetFamilySupport`) keys read-model rollup; C2 staked derivatives no longer roll into
+`FAMILY:ETH` (ADR-045 amendment).
+
+### C1 / C2 carry boundary (ADR-054)
+
+| Class | Examples | Identity | Move between classes |
+|---|---|---|---|
+| **C1** — same underlying, 1:1 fixed rate | ETH, WETH, Aave `a*WETH`, VBETH; WBTC, `a*WBTC` | underlying family (`FAMILY:ETH`, `FAMILY:BTC`, …) | REALLOCATE, no P&amp;L |
+| **C2** — distinct market asset | STETH, WSTETH, CMETH, WEETH, EWETH, YVVBETH; sAVAX, BBSOL | own per-token family (`FAMILY:CMETH`, …) | DISPOSE + ACQUIRE at market, realize P&amp;L |
+| **Same-token custody** (both classes) | cmETH CEX→wallet corridor, C2 bridge | unchanged | REALLOCATE, no P&amp;L |
 
 ## Counterparty basis pools (ADR-015)
 
@@ -80,7 +91,32 @@ tokenId key. A new-mint (tokenId assigned on-chain, only in the ERC-721 mint log
 receipt clarification rather than a truncated-contract aggregate, so entry and exit share one pool
 and exits never fabricate `UNKNOWN` basis.
 
-**Entry routing:** `LpReceiptEntryReplayHandler.hasOnlyOutboundPrincipalFlows()` uses net-by-asset aggregation — refunds in same tx still route to receipt pool when net outbound.
+**Entry routing:** `LpReceiptEntryReplayHandler.hasOnlyOutboundPrincipalFlows()` nets principal flows
+**by continuity family** (`AccountingAssetFamilySupport.continuityIdentity`) with a **USD dust
+tolerance** — refunds in the same tx (including sibling-token dust) still route to the receipt pool
+when the deposit family stays net outbound.
+
+### Single-token CL zap-in entries
+
+Concentrated-liquidity "zap-in" entries mint the position from **one** deposited token (e.g. native
+ETH) while the router refunds **dust** of the two pool tokens in the same transaction (e.g. vbETH ≈
+`6.57e-16`, vbUSDC ≈ `0.000002`). Raw-symbol netting wrongly saw those dust legs as net-positive
+principal and rejected the receipt-pool path, leaking the deposit basis into the generic
+continuity bucket (the paired exit then fell back to `UNKNOWN` / fresh market ACQUIRE).
+
+The routing gate nets **per continuity family** and applies a **materiality gate**:
+
+- Net **quantity** and net **USD** are aggregated per `continuityIdentity(assetSymbol, assetContract)`,
+  so vbETH collapses into `FAMILY:ETH` with the native-ETH deposit and that family stays net-outbound.
+- A net-**positive** family is **dust** (non-disqualifying) when either its net inbound USD is below
+  `max($1.00, 1% × totalOutboundUsd)`, or — when unpriced — its net inbound quantity is below
+  `1e-6 × maxOutboundQty` (largest net-outbound quantity across families).
+- At least one **material** net-outbound family must exist (a real deposit). Any **material**
+  net-positive family still returns `false`, preserving Curve/Balancer rejection where the pool
+  returns a materially different asset.
+
+Once the entry routes to the receipt pool (keyed `FAMILY:ETH`), the existing exit-side
+`restoreInboundFromLpReceiptPool` carries the basis onto the returned vbETH with no exit-side change.
 
 **Exit attribution (ADR-022):** Each returned asset draws basis from its own pool; cross-pool carry only for one-sided (out-of-range) exits. With contract-keyed identity unifying the pool, a one-sided ETH exit restores the combined ETH+USDC receipt-pool basis onto the returned ETH (no new exit code), and the USDC leg drains to 0 with no fabricated separate USDC ACQUIRE.
 
@@ -198,11 +234,17 @@ Atomic carry pair for one outbound + one inbound principal in same audited famil
 
 | Family | Includes (examples) |
 |--------|----------------------|
-| `ETH` | ETH, WETH, aEthWETH, vbETH, mETH, cmETH, … |
+| `ETH` (C1 spot) | ETH, WETH, aEthWETH, vbETH — 1:1 fixed-rate ETH |
 | `USDC` | USDC + audited stable wrappers |
-| Staked ETH on timeline | ETH, WETH, STETH, WSTETH, CMETH, … (ADR-017) |
 
 LP receipt symbols excluded from ETH family rollup denominators.
+
+> **Staked/derivative ETH is no longer on the ETH family chart (ADR-054, supersedes ADR-017).** The old
+> "Staked ETH on timeline" rollup (which folded STETH, WSTETH, CMETH, mETH … into the ETH timeline) is
+> superseded: C2 staked/derivative ETH is a distinct market asset with its **own** per-token family
+> (`FAMILY:CMETH`, `FAMILY:WSTETH`, …) and per-asset AVCO pool. C2 symbols are excluded from the
+> `FAMILY:ETH` spot-family chart denominators (ADR-045 amendment). See the [C1 / C2 carry boundary](#c1--c2-carry-boundary-adr-054)
+> table above.
 
 ## Corridor basis conservation guard (G-1)
 
@@ -247,7 +289,7 @@ Carry / pool routing per type:
 | `LENDING_WITHDRAW` | REALLOCATE restore |
 | `VAULT_DEPOSIT` / `VAULT_WITHDRAW` | Same |
 | `PROTOCOL_CUSTODY_*` | Counterparty pool push/pop |
-| `STAKING_DEPOSIT` / `WITHDRAW` | `LiquidStakingReplayHandler` carry |
+| `STAKING_DEPOSIT` / `WITHDRAW` | **Same canonical-token identity:** `LiquidStakingReplayHandler` or family-equivalent REALLOCATE (C1 only). **Identity change (C1↔C2):** generic swap path — realize P&amp;L at market (ADR-054) |
 | `LP_ENTRY_REQUEST` / `SETTLEMENT` | `GmxLpEntryReplayHandler` escrow |
 | `LP_EXIT_REQUEST` / `SETTLEMENT` | `GenericAsyncLifecycleReplayHandler` |
 | `DEX_ORDER_*` | `AsyncSpotOrderReplayHandler` open bucket |
@@ -289,14 +331,14 @@ so carry-created basis positions correctly satisfy `basisBackedQty > 1e-8` and b
 
 ## Dual-lane net-carry conservation (ADR-040 amendment, 2026-07-02)
 
-ADR-040 introduced parallel Tax and Net cost-basis lanes. The **net-carry conservation invariant** requires
-that net basis travels with quantity on every IN leg — never silently re-seeded from the tax lane.
+ADR-040 introduced parallel Market and Net cost-basis lanes. The **net-carry conservation invariant** requires
+that net basis travels with quantity on every IN leg — never silently re-seeded from the Market lane.
 
 ### Invariant
 
 > For any closed intra-family round-trip (WRAP↔UNWRAP, spot↔receipt, REALLOCATE_IN↔OUT) on a single
-> position key: `|Σ netCostBasisDelta| ≤ dust` — exactly as `Σ taxCostBasisDelta = 0` holds for Tax.
-> Net AVCO ≤ Tax AVCO for every position. Net AVCO ≥ 0.
+> position key: `|Σ netCostBasisDelta| ≤ dust` — exactly as `Σ marketCostBasisDelta = 0` holds for Market.
+> Net AVCO ≤ Market AVCO for every position. Net AVCO ≥ 0.
 
 ### Mechanism
 

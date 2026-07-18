@@ -70,6 +70,10 @@ public class ReplayMarketAuthority {
             if (crossNetwork.isPresent()) {
                 return crossNetwork;
             }
+            Optional<ResolvedMarketPrice> nearest = resolveBoundedNearestCached(transaction, flow, occurredAt);
+            if (nearest.isPresent()) {
+                return nearest;
+            }
         }
         if (CanonicalAssetCatalog.isUsdStablecoinBySymbol(flow.getAssetSymbol())) {
             return Optional.of(new ResolvedMarketPrice(
@@ -116,6 +120,10 @@ public class ReplayMarketAuthority {
             Optional<ResolvedMarketPrice> crossNetwork = resolveCanonicalCrossNetwork(transaction, flow, occurredAt);
             if (crossNetwork.isPresent()) {
                 return crossNetwork;
+            }
+            Optional<ResolvedMarketPrice> nearest = resolveBoundedNearestCached(transaction, flow, occurredAt);
+            if (nearest.isPresent()) {
+                return nearest;
             }
         }
         if (CanonicalAssetCatalog.isUsdStablecoinBySymbol(flow.getAssetSymbol())) {
@@ -197,6 +205,21 @@ public class ReplayMarketAuthority {
             }
         }
         return Optional.empty();
+    }
+
+    private Optional<ResolvedMarketPrice> resolveBoundedNearestCached(
+            NormalizedTransaction transaction,
+            Flow flow,
+            Instant occurredAt
+    ) {
+        PriceRequest request = toPriceRequest(transaction, flow, occurredAt);
+        return priceExternalSourceOrchestrator.resolveBoundedNearestCachedBucket(request)
+                .filter(quote -> quote.unitPriceUsd() != null && quote.unitPriceUsd().signum() > 0)
+                .map(quote -> new ResolvedMarketPrice(
+                        quote.unitPriceUsd(),
+                        quote.source(),
+                        ResolvedMarketPrice.Authority.HISTORICAL_CACHE
+                ));
     }
 
     private static PriceRequest toPriceRequest(

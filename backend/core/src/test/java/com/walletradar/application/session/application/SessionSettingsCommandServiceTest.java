@@ -11,6 +11,7 @@ import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.domain.sync.BackfillSegmentRepository;
 import com.walletradar.application.session.application.TrackedWalletProjectionService;
 import com.walletradar.application.cex.acquisition.venue.bybit.BybitApiClient;
+import com.walletradar.application.cex.acquisition.venue.dzengi.DzengiApiClient;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeEach;
@@ -46,6 +47,8 @@ class SessionSettingsCommandServiceTest {
     @Mock
     private BybitApiClient bybitApiClient;
     @Mock
+    private DzengiApiClient dzengiApiClient;
+    @Mock
     private BackfillSegmentRepository backfillSegmentRepository;
     @Mock
     private IntegrationSyncStatusService integrationSyncStatusService;
@@ -60,6 +63,7 @@ class SessionSettingsCommandServiceTest {
                 accountUniverseSyncPlanScheduler,
                 sessionSecretCryptoService,
                 bybitApiClient,
+                dzengiApiClient,
                 backfillSegmentRepository,
                 integrationSyncStatusService,
                 new ObjectMapper()

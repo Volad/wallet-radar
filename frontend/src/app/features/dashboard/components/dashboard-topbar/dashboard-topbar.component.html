@@ -1,10 +1,10 @@
 <header class="topbar">
-  <div class="logo-wrap">
+  <a class="logo-wrap" routerLink="/" aria-label="Dashboard">
     <span class="logo-mark" aria-hidden="true">
       <img class="logo-mark-image" src="walletradar-mark.jpg" alt="" />
     </span>
     <span class="logo-text">WalletRadar</span>
-  </div>
+  </a>
 
   <div class="metric-strip">
     @for (metric of metrics; track metric.label) {

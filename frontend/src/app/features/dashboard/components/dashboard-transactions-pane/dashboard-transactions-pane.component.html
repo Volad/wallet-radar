@@ -7,7 +7,7 @@
         type="search"
         [ngModel]="transactionSearch()"
         (ngModelChange)="setTransactionSearch($event)"
-        placeholder="Search hash or symbol" />
+        placeholder="Search id, hash, or symbol" />
     </label>
     <div class="category-filter-row" aria-label="Transaction category filters">
       @for (cat of INLINE_CATEGORIES; track cat) {
@@ -50,16 +50,16 @@
     <span class="mono muted">{{ totalCountSignal() }} txns</span>
   </header>
 
-  <div class="tx-columns">
-    <span></span>
-    <span>Type / Hash</span>
-    <span>Flows</span>
-    <span>Network</span>
-    <span class="align-right">Date</span>
-    <span></span>
-  </div>
-
   <div class="tx-list" [class.loading]="isLoading">
+    <div class="tx-columns">
+      <span></span>
+      <span>Type / Hash</span>
+      <span>Flows</span>
+      <span>Network</span>
+      <span class="align-right">Date</span>
+      <span></span>
+    </div>
+
     @if (paginatedTransactions().length > 0) {
       @for (tx of paginatedTransactions(); track tx.id) {
         @let network = getNetworkById(tx.networkId);
@@ -117,9 +117,7 @@
             <div class="tx-flow-preview">
               @for (flow of previewFlows; track flow.role + flow.symbol + $index) {
                 <div class="mono small-flow">
-                  <span [attr.title]="formatQuantityFull(getAbsoluteSignedQuantity(flow))">
-                    {{ formatQuantity(getAbsoluteSignedQuantity(flow)) }} {{ flow.symbol }}
-                  </span>
+                  <wr-smart-amount [value]="getAbsoluteSignedQuantity(flow)" mode="qty" [suffix]="flow.symbol" />
                 </div>
               }
               @if (hiddenPreviewFlowCount > 0) {
@@ -180,8 +178,8 @@
                 @for (flow of tx.flows; track flow.role + flow.symbol + $index) {
                   <div class="flow-card">
                     <span class="flow-role" [style.color]="getFlowColor(flow.role)">{{ flow.role }}</span>
-                    <strong class="mono" [attr.title]="formatQuantityFull(getSignedQuantity(flow))">
-                      {{ getFlowPrefix(flow) }}{{ formatQuantity(getSignedQuantity(flow)) }} {{ flow.symbol }}
+                    <strong class="mono">
+                      {{ getFlowPrefix(flow) }}<wr-smart-amount [value]="getAbsoluteQuantity(getSignedQuantity(flow))" mode="qty" [suffix]="flow.symbol" />
                     </strong>
                     <div class="flow-foot">
                       @if (flow.priceUsd !== null) {
@@ -319,7 +317,7 @@
                       </div>
 
                       @if (flow.quantity !== null && flow.priceUsd !== null) {
-                        <div class="mono tiny muted">≈ {{ formatUsd(flow.quantity * flow.priceUsd) }} · {{ flow.source }}</div>
+                        <div class="mono tiny muted">≈ <wr-smart-amount [value]="flow.quantity * flow.priceUsd" /> · {{ flow.source }}</div>
                       }
 
                       @if (flow.priceUsd === null) {

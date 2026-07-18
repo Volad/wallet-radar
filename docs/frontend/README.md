@@ -35,7 +35,8 @@ flowchart TB
 | `settings` | `DashboardComponent` | `data.mode: settings` |
 | `lending` | `DashboardComponent` | `data.mode: lending` |
 | `lp` | `DashboardComponent` | `data.mode: lp` → embeds `<wr-lp-page>` |
-| `sessions/:sessionId/assets/:familyIdentity` | `DashboardComponent` | Asset ledger deep link |
+| `move-basis/:familyIdentity` | `DashboardComponent` | `data.mode: move-basis` → embeds `<wr-asset-ledger-page>` |
+| `sessions/:sessionId/assets/:familyIdentity` | redirect guard | Legacy deep link → `/move-basis/:familyIdentity` |
 | `**` | redirect → `''` | |
 
 Single shell: `DashboardComponent` switches workspace by route `data.mode` and asset-ledger signals. The `/lp` route renders `DashboardComponent` which mounts `LpPageComponent` as a child (not a standalone route component).
@@ -51,7 +52,7 @@ Single shell: `DashboardComponent` switches workspace by route `data.mode` and a
 | Doc | Route |
 |-----|-------|
 | [Dashboard](dashboard.md) | `/` |
-| [Move basis](move-basis.md) | `/sessions/:id/assets/:familyIdentity` |
+| [Move basis](move-basis.md) | `/move-basis/:familyIdentity` |
 | [Settings](settings.md) | `/settings` |
 | [Lending market](lending-market.md) | `/lending` |
 | [Liquidity pools](liquidity-pools.md) | `/lp` |

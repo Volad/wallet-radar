@@ -17,7 +17,8 @@ class AccountingAssetFamilySupportTest {
     void mapsAaveWrappedAvaxAndMantleIntoCanonicalFamilies() {
         assertThat(AccountingAssetFamilySupport.continuityIdentity("AVAX", null)).isEqualTo("FAMILY:AVAX");
         assertThat(AccountingAssetFamilySupport.continuityIdentity("aAvaWAVAX", null)).isEqualTo("FAMILY:AVAX");
-        assertThat(AccountingAssetFamilySupport.continuityIdentity("aAvaSAVAX", null)).isEqualTo("FAMILY:AVAX");
+        assertThat(AccountingAssetFamilySupport.continuityIdentity("aAvaSAVAX", null)).isEqualTo("FAMILY:SAVAX");
+        assertThat(AccountingAssetFamilySupport.continuityIdentity("sAVAX", null)).isEqualTo("FAMILY:SAVAX");
         assertThat(AccountingAssetFamilySupport.continuityIdentity("MNT", null)).isEqualTo("FAMILY:MNT");
         assertThat(AccountingAssetFamilySupport.continuityIdentity("WMNT", null)).isEqualTo("FAMILY:MNT");
     }
@@ -40,23 +41,22 @@ class AccountingAssetFamilySupportTest {
     }
 
     @Test
-    void mapsExtendedEthFamilyAliasesAcrossLayer1AndLayer2() {
-        // Cycle/6 C1: extended family resolver entries so basis carry works on LENDING_DEPOSIT /
-        // LENDING_WITHDRAW transfers for wrapped, staked, and lending-receipt ETH variants.
+    void mapsC1EthIntoEthFamilyAndC2IntoOwnFamilies() {
         assertThat(AccountingAssetFamilySupport.continuityIdentity("aWETH", null)).isEqualTo("FAMILY:ETH");
         assertThat(AccountingAssetFamilySupport.continuityIdentity("aBasWETH", null)).isEqualTo("FAMILY:ETH");
-        assertThat(AccountingAssetFamilySupport.continuityIdentity("aOptWETH", null)).isEqualTo("FAMILY:ETH");
-        assertThat(AccountingAssetFamilySupport.continuityIdentity("cmETH", null)).isEqualTo("FAMILY:ETH");
-        assertThat(AccountingAssetFamilySupport.continuityIdentity("CMETH", null)).isEqualTo("FAMILY:ETH");
+        assertThat(AccountingAssetFamilySupport.continuityIdentity("VBETH", null)).isEqualTo("FAMILY:ETH");
+        assertThat(AccountingAssetFamilySupport.continuityIdentity("cmETH", null)).isEqualTo("FAMILY:METH");
+        assertThat(AccountingAssetFamilySupport.continuityIdentity("CMETH", null)).isEqualTo("FAMILY:METH");
+        assertThat(AccountingAssetFamilySupport.continuityIdentity("WSTETH", null)).isEqualTo("FAMILY:WSTETH");
+        assertThat(AccountingAssetFamilySupport.continuityIdentity("EWETH-1", null)).isEqualTo("FAMILY:EWETH");
+        assertThat(AccountingAssetFamilySupport.continuityIdentity("EWEETH-1", null)).isEqualTo("FAMILY:EWEETH");
     }
 
     @Test
     void mapsExtendedStablecoinFamilyAliasesForLendingReceipts() {
-        // USDC variants
         assertThat(AccountingAssetFamilySupport.continuityIdentity("aZksUSDC", null)).isEqualTo("FAMILY:USDC");
         assertThat(AccountingAssetFamilySupport.continuityIdentity("aOptUSDC", null)).isEqualTo("FAMILY:USDC");
         assertThat(AccountingAssetFamilySupport.continuityIdentity("fUSDC", null)).isEqualTo("FAMILY:USDC");
-        // USDT variants
         assertThat(AccountingAssetFamilySupport.continuityIdentity("fUSDT", null)).isEqualTo("FAMILY:USDT");
         assertThat(AccountingAssetFamilySupport.continuityIdentity("vbUSDT", null)).isEqualTo("FAMILY:USDT");
     }
@@ -78,33 +78,24 @@ class AccountingAssetFamilySupportTest {
 
     @Test
     void confusableLookalikeSymbolsNeverCollapseIntoCanonicalFamily() {
-        // F-6: Cyrillic "UЅDС" must not share family identity with canonical USDC.
         String cyrillicUsdc = "U\u0405D\u0421";
         assertThat(AccountingAssetFamilySupport.continuityIdentity(cyrillicUsdc, null))
                 .isNotEqualTo("FAMILY:USDC");
         assertThat(AccountingAssetFamilySupport.continuityIdentity(cyrillicUsdc, null))
                 .isEqualTo("SYMBOL:" + cyrillicUsdc.toUpperCase());
-        // With a contract, the scam asset is keyed by its own contract — still not FAMILY:USDC.
         assertThat(AccountingAssetFamilySupport.continuityIdentity(cyrillicUsdc, "0xDEADBEEF"))
                 .isEqualTo("0xdeadbeef");
-        // Legit USD₮0 still collapses to FAMILY:USDT.
         assertThat(AccountingAssetFamilySupport.continuityIdentity("USD₮0", null)).isEqualTo("FAMILY:USDT");
     }
 
     @Test
-    void includesStakedEthVariantsInSpotEthTimelineRollup() {
-        // P0-B: Full FAMILY:ETH included set: ETH, WETH, AMANWETH, CMETH, METH, WEETH, WSTETH, STETH, RSETH
+    void ethFamilyTimelineIncludesOnlyC1Members() {
         assertThat(AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation("FAMILY:ETH", "ETH")).isTrue();
         assertThat(AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation("FAMILY:ETH", "WETH")).isTrue();
-        assertThat(AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation("FAMILY:ETH", "CMETH")).isTrue();
-        assertThat(AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation("FAMILY:ETH", "METH")).isTrue();
-        assertThat(AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation("FAMILY:ETH", "WEETH")).isTrue();
-        assertThat(AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation("FAMILY:ETH", "STETH")).isTrue();
-        assertThat(AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation("FAMILY:ETH", "RSETH")).isTrue();
-        assertThat(AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation("FAMILY:ETH", "WSTETH")).isTrue();
         assertThat(AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation("FAMILY:ETH", "AMANWETH")).isTrue();
-        // BBSOL stays excluded from FAMILY:ETH (it maps to FAMILY:SOL)
-        assertThat(AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation("FAMILY:ETH", "BBSOL")).isFalse();
+        assertThat(AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation("FAMILY:ETH", "CMETH")).isFalse();
+        assertThat(AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation("FAMILY:ETH", "WSTETH")).isFalse();
+        assertThat(AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation("FAMILY:METH", "CMETH")).isTrue();
         assertThat(AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation("FAMILY:BTC", "WBTC")).isTrue();
     }
 }

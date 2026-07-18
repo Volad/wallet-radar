@@ -1,6 +1,9 @@
 export type WalletId = string;
 export type NetworkId = string;
 
+/** Wallet domain from the backend WalletRef parser. */
+export type WalletDomain = 'EVM' | 'SOLANA' | 'TON' | 'CEX';
+
 export type TransactionType =
   | 'SWAP'
   | 'WRAP'
@@ -9,6 +12,7 @@ export type TransactionType =
   | 'EXTERNAL_INBOUND'
   | 'EXTERNAL_TRANSFER_IN'
   | 'EXTERNAL_TRANSFER_OUT'
+  | 'FIAT_EXIT'
   | 'LP_ENTRY'
   | 'LP_ENTRY_REQUEST'
   | 'LP_ENTRY_SETTLEMENT'
@@ -28,6 +32,7 @@ export type TransactionType =
   | 'LENDING_LOOP_REBALANCE'
   | 'LENDING_LOOP_DECREASE'
   | 'LENDING_LOOP_CLOSE'
+  | 'EARN_FLEXIBLE_SAVING'
   | 'BORROW'
   | 'REPAY'
   | 'VAULT_DEPOSIT'
@@ -43,6 +48,9 @@ export type TransactionType =
   | 'DERIVATIVE_POSITION_DECREASE'
   | 'PROTOCOL_CUSTODY_DEPOSIT'
   | 'PROTOCOL_CUSTODY_WITHDRAW'
+  | 'CEX_DERIVATIVE_SETTLEMENT'
+  | 'FEE'
+  | 'NFT_MINT'
   | 'REWARD_CLAIM'
   | 'STAKE_DEPOSIT'
   | 'STAKE_WITHDRAWAL'
@@ -69,6 +77,8 @@ export type PriceSource =
   | 'UNKNOWN'
   | 'BYBIT'
   | 'BINANCE'
+  | 'DZENGI'
+  | 'YAHOO_FINANCE'
   | 'ECB'
   | 'EXECUTION'
   | 'WRAPPER'
@@ -168,12 +178,26 @@ export interface TokenPosition {
   readonly unrealizedPnlPct: number;
   readonly unrealizedPnlUsd: number;
   readonly realizedPnlUsd: number;
+  /** ADR-062 break-even (effective-cost) per unit; null when no covered qty. */
+  readonly breakEvenUsd: number | null;
+  /** ADR-062: realized profit beyond remaining basis (>0 means already past break-even). */
+  readonly lockedSurplusUsd: number;
+  /** ADR-062: zero-basis income (yield/rewards/funding) booked to this family's cluster; informational. */
+  readonly incomeReceivedUsd: number;
+  /** ADR-062: parent family this family's realized P&L is credited to (e.g. FAMILY:ETH); null when self. */
+  readonly attributionTargetFamily: string | null;
   readonly networkId: NetworkId;
   readonly walletId: WalletId;
   readonly issue: IssueCode;
   readonly valuationModel: string | null;
   readonly valuationUnderlyingSymbol: string | null;
   readonly unsupportedValuationReason: string | null;
+  /** Wallet domain: EVM, SOLANA, TON, or CEX. */
+  readonly domain: WalletDomain | null;
+  /** CEX venue id (e.g. 'bybit', 'dzengi'); null for on-chain wallets. */
+  readonly venueId: string | null;
+  /** CEX sub-account kind (e.g. 'FUND', 'UTA', 'EARN'); null if not applicable. */
+  readonly subAccount: string | null;
 }
 
 export interface LpPosition {
@@ -284,6 +308,7 @@ export const TRANSACTION_TYPES: ReadonlyArray<TransactionType> = [
   'EXTERNAL_INBOUND',
   'EXTERNAL_TRANSFER_IN',
   'EXTERNAL_TRANSFER_OUT',
+  'FIAT_EXIT',
   'LP_ENTRY',
   'LP_ENTRY_REQUEST',
   'LP_ENTRY_SETTLEMENT',
@@ -303,6 +328,7 @@ export const TRANSACTION_TYPES: ReadonlyArray<TransactionType> = [
   'LENDING_LOOP_REBALANCE',
   'LENDING_LOOP_DECREASE',
   'LENDING_LOOP_CLOSE',
+  'EARN_FLEXIBLE_SAVING',
   'BORROW',
   'REPAY',
   'VAULT_DEPOSIT',
@@ -318,6 +344,9 @@ export const TRANSACTION_TYPES: ReadonlyArray<TransactionType> = [
   'DERIVATIVE_POSITION_DECREASE',
   'PROTOCOL_CUSTODY_DEPOSIT',
   'PROTOCOL_CUSTODY_WITHDRAW',
+  'CEX_DERIVATIVE_SETTLEMENT',
+  'FEE',
+  'NFT_MINT',
   'REWARD_CLAIM',
   'STAKE_DEPOSIT',
   'STAKE_WITHDRAWAL',
@@ -342,6 +371,8 @@ export const PRICE_SOURCES: ReadonlyArray<PriceSource> = [
   'MANUAL',
   'BYBIT',
   'BINANCE',
+  'DZENGI',
+  'YAHOO_FINANCE',
   'ECB',
   'EXECUTION',
   'WRAPPER',

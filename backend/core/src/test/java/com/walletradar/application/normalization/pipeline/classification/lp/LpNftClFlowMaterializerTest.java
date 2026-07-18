@@ -128,6 +128,124 @@ class LpNftClFlowMaterializerTest {
         assertThat(correlation).isEqualTo("gmx-lp:arbitrum:weth-usdc");
     }
 
+    // -------------------------------------------------------------------------
+    // BLOCKER-3: Balancer V3 LP_POSITION_STAKE / UNSTAKE / EXIT BPT canonicalization
+    // -------------------------------------------------------------------------
+
+    private static final String BPT_POOL = "0xfcec3c8d86329defb548202fe1b86ff2188603a8";
+    private static final String BALANCER_V3_RECEIPT = "LP-RECEIPT:AVALANCHE:BALANCERV3:" + BPT_POOL;
+    private static final String BALANCER_V3_CORR = "lp-position:avalanche:balancerv3:" + BPT_POOL;
+
+    @Test
+    void balancerV3StakeReplacesRawBptWithLpReceipt() {
+        List<RawLeg> legs = List.of(
+                RawLeg.asset(BPT_POOL, "Aave GHO/USDT/USDC", new BigDecimal("-2144.92")),
+                RawLeg.asset("0xgaugeaddr", "stBPT", new BigDecimal("2144.92"))
+        );
+        List<NormalizedTransaction.Flow> base = List.of(
+                flowWithContract(BPT_POOL, "Aave GHO/USDT/USDC", "-2144.92", NormalizedLegRole.TRANSFER),
+                flowWithContract("0xgaugeaddr", "stBPT", "2144.92", NormalizedLegRole.TRANSFER)
+        );
+
+        List<NormalizedTransaction.Flow> enriched = LpNftClFlowMaterializer.enrich(
+                OnChainRawTransactionView.wrap(baseRaw(NetworkId.AVALANCHE)),
+                legs,
+                NormalizedTransactionType.LP_POSITION_STAKE,
+                BALANCER_V3_CORR,
+                base
+        );
+
+        // Raw BPT outbound should be gone; LP-RECEIPT outbound should be present
+        assertThat(enriched)
+                .noneMatch(f -> "Aave GHO/USDT/USDC".equals(f.getAssetSymbol()))
+                .anySatisfy(f -> {
+                    assertThat(f.getAssetSymbol()).isEqualTo(BALANCER_V3_RECEIPT);
+                    assertThat(f.getQuantityDelta()).isEqualByComparingTo("-2144.92");
+                    assertThat(f.getRole()).isEqualTo(NormalizedLegRole.TRANSFER);
+                });
+    }
+
+    @Test
+    void balancerV3UnstakeReplacesRawBptWithLpReceipt() {
+        List<NormalizedTransaction.Flow> base = List.of(
+                flowWithContract(BPT_POOL, "Aave GHO/USDT/USDC", "2144.92", NormalizedLegRole.TRANSFER),
+                flowWithContract("0xgaugeaddr", "stBPT", "-2144.92", NormalizedLegRole.TRANSFER)
+        );
+
+        List<NormalizedTransaction.Flow> enriched = LpNftClFlowMaterializer.enrich(
+                OnChainRawTransactionView.wrap(baseRaw(NetworkId.AVALANCHE)),
+                List.of(),
+                NormalizedTransactionType.LP_POSITION_UNSTAKE,
+                BALANCER_V3_CORR,
+                base
+        );
+
+        assertThat(enriched)
+                .noneMatch(f -> "Aave GHO/USDT/USDC".equals(f.getAssetSymbol()))
+                .anySatisfy(f -> {
+                    assertThat(f.getAssetSymbol()).isEqualTo(BALANCER_V3_RECEIPT);
+                    assertThat(f.getQuantityDelta()).isEqualByComparingTo("2144.92");
+                });
+    }
+
+    @Test
+    void balancerV3ExitRemovesDuplicateRawBptBurn() {
+        // Base flows as produced before fix: raw BPT burn AND LP-RECEIPT burn
+        List<NormalizedTransaction.Flow> base = List.of(
+                flow("USDC", "1000", NormalizedLegRole.TRANSFER),
+                flow("GHO", "500", NormalizedLegRole.TRANSFER),
+                flowWithContract(BPT_POOL, "Aave GHO/USDT/USDC", "-2102.02", NormalizedLegRole.TRANSFER)
+        );
+        List<RawLeg> legs = List.of(
+                RawLeg.asset("0xusdcaddr", "USDC", new BigDecimal("1000")),
+                RawLeg.asset("0xghoaddr", "GHO", new BigDecimal("500")),
+                RawLeg.asset(BPT_POOL, "Aave GHO/USDT/USDC", new BigDecimal("-2102.02"))
+        );
+
+        List<NormalizedTransaction.Flow> enriched = LpNftClFlowMaterializer.enrich(
+                OnChainRawTransactionView.wrap(baseRaw(NetworkId.AVALANCHE)),
+                legs,
+                NormalizedTransactionType.LP_EXIT,
+                BALANCER_V3_CORR,
+                base
+        );
+
+        // Raw BPT burn should be gone; LP-RECEIPT burn should be present; principal legs preserved
+        assertThat(enriched)
+                .noneMatch(f -> "Aave GHO/USDT/USDC".equals(f.getAssetSymbol()))
+                .anySatisfy(f -> {
+                    assertThat(f.getAssetSymbol()).isEqualTo(BALANCER_V3_RECEIPT);
+                    assertThat(f.getQuantityDelta()).isEqualByComparingTo("-2102.02");
+                })
+                .anySatisfy(f -> assertThat(f.getAssetSymbol()).isEqualTo("USDC"))
+                .anySatisfy(f -> assertThat(f.getAssetSymbol()).isEqualTo("GHO"));
+    }
+
+    @Test
+    void nonBalancerStakePassesThroughUnchanged() {
+        // LP_POSITION_STAKE for a non-Balancer V3 correlation should return base flows unchanged
+        String nonBalancerCorr = "lp-position:avalanche:some-nfpm:12345";
+        List<NormalizedTransaction.Flow> base = List.of(
+                flow("TOKEN", "100", NormalizedLegRole.TRANSFER)
+        );
+        List<NormalizedTransaction.Flow> enriched = LpNftClFlowMaterializer.enrich(
+                OnChainRawTransactionView.wrap(baseRaw(NetworkId.AVALANCHE)),
+                List.of(),
+                NormalizedTransactionType.LP_POSITION_STAKE,
+                nonBalancerCorr,
+                base
+        );
+        assertThat(enriched).isEqualTo(base);
+    }
+
+    private static NormalizedTransaction.Flow flowWithContract(
+            String contract, String symbol, String qty, NormalizedLegRole role
+    ) {
+        NormalizedTransaction.Flow f = flow(symbol, qty, role);
+        f.setAssetContract(contract);
+        return f;
+    }
+
     private static NormalizedTransaction.Flow flow(String symbol, String qty, NormalizedLegRole role) {
         NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
         flow.setAssetSymbol(symbol);

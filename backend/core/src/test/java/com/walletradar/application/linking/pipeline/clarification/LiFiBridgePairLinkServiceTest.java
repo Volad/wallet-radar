@@ -978,6 +978,159 @@ class LiFiBridgePairLinkServiceTest {
         assertThat(destination.getContinuityCandidate()).isTrue();
     }
 
+    @Test
+    @DisplayName("NEW-08: Katana USDC BRIDGE_OUT pairs cross-asset with ETH BRIDGE_IN via LiFi GAS_PAYER settlement evidence")
+    void crossAssetKatanaUsdcBridgeOutPairsWithEthBridgeInViaLiFiGasPayer() {
+        String sourceTxHash = "0xda7d556e0000111122223333444455556666777788889999aaaabbbbccccdd558de7";
+        String destinationTxHash = "0xc0aaf96b0000111122223333444455556666777788889999aaaabbbbccccddd5712c";
+        String liFiRelayer = "0x8c826f795466e39acbff1bb4eeeb759609377ba1";
+
+        RawTransaction sourceRaw = sourceRawTransaction(sourceTxHash, NetworkId.UNICHAIN);
+        NormalizedTransaction source = bridgeOut(
+                sourceTxHash,
+                NetworkId.UNICHAIN,
+                "USDC",
+                "0x078d782b760474a361dda0af3839290b0ef57ad6",
+                "-2050.040045"
+        );
+        source.getFlows().getFirst().setValueUsd(new BigDecimal("2050.040045"));
+        source.setBlockTimestamp(Instant.parse("2026-01-15T10:00:00Z"));
+
+        RawTransaction destinationRaw = relayPayoutRawTransaction(
+                destinationTxHash,
+                NetworkId.KATANA,
+                liFiRelayer,
+                "452894000000000000"
+        );
+        NormalizedTransaction destination = externalTransferIn(
+                destinationTxHash,
+                NetworkId.KATANA,
+                "ETH",
+                null,
+                "0.452894"
+        );
+        destination.getFlows().getFirst().setValueUsd(new BigDecimal("2135.70"));
+        destination.setBlockTimestamp(Instant.parse("2026-01-15T10:00:02Z"));
+
+        lenient().when(liFiStatusGateway.fetchBridgeStatus(source.getTxHash())).thenReturn(Optional.empty());
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(List.of(destination));
+        when(rawTransactionRepository.findById(destination.getId())).thenReturn(Optional.of(destinationRaw));
+        when(protocolRegistryService.lookup(NetworkId.KATANA, liFiRelayer))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        liFiRelayer,
+                        Set.of(NetworkId.KATANA, NetworkId.UNICHAIN),
+                        ProtocolRegistryFamily.AGGREGATOR,
+                        ProtocolRegistryRole.GAS_PAYER,
+                        null,
+                        ConfidenceLevel.HIGH,
+                        "LiFi",
+                        "Relayer",
+                        false,
+                        null
+                )));
+
+        service.link(sourceRaw, source);
+
+        ArgumentCaptor<List<NormalizedTransaction>> updatesCaptor = ArgumentCaptor.forClass(List.class);
+        verify(normalizedTransactionRepository).saveAll(updatesCaptor.capture());
+        assertThat(updatesCaptor.getValue()).extracting(NormalizedTransaction::getTxHash)
+                .containsExactlyInAnyOrder(source.getTxHash(), destination.getTxHash());
+
+        // Source BRIDGE_OUT: keeps counterparty on both legs, cc=false, principal drained as TRANSFER.
+        assertThat(source.getMatchedCounterparty()).isEqualTo(destination.getTxHash());
+        assertThat(source.getCorrelationId()).isEqualTo("bridge:lifi:" + sourceTxHash);
+        assertThat(source.getContinuityCandidate()).isFalse();
+        assertThat(source.getFlows())
+                .extracting(NormalizedTransaction.Flow::getRole)
+                .containsExactly(NormalizedLegRole.TRANSFER);
+
+        // Destination promoted to BRIDGE_IN with the same correlation, cc=false, ETH leg TRANSFER.
+        assertThat(destination.getType()).isEqualTo(NormalizedTransactionType.BRIDGE_IN);
+        assertThat(destination.getMatchedCounterparty()).isEqualTo(sourceTxHash);
+        assertThat(destination.getCorrelationId()).isEqualTo("bridge:lifi:" + sourceTxHash);
+        assertThat(destination.getContinuityCandidate()).isFalse();
+        assertThat(destination.getProtocolName()).isEqualTo("LiFi");
+        assertThat(destination.getFlows())
+                .extracting(NormalizedTransaction.Flow::getRole)
+                .containsExactly(NormalizedLegRole.TRANSFER);
+    }
+
+    @Test
+    @DisplayName("NEW-08 guardrail: cross-asset inbound from an unregistered EOA is never promoted to a bridge")
+    void crossAssetInboundFromUnregisteredEoaIsNotPaired() {
+        String sourceTxHash = "0xda7d556e0000111122223333444455556666777788889999aaaabbbbccccdd558de7";
+        String destinationTxHash = "0xc0aaf96b0000111122223333444455556666777788889999aaaabbbbccccddd5712c";
+        String unregisteredEoa = "0x1111111111111111111111111111111111111111";
+
+        RawTransaction sourceRaw = sourceRawTransaction(sourceTxHash, NetworkId.UNICHAIN);
+        NormalizedTransaction source = bridgeOut(
+                sourceTxHash, NetworkId.UNICHAIN, "USDC", "0x078d782b760474a361dda0af3839290b0ef57ad6", "-2050.040045");
+        source.getFlows().getFirst().setValueUsd(new BigDecimal("2050.040045"));
+        source.setBlockTimestamp(Instant.parse("2026-01-15T10:00:00Z"));
+
+        RawTransaction destinationRaw = relayPayoutRawTransaction(
+                destinationTxHash, NetworkId.KATANA, unregisteredEoa, "452894000000000000");
+        NormalizedTransaction destination = externalTransferIn(
+                destinationTxHash, NetworkId.KATANA, "ETH", null, "0.452894");
+        destination.getFlows().getFirst().setValueUsd(new BigDecimal("2135.70"));
+        destination.setBlockTimestamp(Instant.parse("2026-01-15T10:00:02Z"));
+
+        lenient().when(liFiStatusGateway.fetchBridgeStatus(source.getTxHash())).thenReturn(Optional.empty());
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(List.of(destination));
+        lenient().when(rawTransactionRepository.findById(destination.getId())).thenReturn(Optional.of(destinationRaw));
+        // Unregistered EOA → protocolRegistryService.lookup returns empty (default) → no trusted evidence.
+
+        service.link(sourceRaw, source);
+
+        verify(normalizedTransactionRepository, never()).saveAll(any());
+        assertThat(source.getMatchedCounterparty()).isNull();
+        assertThat(destination.getType()).isEqualTo(NormalizedTransactionType.EXTERNAL_TRANSFER_IN);
+    }
+
+    @Test
+    @DisplayName("NEW-08 guardrail: dust cross-asset inbound against a $2,050 source fails USD-value proximity")
+    void crossAssetDustInboundFailsUsdValueProximity() {
+        String sourceTxHash = "0xda7d556e0000111122223333444455556666777788889999aaaabbbbccccdd558de7";
+        String destinationTxHash = "0xc0aaf96b0000111122223333444455556666777788889999aaaabbbbccccddd5712c";
+        String liFiRelayer = "0x8c826f795466e39acbff1bb4eeeb759609377ba1";
+
+        RawTransaction sourceRaw = sourceRawTransaction(sourceTxHash, NetworkId.UNICHAIN);
+        NormalizedTransaction source = bridgeOut(
+                sourceTxHash, NetworkId.UNICHAIN, "USDC", "0x078d782b760474a361dda0af3839290b0ef57ad6", "-2050.040045");
+        source.getFlows().getFirst().setValueUsd(new BigDecimal("2050.040045"));
+        source.setBlockTimestamp(Instant.parse("2026-01-15T10:00:00Z"));
+
+        RawTransaction destinationRaw = relayPayoutRawTransaction(
+                destinationTxHash, NetworkId.KATANA, liFiRelayer, "200000000000");
+        NormalizedTransaction destination = externalTransferIn(
+                destinationTxHash, NetworkId.KATANA, "ETH", null, "0.0000002");
+        destination.getFlows().getFirst().setValueUsd(new BigDecimal("0.001"));
+        destination.setBlockTimestamp(Instant.parse("2026-01-15T10:00:02Z"));
+
+        lenient().when(liFiStatusGateway.fetchBridgeStatus(source.getTxHash())).thenReturn(Optional.empty());
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(List.of(destination));
+        lenient().when(rawTransactionRepository.findById(destination.getId())).thenReturn(Optional.of(destinationRaw));
+        lenient().when(protocolRegistryService.lookup(NetworkId.KATANA, liFiRelayer))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        liFiRelayer,
+                        Set.of(NetworkId.KATANA),
+                        ProtocolRegistryFamily.AGGREGATOR,
+                        ProtocolRegistryRole.GAS_PAYER,
+                        null,
+                        ConfidenceLevel.HIGH,
+                        "LiFi",
+                        "Relayer",
+                        false,
+                        null
+                )));
+
+        service.link(sourceRaw, source);
+
+        verify(normalizedTransactionRepository, never()).saveAll(any());
+        assertThat(source.getMatchedCounterparty()).isNull();
+        assertThat(destination.getType()).isEqualTo(NormalizedTransactionType.EXTERNAL_TRANSFER_IN);
+    }
+
     private RawTransaction sourceRawTransaction(String txHash, NetworkId networkId) {
         RawTransaction rawTransaction = new RawTransaction();
         rawTransaction.setId(txHash + ":" + networkId + ":" + WALLET);
@@ -1151,12 +1304,13 @@ class LiFiBridgePairLinkServiceTest {
     }
 
     @Test
-    @DisplayName("cross-asset LI.FI swap: BRIDGE_OUT source must NOT receive matchedCounterparty when continuityCandidate=false")
-    void crossAssetLiFiSwapBridgeOutSourceMustNotReceiveMatchedCounterparty() {
-        // ETH (ARBITRUM) → WBTC (OPTIMISM): different asset families → cc=false.
-        // A stale matchedCounterparty on the BRIDGE_OUT would route its CARRY_OUT through
-        // bridgeSettlementKey() ("bridge-settlement:") while the BRIDGE_IN drains only "bridge:"
-        // keys — they never match, leaving the CARRY_OUT orphaned (~$968 guard breach).
+    @DisplayName("NEW-08: same-wallet 1:1 cross-asset LI.FI swap shapes the asset-changing settlement carry (matchedCounterparty on both legs, both TRANSFER)")
+    void crossAssetLiFiSwapSameWalletShapesSettlementCarry() {
+        // ETH (ARBITRUM) → WBTC (OPTIMISM), same wallet: different asset families → cc=false.
+        // NEW-08 Layer C: the primary simple 1:1 pair is shaped into the existing asset-changing
+        // bridge-settlement carry. matchedCounterparty is kept on BOTH legs so bridgeSettlementKey()
+        // emits "bridge-settlement:<corrId>" on both, and both principal legs are TRANSFER so the
+        // source basis drains (REALLOCATE_OUT) into the destination (REALLOCATE_IN).
         String sourceTxHash = "0xaaaaabbbbbcccccdddddeeeeefffffaaaaa00001111122222333334444455555666";
         String destinationTxHash = "0x7777788888999990000011111222223333344444555556666677777888889999900";
 
@@ -1182,14 +1336,21 @@ class LiFiBridgePairLinkServiceTest {
 
         service.link(sourceRaw, source);
 
-        // BRIDGE_OUT must have null matchedCounterparty so CARRY_OUT uses bridgeTransferKey().
-        assertThat(source.getMatchedCounterparty()).isNull();
+        // Both legs carry the correlation + counterparty so bridge-settlement fires on both.
+        assertThat(source.getMatchedCounterparty()).isEqualTo(destinationTxHash);
         assertThat(source.getContinuityCandidate()).isFalse();
         assertThat(source.getCorrelationId()).isEqualTo("bridge:lifi:" + sourceTxHash);
+        assertThat(source.getFlows())
+                .extracting(NormalizedTransaction.Flow::getRole)
+                .containsExactly(NormalizedLegRole.TRANSFER);
 
-        // BRIDGE_IN may retain counterparty for UI display — unaffected by the guard.
         assertThat(destination.getMatchedCounterparty()).isEqualTo(sourceTxHash);
+        assertThat(destination.getCorrelationId()).isEqualTo("bridge:lifi:" + sourceTxHash);
+        assertThat(destination.getContinuityCandidate()).isFalse();
         assertThat(destination.getType()).isEqualTo(NormalizedTransactionType.BRIDGE_IN);
+        assertThat(destination.getFlows())
+                .extracting(NormalizedTransaction.Flow::getRole)
+                .containsExactly(NormalizedLegRole.TRANSFER);
     }
 
     // ──────────────────── T-03: multi-flow BRIDGE_IN role alignment ────────────────────────────

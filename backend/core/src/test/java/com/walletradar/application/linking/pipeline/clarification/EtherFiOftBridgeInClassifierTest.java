@@ -7,6 +7,9 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionReposi
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.transaction.raw.RawTransaction;
+import com.walletradar.application.normalization.pipeline.classification.onchain.protocol.ProtocolResourceCatalog;
+import com.walletradar.application.normalization.pipeline.classification.onchain.protocol.ProtocolResourceLoader;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -40,8 +43,28 @@ class EtherFiOftBridgeInClassifierTest {
 
     @BeforeEach
     void setUp() {
-        classifier = new EtherFiOftBridgeInClassifier(mongoOperations, normalizedTransactionRepository);
+        ProtocolResourceCatalog catalog = new ProtocolResourceLoader(new ObjectMapper());
+        classifier = new EtherFiOftBridgeInClassifier(
+                mongoOperations, normalizedTransactionRepository, catalog);
         lenient().when(normalizedTransactionRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
+    }
+
+    @Test
+    @DisplayName("golden set: config carries exactly the 8 weETH OFT tokens + 1 minter proxy")
+    void configGoldenSet() {
+        ProtocolResourceCatalog catalog = new ProtocolResourceLoader(new ObjectMapper());
+        var definition = catalog.find("EtherFi", null).orElseThrow();
+        assertThat(definition.contractSet("weethOftTokens")).containsExactlyInAnyOrder(
+                "0x1bf74c010e6320bab11e2e5a532b5ac15e0b8aa6",
+                "0x04c0599ae5a44757c0af6f9ec3b93da8976c150a",
+                "0x01f0a31698c4d065659b9bdc21b3610292a1c506",
+                "0x5a7facb970d094b6c7ff1df0ea68d99e6e73cbff",
+                "0xc1fa6e2e8667d9be0ca938a54c7e0285e9df924a",
+                "0xa3d68b74bf0528fdd07263c60d6488749044914b",
+                "0x7dcc39b4d1c53cb31e1abc0e358b43987fef80f7",
+                "0xa6cb988942610f6731e664379d15ffcfbf282b44");
+        assertThat(definition.contractSet("minterProxies")).containsExactlyInAnyOrder(
+                "0xeeeeee9ec4769a09a76a83c7bc42b185872860ee");
     }
 
     @Test

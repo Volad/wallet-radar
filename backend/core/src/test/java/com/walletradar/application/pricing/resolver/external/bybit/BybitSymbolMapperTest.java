@@ -26,7 +26,9 @@ class BybitSymbolMapperTest {
     }
 
     @Test
-    void wrappedStakedEthFallsBackToStEthAndEthMarkets() {
+    void wrappedStakedEthMapsToItsOwnSpotPairsOnly() {
+        // ADR-054 §6 / plan §7c: wstETH resolves its OWN market price; the STETH/ETH exchange
+        // fallback was removed so only WSTETH spot pairs are produced.
         BybitSymbolMapper mapper = new BybitSymbolMapper(new ExternalPriceMappingService());
 
         assertThat(mapper.candidateSymbols(new PriceRequest(
@@ -38,11 +40,7 @@ class BybitSymbolMapperTest {
                 Instant.parse("2026-04-22T10:00:00Z")
         ))).containsExactly(
                 "WSTETHUSDT",
-                "WSTETHUSDC",
-                "STETHUSDT",
-                "STETHUSDC",
-                "ETHUSDT",
-                "ETHUSDC"
+                "WSTETHUSDC"
         );
     }
 

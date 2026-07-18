@@ -126,7 +126,7 @@
             }
 
             <!-- Update credentials form -->
-            <form class="integration-form" [formGroup]="bybitForm">
+            <form class="integration-form" [formGroup]="integrationForm">
               <label class="editor-field-block">
                 <span class="field-label">Integration name</span>
                 <input class="ifield" type="text" formControlName="displayName" maxlength="80" />
@@ -157,13 +157,22 @@
               <div>Use <strong>Read-Only</strong> keys only. Never enable trading or withdrawal permissions.</div>
             </div>
 
+            @if (testConnectionMessage) {
+              <div class="integration-test-message" [class.is-error]="testConnectionMessage.toLowerCase().includes('fail')">
+                {{ testConnectionMessage }}
+              </div>
+            }
+
             <div class="editor-actions">
-              <button type="button" class="danger-btn" [disabled]="saving" (click)="requestDisconnect(integration.integrationId)">
+              <button type="button" class="danger-btn" [disabled]="saving || testingConnection" (click)="requestDisconnect(integration.integrationId)">
                 Disconnect
               </button>
               <div class="editor-actions-spacer"></div>
-              <button type="button" class="secondary-btn" [disabled]="saving" (click)="toggleExpanded(integration.integrationId)">Cancel</button>
-              <button type="button" class="primary-btn" [disabled]="saving" (click)="save.emit()">
+              <button type="button" class="secondary-btn" [disabled]="saving || testingConnection" (click)="toggleExpanded(integration.integrationId)">Cancel</button>
+              <button type="button" class="secondary-btn" [disabled]="saving || testingConnection" (click)="emitTestConnection(integration.provider)">
+                {{ testingConnection ? 'Testing…' : 'Test connection' }}
+              </button>
+              <button type="button" class="primary-btn" [disabled]="saving || testingConnection" (click)="emitSave(integration.provider)">
                 {{ saving ? 'Saving…' : 'Update' }}
               </button>
             </div>
@@ -202,37 +211,42 @@
         }
       </div>
 
-      @if (selectedProvider() === 'BYBIT') {
-        @if (!compact) {
+      @if (isProviderEnabled(selectedProvider() ?? '')) {
+        @let providerConfig = providerMeta(selectedProvider());
+
+        @if (!compact && providerConfig && providerConfig.instructions.length > 0) {
           <div class="instruction-card">
             <div class="instruction-head">How to get API credentials</div>
             <div class="instruction-steps">
-              @for (step of [
-                'Log in to Bybit and open Account → API Management.',
-                'Create a new API key with read-only permissions.',
-                'Copy API key and secret. The secret is shown only once.',
-                'Paste both values below and save.'
-              ]; track step; let index = $index) {
+              @for (step of providerConfig.instructions; track step; let index = $index) {
                 <div class="instruction-step">
                   <span class="instruction-step-index">{{ index + 1 }}</span>
                   <span class="instruction-step-copy">{{ step }}</span>
                 </div>
               }
             </div>
-            <a class="instruction-link" href="https://www.bybit.com/app/user/api-management" target="_blank" rel="noreferrer">
-              Open Bybit API Management
-            </a>
+            @if (providerConfig.apiManagementUrl) {
+              <a class="instruction-link" [href]="providerConfig.apiManagementUrl" target="_blank" rel="noreferrer">
+                {{ providerConfig.apiManagementLabel ?? 'Open API management' }}
+              </a>
+            }
           </div>
         }
 
-        <form class="integration-form" [formGroup]="bybitForm">
+        <form class="integration-form" [formGroup]="integrationForm">
           <label class="editor-field-block">
             <span class="field-label">Integration name</span>
             <input class="ifield" type="text" formControlName="displayName" maxlength="80" />
           </label>
           <label class="editor-field-block">
             <span class="field-label">API key <span class="field-label-required" aria-hidden="true">*</span></span>
-            <input class="ifield" type="text" formControlName="apiKey" autocomplete="off" spellcheck="false" placeholder="Enter your Bybit API key" />
+            <input
+              class="ifield"
+              type="text"
+              formControlName="apiKey"
+              autocomplete="off"
+              spellcheck="false"
+              [placeholder]="'Enter your ' + (providerConfig?.label ?? 'exchange') + ' API key'" />
           </label>
           <label class="editor-field-block">
             <span class="field-label">API secret <span class="field-label-required" aria-hidden="true">*</span></span>
@@ -243,7 +257,7 @@
                 formControlName="apiSecret"
                 autocomplete="new-password"
                 spellcheck="false"
-                placeholder="Enter your Bybit API secret" />
+                [placeholder]="'Enter your ' + (providerConfig?.label ?? 'exchange') + ' API secret'" />
               <button type="button" class="field-toggle-btn" (click)="toggleSecret.emit()">
                 {{ showSecret ? 'Hide' : 'Show' }}
               </button>
@@ -256,10 +270,19 @@
           <div>Use <strong>Read-Only</strong> keys only. Never enable trading or withdrawal permissions.</div>
         </div>
 
+        @if (testConnectionMessage) {
+          <div class="integration-test-message" [class.is-error]="testConnectionMessage.toLowerCase().includes('fail')">
+            {{ testConnectionMessage }}
+          </div>
+        }
+
         <div class="editor-actions">
           <div class="editor-actions-spacer"></div>
-          <button type="button" class="secondary-btn" [disabled]="saving" (click)="closeConnectForm()">Cancel</button>
-          <button type="button" class="primary-btn" [disabled]="saving" (click)="save.emit()">
+          <button type="button" class="secondary-btn" [disabled]="saving || testingConnection" (click)="closeConnectForm()">Cancel</button>
+          <button type="button" class="secondary-btn" [disabled]="saving || testingConnection" (click)="emitTestConnection(selectedProvider())">
+            {{ testingConnection ? 'Testing…' : 'Test connection' }}
+          </button>
+          <button type="button" class="primary-btn" [disabled]="saving || testingConnection" (click)="emitSave(selectedProvider())">
             {{ saving ? 'Saving…' : 'Connect' }}
           </button>
         </div>

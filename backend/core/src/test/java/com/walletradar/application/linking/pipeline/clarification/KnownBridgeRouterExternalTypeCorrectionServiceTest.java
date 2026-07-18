@@ -5,6 +5,8 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.testsupport.CounterpartyHintTestFixtures;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -30,6 +32,11 @@ class KnownBridgeRouterExternalTypeCorrectionServiceTest {
     private NormalizedTransactionRepository normalizedTransactionRepository;
 
     private KnownBridgeRouterExternalTypeCorrectionService service;
+
+    @BeforeAll
+    static void bindCounterpartyHints() {
+        CounterpartyHintTestFixtures.service();
+    }
 
     @BeforeEach
     void setUp() {

@@ -46,11 +46,20 @@ public enum NormalizedTransactionType {
     REWARD_CLAIM,
     EXTERNAL_TRANSFER_OUT,
     EXTERNAL_TRANSFER_IN,
+    /**
+     * Fiat withdrawal to a real-world bank/card account — a sub-type of EXTERNAL_TRANSFER_OUT
+     * that signals money leaving the investment ecosystem (e.g. Dzengi BYN/USD withdrawal
+     * via MASTERCARD, BANK, ERIP). Used for P&amp;L and exit-flow reporting without changing
+     * accounting treatment (NEC outflow, same as EXTERNAL_TRANSFER_OUT).
+     */
+    FIAT_EXIT,
     SPONSORED_GAS_IN,
     INTERNAL_TRANSFER,
     APPROVE,
     /** Standalone fee or interest charge (e.g. Bybit loan interest, bonus recollect). */
     FEE,
+    /** CEX leverage/CFD position settlement — cash P&L only, no underlying custody (Dzengi). */
+    CEX_DERIVATIVE_SETTLEMENT,
     ADMIN_CONFIG,
     WRAP,
     UNWRAP,

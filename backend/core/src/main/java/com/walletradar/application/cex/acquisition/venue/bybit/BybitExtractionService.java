@@ -42,6 +42,23 @@ public class BybitExtractionService {
      * tight enough that no two distinct {@code (asset, qty)} corridor events collide.
      */
     private static final Duration FH_CHAIN_TIME_WINDOW = Duration.ofSeconds(120);
+    /**
+     * BLOCKER-6 defense-in-depth (ADR-055): a single physical loan event must never be promoted from
+     * the Funding-History stream when the authoritative UTA {@code TRANSACTION_LOG} stream already
+     * carries the same {@code LOANS_BORROW_FUNDS}/{@code LOANS_REPAY_FUNDS} row for the same
+     * {@code (uid, asset)}. Both streams emit that duplicate within seconds/minutes, so a 30-minute
+     * window comfortably detects a same-event duplicate while never crossing distinct loan cycles
+     * (the in-scope FH `Crypto Loans` cycles are months apart from any UTA TX_LOG loan). Today the two
+     * streams are disjoint by product/time, so this guard is belt-and-braces, not the primary path.
+     */
+    private static final Duration LOAN_TXLOG_COVERAGE_WINDOW = Duration.ofMinutes(30);
+    private static final String BYBIT_CRYPTO_LOANS_TYPE = "Crypto Loans";
+    private static final String LOANS_PRODUCT_TYPE = "Loans";
+    private static final String CANONICAL_BORROW = "BORROW";
+    private static final String CANONICAL_REPAY = "REPAY";
+    private static final String CANONICAL_FEE = "FEE";
+    private static final String TXLOG_LOANS_BORROW = "LOANS_BORROW_FUNDS";
+    private static final String TXLOG_LOANS_REPAY = "LOANS_REPAY_FUNDS";
     private static final String BYBIT_PREFIX = "BYBIT:";
     /**
      * Cycle/5 N12: Bybit's `/v5/asset/transfer/query-inter-transfer-list` emits a synthetic row with this
@@ -457,11 +474,12 @@ public class BybitExtractionService {
         // for every external crypto deposit (USDT 13 307 silently destroyed; quantityShortfallAfter
         // accumulated 14 106 on FUND; realized PnL stuck at ≈ 0 while user lost > $10 k).
         String canonical = event.getCanonicalType();
-        boolean fhLoanShadow = ("Crypto Loans".equalsIgnoreCase(event.getBybitType())
-                || "Loans".equalsIgnoreCase(event.getBybitType()))
-                && ("BORROW".equals(canonical) || "REPAY".equals(canonical) || "FEE".equals(canonical));
-        if (fhLoanShadow) {
-            basisRelevant = false;
+        if (isFundingHistoryLoanEvent(event.getBybitType(), canonical)) {
+            // BLOCKER-6 / ADR-055: FH `Crypto Loans` BORROW/REPAY are the authoritative loan lifecycle
+            // events when no UTA TRANSACTION_LOG `LOANS_*` row covers the same (uid, asset) window.
+            // The `Loans` product rows and all loan FEE rows still shadow the authoritative UTA
+            // TRANSACTION_LOG `LOANS_*` stream and stay demoted.
+            basisRelevant = isAuthoritativeFundingHistoryCryptoLoan(event);
         }
         // Cycle/5 N5: FH "Transfer in" duplicates INTERNAL_TRANSFER receiver; "Transfer out" is FUND sender leg.
         if ("INTERNAL_TRANSFER".equals(canonical) && "Transfer in".equalsIgnoreCase(event.getBybitType())) {
@@ -486,6 +504,91 @@ public class BybitExtractionService {
             hydrateFundingHistoryWithdrawFromOnChain(rawEvent, event);
         }
         return event;
+    }
+
+    /**
+     * BLOCKER-6: identifies a Funding-History row whose {@code (bybitType, canonicalType)} places it on
+     * the loan lifecycle path (Crypto Loans / Loans BORROW / REPAY / FEE). These rows are the ones the
+     * source-authority rule ({@link #isAuthoritativeFundingHistoryCryptoLoan(BybitExtractedEvent)})
+     * arbitrates between promotion and TX_LOG-shadow demotion.
+     */
+    private boolean isFundingHistoryLoanEvent(String bybitType, String canonicalType) {
+        boolean loanProduct = BYBIT_CRYPTO_LOANS_TYPE.equalsIgnoreCase(bybitType)
+                || LOANS_PRODUCT_TYPE.equalsIgnoreCase(bybitType);
+        return loanProduct
+                && (CANONICAL_BORROW.equals(canonicalType)
+                || CANONICAL_REPAY.equals(canonicalType)
+                || CANONICAL_FEE.equals(canonicalType));
+    }
+
+    /**
+     * BLOCKER-6 / ADR-055 source-authority rule. A Funding-History loan row is basis-relevant (promoted
+     * to normalization) ONLY when ALL of the following hold:
+     * <ul>
+     *   <li>{@code bybitType} is exactly {@code "Crypto Loans"} — the {@code "Loans"} product rows and
+     *       all loan {@code FEE} rows shadow the authoritative UTA {@code TRANSACTION_LOG} {@code LOANS_*}
+     *       stream and stay demoted;</li>
+     *   <li>{@code canonicalType} is {@code BORROW} or {@code REPAY} (loan principal lifecycle);</li>
+     *   <li>the signed quantity is directionally consistent — a {@code BORROW} must be a positive
+     *       inventory inflow and a {@code REPAY} must be a negative outflow. A negative "borrow" is a
+     *       collateral lock / pledge OUTFLOW (e.g. the USDT {@code "Loans / Pledge Assets"} −523 event)
+     *       and must never create a phantom BORROW inflow;</li>
+     *   <li>no UTA {@code TRANSACTION_LOG} {@code LOANS_*} row covers the same {@code (uid, asset)}
+     *       window (defense-in-depth against double-counting a loan represented on both streams).</li>
+     * </ul>
+     */
+    private boolean isAuthoritativeFundingHistoryCryptoLoan(BybitExtractedEvent event) {
+        if (!BYBIT_CRYPTO_LOANS_TYPE.equalsIgnoreCase(event.getBybitType())) {
+            return false;
+        }
+        String canonical = event.getCanonicalType();
+        if (!CANONICAL_BORROW.equals(canonical) && !CANONICAL_REPAY.equals(canonical)) {
+            return false;
+        }
+        BigDecimal quantity = event.getQuantityRaw();
+        if (quantity == null || quantity.signum() == 0) {
+            return false;
+        }
+        if (CANONICAL_BORROW.equals(canonical) && quantity.signum() < 0) {
+            return false;
+        }
+        if (CANONICAL_REPAY.equals(canonical) && quantity.signum() > 0) {
+            return false;
+        }
+        return !hasOverlappingTransactionLogLoanCoverage(event);
+    }
+
+    /**
+     * BLOCKER-6 defense-in-depth: {@code true} when the authoritative UTA {@code TRANSACTION_LOG}
+     * carries a {@code LOANS_BORROW_FUNDS}/{@code LOANS_REPAY_FUNDS} row for the same {@code (uid,
+     * asset)} within {@link #LOAN_TXLOG_COVERAGE_WINDOW} of this Funding-History loan event, meaning the
+     * loan is already modeled from the authoritative stream and promoting the FH row would double-count.
+     */
+    private boolean hasOverlappingTransactionLogLoanCoverage(BybitExtractedEvent event) {
+        if (mongoOperations == null) {
+            return false;
+        }
+        String integrationId = event.getIntegrationId();
+        String uid = event.getUid();
+        String asset = event.getAssetSymbol();
+        Instant center = event.getTimeUtc();
+        if (integrationId == null || uid == null || asset == null || center == null) {
+            return false;
+        }
+        String txLogType = CANONICAL_BORROW.equals(event.getCanonicalType())
+                ? TXLOG_LOANS_BORROW
+                : TXLOG_LOANS_REPAY;
+        Instant from = center.minus(LOAN_TXLOG_COVERAGE_WINDOW);
+        Instant to = center.plus(LOAN_TXLOG_COVERAGE_WINDOW);
+        Query query = Query.query(new Criteria().andOperator(
+                Criteria.where("integrationId").is(integrationId),
+                Criteria.where("uid").is(uid),
+                Criteria.where("sourceStream").is(BybitIntegrationStream.TRANSACTION_LOG.name()),
+                Criteria.where("assetSymbol").is(asset),
+                Criteria.where("bybitType").is(txLogType),
+                Criteria.where("timeUtc").gte(from).lte(to)
+        ));
+        return mongoOperations.exists(query, BybitExtractedEvent.class);
     }
 
     /**
@@ -828,7 +931,9 @@ public class BybitExtractionService {
     enum BybitSubAccount {
         UTA,
         FUND,
-        EARN
+        EARN,
+        /** ADR-058 A7: Bybit Trading-Bot compartment; collapses to the BYBIT:<uid> umbrella. */
+        BOT
     }
 
     private void hydrateTradeLeg(

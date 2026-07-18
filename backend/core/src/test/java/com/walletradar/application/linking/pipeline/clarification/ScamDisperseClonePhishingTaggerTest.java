@@ -81,7 +81,7 @@ class ScamDisperseClonePhishingTaggerTest {
     }
 
     @Test
-    @DisplayName("tagging stamps protocol, counterpartyType, and missingDataReasons")
+    @DisplayName("tagging stamps protocol, counterpartyType, missingDataReasons, and excludedFromAccounting")
     void taggingAppliesCorrectStamps() {
         NormalizedTransaction tx = externalTransferOut(
                 "0xcaf266b1",
@@ -96,19 +96,21 @@ class ScamDisperseClonePhishingTaggerTest {
         );
 
         Instant now = Instant.now();
-        // Simulate raw lookup by calling the direct method
-        boolean tagged = tagger.matchesScamSignature(raw);
-        assertThat(tagged).isTrue();
+        assertThat(tagger.matchesScamSignature(raw)).isTrue();
 
-        // Call the tag logic directly
-        tx.setProtocolName("DisperseClone:Scam");
-        tx.setCounterpartyType("SCAM");
-        tx.getMissingDataReasons().add("SUSPECTED_PHISHING_OUT");
+        // Stub mongoOperations so tagIfScamDisperse can resolve the raw transaction
+        lenient().when(mongoOperations.find(any(), org.mockito.ArgumentMatchers.eq(RawTransaction.class)))
+                .thenReturn(List.of(raw));
 
+        boolean changed = tagger.tagIfScamDisperse(tx, now);
+
+        assertThat(changed).isTrue();
         assertThat(tx.getProtocolName()).isEqualTo("DisperseClone:Scam");
         assertThat(tx.getCounterpartyType()).isEqualTo("SCAM");
         assertThat(tx.getMissingDataReasons()).contains("SUSPECTED_PHISHING_OUT");
         assertThat(tx.getType()).isEqualTo(NormalizedTransactionType.EXTERNAL_TRANSFER_OUT);
+        assertThat(tx.getExcludedFromAccounting()).isTrue();
+        assertThat(tx.getAccountingExclusionReason()).isEqualTo("SUSPECTED_PHISHING_OUT");
     }
 
     private static RawTransaction scamRaw(String contract, String methodId, String tokenSymbol) {

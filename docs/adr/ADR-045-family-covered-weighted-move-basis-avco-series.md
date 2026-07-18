@@ -1,6 +1,7 @@
 # ADR-045 — Family covered-weighted move-basis AVCO series (supersedes ADR-017 chart-source decision)
 
-**Status:** Accepted
+**Status:** Accepted (amended 2026-07-13 — C2 staked/value-accruing derivatives excluded from the ETH spot-family series, see ADR-054)
+**Amended by ADR-061:** RC-E3 adds a second, additive read-model line — the *blended total-exposure AVCO* — that re-includes ETH-origin basis parked in receipt corridors so the line does not spike when the liquid pool drains. This ADR-045 Method-B spot-family series is retained **byte-identical** (rendered as the "Liquid-pool AVCO" line). See [ADR-061](ADR-061-blended-total-exposure-avco-series.md).
 **Date:** 2026-07-02
 **Supersedes:** ADR-017 §Decision ("Family rollup numerators are never chart AVCO sources") and its
 per-`accountingAssetIdentity` `TimelineAvcoAuthority` selection for the primary move-basis chart line.
@@ -52,8 +53,12 @@ Rules:
    point per bucket. Read the stored `avcoAfterUsd`/`netAvcoAfterUsd` and `basisBackedQuantityAfter`;
    `coveredᵢ = min(basisBackedQuantityAfter, qtyAfter)`. Order by
    `(blockTimestamp, transactionIndex, replaySequence)`.
-2. **Spot-family filter unchanged** — reuse `AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation`
-   (LP-RECEIPT and non-ETH excluded; staked-ETH symbols included per ADR-017's amended table).
+2. **Spot-family filter** — reuse `AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation`
+   (LP-RECEIPT and non-ETH excluded). **Amendment 2026-07-13 (ADR-054):** C2 staked/value-accruing
+   derivatives (wstETH, cmETH, weETH, …) are **no longer** included in the ETH spot-family series — each
+   renders its own per-asset AVCO line; only C1 same-asset ETH (ETH/WETH/`A*WETH`/VBETH/bridged ETH) remains
+   in the `FAMILY:ETH` line. This supersedes ADR-017's staked-ETH inclusion table. Cross-chain unification of
+   a single C2 token is an L3 read-model aggregation, not a pool merge.
 3. **Undefined (ADR-031).** When `Σ coveredᵢ ≤ 0`, emit `avcoAfterUsd = null` — the line **breaks** (never
    plotted as $0). Re-acquisition starts a new segment.
 4. **`avcoKind` ∈ {`PRIMARY_FLOW`, `UNAVAILABLE`}** only. **Never** emit `FAMILY_ROLLUP` on the chart line

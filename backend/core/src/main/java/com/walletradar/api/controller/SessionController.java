@@ -13,6 +13,10 @@ import com.walletradar.api.dto.SessionTransactionsResponse;
 import com.walletradar.api.dto.SessionResponse;
 import com.walletradar.api.dto.UpsertBybitIntegrationRequest;
 import com.walletradar.api.dto.UpsertBybitIntegrationResponse;
+import com.walletradar.api.dto.UpsertDzengiIntegrationRequest;
+import com.walletradar.api.dto.UpsertDzengiIntegrationResponse;
+import com.walletradar.api.dto.TestIntegrationRequest;
+import com.walletradar.api.dto.TestIntegrationResponse;
 import com.walletradar.api.portfolio.SessionPortfolioBffMapper;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.application.session.application.SessionCommandService;
@@ -157,6 +161,64 @@ public class SessionController {
                     }
                     return new ApiBadRequestException("INVALID_REQUEST", exception.getMessage());
                 });
+    }
+
+    @PutMapping("/{sessionId}/integrations/dzengi")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public Mono<UpsertDzengiIntegrationResponse> upsertDzengiIntegration(
+            @PathVariable String sessionId,
+            @RequestBody @Valid UpsertDzengiIntegrationRequest request
+    ) {
+        String normalizedSessionId = normalizedSessionIdOrThrow(sessionId);
+        return Mono.fromCallable(() -> sessionIntegrationCommandService.upsertDzengi(
+                                normalizedSessionId,
+                                request.displayName(),
+                                request.apiKey(),
+                                request.apiSecret()
+                        )
+                        .map(result -> new UpsertDzengiIntegrationResponse(
+                                result.integrationId(),
+                                result.provider(),
+                                result.status(),
+                                result.displayName(),
+                                result.accountRef(),
+                                result.maskedKey(),
+                                result.message()
+                        ))
+                        .orElseThrow(() -> new ApiNotFoundException("SESSION_NOT_FOUND", "Session not found")))
+                .subscribeOn(Schedulers.boundedElastic())
+                .onErrorMap(IllegalArgumentException.class, exception -> {
+                    if ("Integration not found".equals(exception.getMessage())) {
+                        return new ApiNotFoundException("INTEGRATION_NOT_FOUND", exception.getMessage());
+                    }
+                    return new ApiBadRequestException("INVALID_REQUEST", exception.getMessage());
+                });
+    }
+
+    @PostMapping("/{sessionId}/integrations/test")
+    public Mono<TestIntegrationResponse> testIntegration(
+            @PathVariable String sessionId,
+            @RequestBody @Valid TestIntegrationRequest request
+    ) {
+        normalizedSessionIdOrThrow(sessionId);
+        return Mono.fromCallable(() -> sessionIntegrationCommandService.testIntegration(
+                                request.provider(),
+                                request.apiKey(),
+                                request.apiSecret()
+                        )
+                        .map(result -> new TestIntegrationResponse(
+                                result.provider(),
+                                result.userId(),
+                                result.readOnly(),
+                                result.message()
+                        ))
+                        .orElseThrow(() -> new ApiBadRequestException(
+                                "INVALID_REQUEST",
+                                "Integration test failed"
+                        )))
+                .subscribeOn(Schedulers.boundedElastic())
+                .onErrorMap(IllegalArgumentException.class,
+                        exception -> new ApiBadRequestException("INVALID_REQUEST", exception.getMessage()));
     }
 
     @DeleteMapping("/{sessionId}/integrations/{integrationId}")

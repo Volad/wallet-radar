@@ -51,7 +51,7 @@ public final class AssetLedgerSupport {
         }
         return switch (type) {
             case SWAP -> AssetLedgerPoint.LifecycleKind.SPOT;
-            case EXTERNAL_TRANSFER_IN, EXTERNAL_TRANSFER_OUT, SPONSORED_GAS_IN, INTERNAL_TRANSFER, APPROVE, ADMIN_CONFIG,
+            case EXTERNAL_TRANSFER_IN, EXTERNAL_TRANSFER_OUT, FIAT_EXIT, SPONSORED_GAS_IN, INTERNAL_TRANSFER, APPROVE, ADMIN_CONFIG,
                     NFT_MINT -> AssetLedgerPoint.LifecycleKind.TRANSFER;
             case BRIDGE_IN, BRIDGE_OUT -> AssetLedgerPoint.LifecycleKind.BRIDGE;
             case PROTOCOL_CUSTODY_DEPOSIT, PROTOCOL_CUSTODY_WITHDRAW -> AssetLedgerPoint.LifecycleKind.CUSTODY;
@@ -68,7 +68,8 @@ public final class AssetLedgerSupport {
             case REWARD_CLAIM -> AssetLedgerPoint.LifecycleKind.REWARD;
             case FEE -> AssetLedgerPoint.LifecycleKind.UNKNOWN;
             case DERIVATIVE_ORDER_REQUEST, DERIVATIVE_ORDER_EXECUTION, DERIVATIVE_ORDER_CANCEL,
-                    DERIVATIVE_POSITION_INCREASE, DERIVATIVE_POSITION_DECREASE -> AssetLedgerPoint.LifecycleKind.DERIVATIVE;
+                    DERIVATIVE_POSITION_INCREASE, DERIVATIVE_POSITION_DECREASE,
+                    CEX_DERIVATIVE_SETTLEMENT -> AssetLedgerPoint.LifecycleKind.DERIVATIVE;
             case MANUAL_COMPENSATING -> AssetLedgerPoint.LifecycleKind.MANUAL;
             case UNKNOWN -> AssetLedgerPoint.LifecycleKind.UNKNOWN;
         };

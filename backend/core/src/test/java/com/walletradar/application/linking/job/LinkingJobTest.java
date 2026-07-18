@@ -1,6 +1,7 @@
 package com.walletradar.application.linking.job;
 
 import com.walletradar.domain.event.BybitNormalizationCompletedEvent;
+import com.walletradar.domain.event.DzengiNormalizationCompletedEvent;
 import com.walletradar.domain.event.LinkingCompletedEvent;
 import com.walletradar.domain.event.LinkingRequestedEvent;
 import com.walletradar.domain.event.OnChainReclassificationCompletedEvent;
@@ -16,6 +17,7 @@ import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -42,7 +44,7 @@ class LinkingJobTest {
         properties.setEnabled(true);
         properties.setBatchSize(25);
         when(linkingDataGateService.snapshot("session-1"))
-                .thenReturn(new LinkingDataGateService.LinkingGateSnapshot(true, 0L, 0L, 0L, 0L, false));
+                .thenReturn(new LinkingDataGateService.LinkingGateSnapshot(true, 0L, 0L, 0L, Map.of(), false));
         when(linkingBatchProcessor.processConvergentPasses(org.mockito.ArgumentMatchers.eq(25), any(Runnable.class)))
                 .thenReturn(2, 1, 0);
         when(linkingBatchProcessor.runTerminalPasses(org.mockito.ArgumentMatchers.eq(25), any(Runnable.class)))
@@ -82,11 +84,45 @@ class LinkingJobTest {
     }
 
     @Test
+    void dzengiCompletionRunsLinkingWhenGateIsReady() {
+        LinkingProperties properties = new LinkingProperties();
+        properties.setEnabled(true);
+        properties.setBatchSize(25);
+        when(linkingDataGateService.snapshot("session-1"))
+                .thenReturn(new LinkingDataGateService.LinkingGateSnapshot(true, 0L, 0L, 0L, Map.of(), false));
+        when(linkingBatchProcessor.processConvergentPasses(org.mockito.ArgumentMatchers.eq(25), any(Runnable.class)))
+                .thenReturn(1, 0);
+        when(linkingBatchProcessor.runTerminalPasses(org.mockito.ArgumentMatchers.eq(25), any(Runnable.class)))
+                .thenReturn(0);
+
+        List<Object> events = new ArrayList<>();
+        ApplicationEventPublisher publisher = events::add;
+        LinkingJob job = new LinkingJob(
+                new JobHeartbeatProperties(),
+                properties,
+                linkingBatchProcessor,
+                linkingDataGateService,
+                publisher,
+                pipelineActivityService,
+                sessionPipelineStateService
+        );
+
+        job.onDzengiNormalizationCompleted(new DzengiNormalizationCompletedEvent("session-1", 1, "dzengi"));
+
+        verify(linkingBatchProcessor, times(2)).processConvergentPasses(org.mockito.ArgumentMatchers.eq(25), any(Runnable.class));
+        assertThat(events).singleElement().isInstanceOfSatisfying(LinkingCompletedEvent.class, event -> {
+            assertThat(event.sessionId()).isEqualTo("session-1");
+            assertThat(event.processed()).isEqualTo(1);
+            assertThat(event.trigger()).isEqualTo("dzengi-normalization-completed");
+        });
+    }
+
+    @Test
     void bybitCompletionSkipsWhenGateIsBlocked() {
         LinkingProperties properties = new LinkingProperties();
         properties.setEnabled(true);
         when(linkingDataGateService.snapshot("session-1"))
-                .thenReturn(new LinkingDataGateService.LinkingGateSnapshot(false, 0L, 1L, 0L, 0L, true));
+                .thenReturn(new LinkingDataGateService.LinkingGateSnapshot(false, 0L, 1L, 0L, Map.of(), true));
 
         List<Object> events = new ArrayList<>();
         ApplicationEventPublisher publisher = events::add;
@@ -118,7 +154,7 @@ class LinkingJobTest {
         properties.setEnabled(true);
         properties.setBatchSize(25);
         when(linkingDataGateService.snapshot("session-1"))
-                .thenReturn(new LinkingDataGateService.LinkingGateSnapshot(true, 0L, 0L, 0L, 0L, false));
+                .thenReturn(new LinkingDataGateService.LinkingGateSnapshot(true, 0L, 0L, 0L, Map.of(), false));
         when(linkingBatchProcessor.processConvergentPasses(org.mockito.ArgumentMatchers.eq(25), any(Runnable.class)))
                 .thenReturn(0);
         when(linkingBatchProcessor.runTerminalPasses(org.mockito.ArgumentMatchers.eq(25), any(Runnable.class)))

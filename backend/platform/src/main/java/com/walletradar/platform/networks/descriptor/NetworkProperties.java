@@ -49,6 +49,7 @@ public class NetworkProperties {
         private Boolean walletSupported = true;
         private Boolean evmWalletSupported;
         private List<String> usdStableContracts = new ArrayList<>();
+        private List<String> ethFamilyContracts = new ArrayList<>();
 
         public void setNativeAliasContracts(List<String> nativeAliasContracts) {
             this.nativeAliasContracts = nativeAliasContracts != null ? nativeAliasContracts : new ArrayList<>();
@@ -56,6 +57,10 @@ public class NetworkProperties {
 
         public void setUsdStableContracts(List<String> usdStableContracts) {
             this.usdStableContracts = usdStableContracts != null ? usdStableContracts : new ArrayList<>();
+        }
+
+        public void setEthFamilyContracts(List<String> ethFamilyContracts) {
+            this.ethFamilyContracts = ethFamilyContracts != null ? ethFamilyContracts : new ArrayList<>();
         }
     }
 

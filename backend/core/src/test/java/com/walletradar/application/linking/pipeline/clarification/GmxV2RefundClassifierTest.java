@@ -1,5 +1,9 @@
 package com.walletradar.application.linking.pipeline.clarification;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.walletradar.application.normalization.pipeline.classification.onchain.protocol.ProtocolResourceDefinition;
+import com.walletradar.application.normalization.pipeline.classification.onchain.protocol.ProtocolResourceLoader;
+import com.walletradar.application.normalization.pipeline.classification.support.GmxV2HandlerRegistry;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
@@ -40,6 +44,10 @@ class GmxV2RefundClassifierTest {
 
     @BeforeEach
     void setUp() {
+        GmxV2HandlerRegistry.bind(new ProtocolResourceLoader(new ObjectMapper())
+                .find("GMX", "v2")
+                .map(ProtocolResourceDefinition::handlerContractAddresses)
+                .orElseThrow()::contains);
         classifier = new GmxV2RefundClassifier(mongoOperations, normalizedTransactionRepository);
         lenient().when(normalizedTransactionRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
     }

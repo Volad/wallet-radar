@@ -34,26 +34,58 @@ class CanonicalAssetCatalogTest {
     }
 
     @Test
-    void auditedKatanaVaultReceiptsCollapseToEthForPricing() {
+    void katanaBridgedEthPricesAsEthButC2DerivativeResolvesItself() {
+        // ADR-054 §6 / plan §7c: VBETH is C1 (ETH bridged to Katana) → price as ETH. yvvbETH is a
+        // C2 ETH-derivative that must resolve its OWN market USD price (DefiLlama-by-contract), so it
+        // is no longer aliased to ETH.
         assertThat(CanonicalAssetCatalog.canonicalMarketSymbol("vbETH")).isEqualTo("ETH");
-        assertThat(CanonicalAssetCatalog.canonicalMarketSymbol("yvvbETH")).isEqualTo("ETH");
+        assertThat(CanonicalAssetCatalog.canonicalMarketSymbol("yvvbETH")).isEqualTo("YVVBETH");
     }
 
     @Test
-    void liquidStakingReceiptsPegToNativeForPricing() {
-        assertThat(CanonicalAssetCatalog.canonicalMarketSymbol("CMETH")).isEqualTo("ETH");
+    void c2EthDerivativesResolveOwnMarketSymbolNotEth() {
+        // ADR-054 §6 / plan §7c: CMETH/METH/WEETH/YVVBETH resolve their own market USD price and must
+        // NOT be aliased to ETH. BBSOL stays canonicalised to SOL.
+        assertThat(CanonicalAssetCatalog.canonicalMarketSymbol("CMETH")).isEqualTo("CMETH");
+        assertThat(CanonicalAssetCatalog.canonicalMarketSymbol("METH")).isEqualTo("METH");
+        assertThat(CanonicalAssetCatalog.canonicalMarketSymbol("WEETH")).isEqualTo("WEETH");
+        assertThat(CanonicalAssetCatalog.canonicalMarketSymbol("YVVBETH")).isEqualTo("YVVBETH");
+        assertThat(CanonicalAssetCatalog.canonicalMarketSymbol("VBETH")).isEqualTo("ETH");
         assertThat(CanonicalAssetCatalog.canonicalMarketSymbol("BBSOL")).isEqualTo("SOL");
     }
 
     @Test
-    void wstEthUsesEthFamilyCoinGeckoFallback() {
-        assertThat(CanonicalAssetCatalog.coinGeckoId("wstETH")).contains("staked-ether");
+    void c2EthDerivativesAreNoLongerPeggedNative() {
+        // ADR-054 §6 / plan §7c: removing these from PEGGED_NATIVE_SYMBOLS stops
+        // PeggedNativePriceResolver from inheriting the ETH sibling quote.
+        assertThat(CanonicalAssetCatalog.isPeggedNative("CMETH")).isFalse();
+        assertThat(CanonicalAssetCatalog.isPeggedNative("METH")).isFalse();
+        assertThat(CanonicalAssetCatalog.isPeggedNative("WEETH")).isFalse();
+        // BBSOL remains a pegged-native receipt.
+        assertThat(CanonicalAssetCatalog.isPeggedNative("BBSOL")).isTrue();
     }
 
     @Test
-    void wstEthUsesStEthAndEthExchangeFallbacks() {
+    void wstEthLastResortCoinGeckoIdIsWrappedStethNotEth() {
+        assertThat(CanonicalAssetCatalog.coinGeckoId("wstETH")).contains("wrapped-steth");
+    }
+
+    @Test
+    void c2EthDerivativeLastResortCoinGeckoIdsResolveTheTokenItself() {
+        assertThat(CanonicalAssetCatalog.coinGeckoId("CMETH")).contains("mantle-restaked-eth");
+        assertThat(CanonicalAssetCatalog.coinGeckoId("METH")).contains("mantle-staked-ether");
+        assertThat(CanonicalAssetCatalog.coinGeckoId("WEETH")).contains("wrapped-eeth");
+        // No confirmed CoinGecko id for YVVBETH — must stay empty (DefiLlama-by-contract resolves it).
+        assertThat(CanonicalAssetCatalog.coinGeckoId("YVVBETH")).isEmpty();
+    }
+
+    @Test
+    void wstEthNoLongerFallsBackToStEthOrEthMarkets() {
+        // ADR-054 §6 / plan §7c: wstETH resolves via its own DefiLlama contract price; the STETH/ETH
+        // exchange fallback is removed so the market quote is not distorted toward the ETH peg.
         assertThat(CanonicalAssetCatalog.exchangeMarketSymbols("wstETH"))
-                .containsExactly("WSTETH", "STETH", "ETH");
+                .containsExactly("WSTETH")
+                .doesNotContain("STETH", "ETH");
     }
 
     @Test

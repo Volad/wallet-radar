@@ -32,10 +32,8 @@ import java.util.List;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -50,19 +48,6 @@ public class BybitCanonicalTransactionBuilder {
     private final BybitCanonicalMappedRowSupport mappedRowSupport;
 
     private static final Logger LOGGER = LoggerFactory.getLogger(BybitCanonicalTransactionBuilder.class);
-
-    private static final Set<String> STABLECOIN_SYMBOLS = Set.of(
-            "USDT",
-            "USDC",
-            "USDE",
-            "USDS",
-            "USDD",
-            "DAI",
-            "FDUSD",
-            "PYUSD",
-            "TUSD",
-            "USD1"
-    );
 
     private static final Pattern SELF_TRANSFER_PATTERN =
             Pattern.compile("selfTransfer_([0-9a-fA-F-]{36})");
@@ -127,13 +112,18 @@ public class BybitCanonicalTransactionBuilder {
                 sellRow.getAssetSymbol(),
                 executionPrice
         );
-        flows.add(mappedRowSupport.flow(
+        NormalizedTransaction.Flow buyFlow = mappedRowSupport.flow(
                 NormalizedLegRole.BUY,
                 buyRow.getAssetSymbol(),
                 buyNet,
                 buyPricing.unitPriceUsd(),
                 buyPricing.priceSource()
-        ));
+        );
+        // Bybit fees are charged in the received (base) asset and already netted into buyNet.
+        // Record the USD equivalent on the BUY leg so the replay engine can capitalize it into
+        // Net AVCO only — Market AVCO continues to reflect the clean fill price.
+        buyFlow.setAcquisitionFeeUsd(mappedRowSupport.acquisitionFeeUsd(buyRow, buyPricing, executionPrice));
+        flows.add(buyFlow);
         BybitCanonicalMappedRowSupport.FlowPricing sellPricing = mappedRowSupport.tradeFlowPricing(
                 sellRow.getAssetSymbol(),
                 NormalizedLegRole.SELL,

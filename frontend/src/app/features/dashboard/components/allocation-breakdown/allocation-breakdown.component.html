@@ -1,0 +1,419 @@
+<!-- ── Carousel nav ─────────────────────────────────────────────── -->
+<header class="breakdown-head">
+  <div class="alloc-nav-left">
+    <!-- Animated dot indicators -->
+    <div class="alloc-dots" role="tablist" [attr.aria-label]="'Allocation view'">
+      @for (p of pages; track $index; let i = $index) {
+        <button
+          type="button"
+          role="tab"
+          class="alloc-dot"
+          [class.active]="allocationPage() === i"
+          [attr.aria-selected]="allocationPage() === i"
+          [attr.aria-label]="p.label"
+          (click)="setPage(i === 0 ? 0 : 1)"
+        ></button>
+      }
+      <span class="alloc-page-label muted">{{ pages[allocationPage()].label }}</span>
+    </div>
+    <h3>
+      Allocation
+      <span class="breakdown-total mono"><wr-smart-amount [value]="totalUsd()" /></span>
+    </h3>
+  </div>
+
+  <!-- Prev / next -->
+  <div class="alloc-arrows">
+    <button
+      type="button"
+      class="alloc-arrow"
+      [disabled]="allocationPage() === 0"
+      (click)="setPage(0)"
+      aria-label="Previous page"
+    >‹</button>
+    <button
+      type="button"
+      class="alloc-arrow"
+      [disabled]="allocationPage() === 1"
+      (click)="setPage(1)"
+      aria-label="Next page"
+    >›</button>
+  </div>
+</header>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<!-- PAGE 0: Wallets & Networks                                    -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+@if (allocationPage() === 0) {
+<div class="alloc-page-body">
+
+  @if (onChainCexSplit().cexPct > 0) {
+    <div class="breakdown-chain-split">
+      <span class="breakdown-chain-onchain">On-chain {{ onChainCexSplit().onChainPct.toFixed(1) }}%</span>
+      <span class="breakdown-chain-cex">CEX {{ onChainCexSplit().cexPct.toFixed(1) }}%</span>
+    </div>
+  }
+
+  @if (networksByBar().length > 0) {
+    <div class="breakdown-bar" role="presentation">
+      @for (row of networksByBar(); track row.id) {
+        <div
+          class="breakdown-bar-segment"
+          [style.width.%]="row.sharePct"
+          [style.background]="row.color"
+          [title]="row.label + ' ' + row.sharePct.toFixed(1) + '%'"
+        ></div>
+      }
+    </div>
+  }
+
+  <div class="breakdown-body">
+
+    <!-- Networks column -->
+    <div class="breakdown-column">
+      <div class="breakdown-card-title">Networks</div>
+      <div class="breakdown-list" role="list">
+        @for (row of visibleNetworks(); track row.id) {
+          <div class="breakdown-row" role="listitem">
+            <div class="breakdown-row-top">
+              <div class="breakdown-row-meta">
+                <span
+                  class="breakdown-icon"
+                  [style.border-color]="row.color"
+                  [style.color]="row.color"
+                  aria-hidden="true"
+                >{{ row.icon ?? '•' }}</span>
+                <span class="breakdown-label">{{ row.label }}</span>
+              </div>
+              <div class="breakdown-row-right mono">
+                <span class="breakdown-value"><wr-smart-amount [value]="row.valueUsd" /></span>
+                <span class="breakdown-pct muted">{{ row.sharePct.toFixed(1) }}%</span>
+              </div>
+            </div>
+            <div class="breakdown-row-bar" aria-hidden="true">
+              <div class="breakdown-row-bar-fill" [style.width.%]="row.sharePct" [style.background]="row.color"></div>
+            </div>
+          </div>
+        }
+
+
+        @if (networksByBar().length === 0) {
+          <div class="breakdown-empty muted">No priced positions in current scope.</div>
+        }
+      </div>
+    </div>
+
+    <div class="breakdown-divider" aria-hidden="true"></div>
+
+    <!-- Wallets column -->
+    <div class="breakdown-column breakdown-column-wallets">
+      <div class="breakdown-card-title">Wallets &amp; Accounts</div>
+      <div class="breakdown-list" role="list">
+        @for (row of visibleWallets(); track row.id) {
+          <div class="breakdown-row" role="listitem">
+            <div class="breakdown-row-top">
+              <div class="breakdown-row-meta">
+                <span class="breakdown-wallet-dot" [style.background]="row.color" aria-hidden="true"></span>
+                <span class="breakdown-label">{{ row.label }}</span>
+              </div>
+              <div class="breakdown-row-right mono">
+                <span class="breakdown-value"><wr-smart-amount [value]="row.valueUsd" /></span>
+                <span class="breakdown-pct muted">{{ row.sharePct.toFixed(1) }}%</span>
+              </div>
+            </div>
+            <div class="breakdown-row-bar" aria-hidden="true">
+              <div class="breakdown-row-bar-fill" [style.width.%]="row.sharePct" [style.background]="row.color"></div>
+            </div>
+          </div>
+        }
+
+
+        @if (walletsForBar().length === 0) {
+          <div class="breakdown-empty muted">No priced positions in current scope.</div>
+        }
+      </div>
+
+      <!-- P&L boxes -->
+      <div class="breakdown-pnl-row">
+        <div class="breakdown-pnl-box">
+          <div class="breakdown-pnl-label">Unrealised</div>
+          <div
+            class="breakdown-pnl-value mono"
+            [class.pos]="unrealizedPnlUsd() >= 0"
+            [class.neg]="unrealizedPnlUsd() < 0"
+          >
+            <wr-smart-amount [value]="unrealizedPnlUsd()" />
+          </div>
+          <div class="breakdown-pnl-sub muted">{{ formatPct(unrealizedPnlPct()) }}</div>
+        </div>
+        <div class="breakdown-pnl-box">
+          <div class="breakdown-pnl-label">Realised</div>
+          <div
+            class="breakdown-pnl-value mono"
+            [class.pos]="realizedPnlUsd() >= 0"
+            [class.neg]="realizedPnlUsd() < 0"
+          >
+            <wr-smart-amount [value]="realizedPnlUsd()" />
+          </div>
+          <div class="breakdown-pnl-sub muted">{{ isFiltered() ? 'filtered' : 'all time' }}</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+}
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<!-- PAGE 1: Token Distribution                                    -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+@if (allocationPage() === 1) {
+<div class="alloc-page-body">
+
+  <!-- Token allocation bar -->
+  @if (donutSegments().length > 0) {
+    <div class="breakdown-bar" role="presentation">
+      @for (seg of donutSegments(); track seg.label) {
+        <div
+          class="breakdown-bar-segment"
+          [style.width.%]="seg.pct"
+          [style.background]="seg.color"
+          [title]="seg.label + ' ' + seg.pct.toFixed(1) + '%'"
+        ></div>
+      }
+    </div>
+  }
+
+  <div class="alloc-tokens-layout">
+
+    <!-- ── Left: Chart panel ─────────────────────────────── -->
+    <div class="alloc-chart-panel">
+
+      <!-- Mode toggle: Value / P&L -->
+      <div class="alloc-mode-toggle" role="group" aria-label="Chart view">
+        <button
+          type="button"
+          class="alloc-mode-btn"
+          [class.active]="chartMode() === 'donut'"
+          (click)="setChartMode('donut')"
+        >Value</button>
+        <button
+          type="button"
+          class="alloc-mode-btn"
+          [class.active]="chartMode() === 'pnl'"
+          (click)="setChartMode('pnl')"
+        >P&amp;L</button>
+      </div>
+
+      <!-- ── Donut chart ── -->
+      @if (chartMode() === 'donut') {
+        @let hovered = hoveredSegment();
+        <div class="alloc-donut-wrap">
+          <svg
+            class="alloc-donut-svg"
+            viewBox="0 0 140 140"
+            aria-hidden="true"
+          >
+            @for (seg of donutSegments(); track seg.label; let i = $index) {
+              <path
+                [attr.d]="seg.path"
+                [attr.fill]="seg.color"
+                stroke="var(--wr-surface)"
+                stroke-width="1.5"
+                [style.opacity]="effectiveHoverIdx() === null || effectiveHoverIdx() === i ? 1 : 0.18"
+                style="cursor: pointer; transition: opacity 0.15s"
+                (mouseenter)="hoverSegment(i)"
+                (mouseleave)="hoverSegment(null)"
+                (click)="pinByIdx(i)"
+              />
+            }
+
+            <!-- Center label -->
+            @if (hovered) {
+              <text x="70" y="63" text-anchor="middle" class="donut-sym" [attr.fill]="hovered.color">
+                {{ hovered.label }}
+              </text>
+              <text x="70" y="76" text-anchor="middle" class="donut-val">
+                {{ formatAmount(hovered.value) }}
+              </text>
+              <text x="70" y="88" text-anchor="middle" class="donut-pct">
+                {{ hovered.pct.toFixed(1) }}%
+              </text>
+            } @else {
+              <text x="70" y="71" text-anchor="middle" class="donut-total-val">
+                {{ formatAmount(totalUsd()) }}
+              </text>
+              <text x="70" y="83" text-anchor="middle" class="donut-total-sub">total</text>
+            }
+          </svg>
+
+        </div>
+      }
+
+      <!-- ── PnL diverging bar chart ── -->
+      @if (chartMode() === 'pnl') {
+        <div class="alloc-pnl-chart">
+
+          <!-- Metric toggle: % / $ -->
+          <div class="alloc-pnl-metric" role="group" aria-label="PnL metric">
+            <button
+              type="button"
+              class="alloc-metric-btn"
+              [class.active]="pnlMetric() === 'pct'"
+              (click)="setPnlMetric('pct')"
+            >%</button>
+            <button
+              type="button"
+              class="alloc-metric-btn"
+              [class.active]="pnlMetric() === 'amount'"
+              (click)="setPnlMetric('amount')"
+            >$</button>
+          </div>
+
+          <!-- Loss / Gain header -->
+          <div class="alloc-pnl-header" aria-hidden="true">
+            <span class="alloc-pnl-spacer"></span>
+            <span class="alloc-pnl-loss-lbl">Loss</span>
+            <span class="alloc-pnl-zero-spacer"></span>
+            <span class="alloc-pnl-gain-lbl">Gain</span>
+            <span class="alloc-pnl-val-spacer"></span>
+          </div>
+
+          <!-- Rows -->
+          <div class="alloc-pnl-rows" role="list">
+            @for (row of pnlChartRows(); track row.label) {
+              <div class="alloc-pnl-row" role="listitem">
+                <!-- Label -->
+                <div class="alloc-pnl-label-cell">
+                  <span class="alloc-pnl-dot" [style.background]="row.color"></span>
+                  <span class="alloc-pnl-sym mono">{{ row.label }}</span>
+                </div>
+
+                <!-- Track: loss-half | zero | gain-half -->
+                <div class="alloc-pnl-track">
+                  <div class="alloc-pnl-loss-side">
+                    @if (!row.isPos) {
+                      <div class="alloc-pnl-bar" [style.width.%]="row.fillPct"></div>
+                    }
+                  </div>
+                  <div class="alloc-pnl-zero-line"></div>
+                  <div class="alloc-pnl-gain-side">
+                    @if (row.isPos) {
+                      <div class="alloc-pnl-bar" [style.width.%]="row.fillPct"></div>
+                    }
+                  </div>
+                </div>
+
+                <!-- Value -->
+                <div class="alloc-pnl-val-cell mono" [class.pos]="row.isPos" [class.neg]="!row.isPos">
+                  @if (pnlMetric() === 'pct') {
+                    {{ formatPct(row.pnlPct) }}
+                  } @else {
+                    {{ formatAmount(row.pnlUsd) }}
+                  }
+                </div>
+              </div>
+            }
+          </div>
+
+          <!-- Total P&L summary -->
+          <div class="alloc-pnl-summary">
+            <span class="alloc-pnl-summary-label">Total P&amp;L</span>
+            <div class="alloc-pnl-summary-right">
+              <span class="mono" [class.pos]="totalPnlUsd() >= 0" [class.neg]="totalPnlUsd() < 0">
+                <wr-smart-amount [value]="totalPnlUsd()" />
+              </span>
+              <span class="mono small muted">{{ formatPct(totalPnlPct()) }}</span>
+            </div>
+          </div>
+        </div>
+      }
+    </div>
+
+    <!-- ── Right: Sortable token table ──────────────────── -->
+    <div class="alloc-token-table-wrap">
+      <table class="alloc-token-table">
+        <thead>
+          <tr>
+            <th class="sortable sticky-col" (click)="handleSort('label')" scope="col">
+              Asset
+              <span class="sort-icon" [class.active]="sortCol() === 'label'">
+                {{ sortCol() === 'label' ? (sortDir() === 'desc' ? '↓' : '↑') : '↕' }}
+              </span>
+            </th>
+            <th class="sortable r" (click)="handleSort('value')" scope="col">
+              Value
+              <span class="sort-icon" [class.active]="sortCol() === 'value'">
+                {{ sortCol() === 'value' ? (sortDir() === 'desc' ? '↓' : '↑') : '↕' }}
+              </span>
+            </th>
+            <th class="sortable r" (click)="handleSort('share')" scope="col">
+              Share
+              <span class="sort-icon" [class.active]="sortCol() === 'share'">
+                {{ sortCol() === 'share' ? (sortDir() === 'desc' ? '↓' : '↑') : '↕' }}
+              </span>
+            </th>
+            <th class="sortable r" (click)="handleSort('pnlAmt')" scope="col">
+              PnL&nbsp;$
+              <span class="sort-icon" [class.active]="sortCol() === 'pnlAmt'">
+                {{ sortCol() === 'pnlAmt' ? (sortDir() === 'desc' ? '↓' : '↑') : '↕' }}
+              </span>
+            </th>
+            <th class="sortable r" (click)="handleSort('pnlPct')" scope="col">
+              PnL&nbsp;%
+              <span class="sort-icon" [class.active]="sortCol() === 'pnlPct'">
+                {{ sortCol() === 'pnlPct' ? (sortDir() === 'desc' ? '↓' : '↑') : '↕' }}
+              </span>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (t of sortedTokens(); track t.familyIdentity) {
+            <tr
+              class="token-row"
+              [class.pinned]="highlightedIdentity() === t.familyIdentity"
+              (click)="pinByIdentity(t.familyIdentity)"
+            >
+              <td class="sticky-col">
+                <div class="alloc-token-meta">
+                  <span
+                    class="alloc-token-dot"
+                    [style.background]="tokenColorMap().get(t.familyIdentity) ?? '#4a5878'"
+                  ></span>
+                  <span class="mono fw-bold">{{ t.symbol }}</span>
+                </div>
+              </td>
+              <td class="mono r fw-bold">
+                <wr-smart-amount [value]="t.currentValueUsd" />
+              </td>
+              <td class="mono r muted">
+                {{ tokenSharePct(t.currentValueUsd).toFixed(1) }}%
+              </td>
+              <td class="mono r" [class.pos]="t.unrealizedPnlUsd >= 0" [class.neg]="t.unrealizedPnlUsd < 0">
+                <wr-smart-amount [value]="t.unrealizedPnlUsd" />
+              </td>
+              <td class="mono r" [class.pos]="t.unrealizedPnlPct >= 0" [class.neg]="t.unrealizedPnlPct < 0">
+                {{ formatPct(t.unrealizedPnlPct) }}
+              </td>
+            </tr>
+          }
+        </tbody>
+        <tfoot>
+          <tr>
+            <td class="muted small">Total</td>
+            <td class="mono r fw-bold"><wr-smart-amount [value]="totalUsd()" /></td>
+            <td class="mono r muted">100%</td>
+            <td class="mono r" [class.pos]="totalPnlUsd() >= 0" [class.neg]="totalPnlUsd() < 0">
+              <wr-smart-amount [value]="totalPnlUsd()" />
+            </td>
+            <td class="mono r" [class.pos]="totalPnlUsd() >= 0" [class.neg]="totalPnlUsd() < 0">
+              {{ formatPct(totalPnlPct()) }}
+            </td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+
+  </div>
+</div>
+}

@@ -123,6 +123,12 @@ public class LpPositionRefreshService {
         if (!properties.isEnabled()) {
             return new RefreshResult(0, 0, 0);
         }
+        // Eagerly close snapshots for positions whose LP receipt is fully burned (qtyHeld=0).
+        // These positions are excluded from the RPC discovery loop because the basis query
+        // filters qtyHeld > 0, so without this step their snapshots remain stale (e.g. 'in_range')
+        // after the LP_EXIT is processed by accounting replay.
+        userSessionRepository.findById(sessionId).ifPresent(session ->
+                closeExitedSnapshots(accountingUniverseService.resolveScope(session).accountingUniverseId()));
         Map<String, LpPositionContext> contexts = discoverOpenContextsForSession(sessionId);
         int saved = 0;
         int skipped = 0;
@@ -137,6 +143,39 @@ public class LpPositionRefreshService {
         log.info("LP session refresh complete sessionId={} positions={} saved={} skipped={}",
                 sessionId, contexts.size(), saved, skipped);
         return new RefreshResult(contexts.size(), saved, skipped);
+    }
+
+    /**
+     * Closes any LP position snapshots whose LP receipt basis pool has {@code qtyHeld <= 0}.
+     * When accounting replay sets {@code qtyHeld = 0} (LP receipt fully burned) the position is
+     * definitively closed; no on-chain RPC call is needed to confirm this. Calling this before
+     * the main refresh loop prevents stale 'in_range' snapshots from lingering after LP exits.
+     */
+    private void closeExitedSnapshots(String universeId) {
+        if (universeId == null || universeId.isBlank()) {
+            return;
+        }
+        Query burnedQuery = new Query(new Criteria().andOperator(
+                Criteria.where("universeId").is(universeId),
+                Criteria.where("qtyHeld").lte(BigDecimal.ZERO)
+        ));
+        List<LpReceiptBasisPool> burnedPools = mongoOperations.find(burnedQuery, LpReceiptBasisPool.class);
+        Set<String> processedCorr = new LinkedHashSet<>();
+        for (LpReceiptBasisPool pool : burnedPools) {
+            String corr = pool.getLpCorrelationId();
+            if (corr == null || !processedCorr.add(corr)) {
+                continue;
+            }
+            snapshotService.findByCorrelationId(corr).ifPresent(snap -> {
+                if (!"closed".equals(snap.getStatus())) {
+                    snap.setStatus("closed");
+                    snap.setSnapshotStale(false);
+                    snapshotService.upsert(snap);
+                    log.info("LP snapshot eagerly closed (qtyHeld=0): correlationId={}, prevStatus={}",
+                            corr, snap.getStatus());
+                }
+            });
+        }
     }
 
     private Optional<LpPositionSnapshot> refreshPosition(
@@ -397,13 +436,13 @@ public class LpPositionRefreshService {
             }
         }
 
-        // Load only basis pools with qty > 0 from the DB to avoid iterating closed positions.
-        // Closed pools (qty = 0) are excluded in the loop below anyway, but pre-filtering at
-        // the DB layer avoids loading all 82+ historical pools when only ~6 are open.
-        Query basisQuery = new Query(new Criteria().andOperator(
-                Criteria.where("universeId").is(scope.accountingUniverseId()),
-                Criteria.where("qtyHeld").gt(0)
-        ));
+        // Load ALL basis pools (both open and closed) so that pools with qtyHeld = 0
+        // can be added to the excludedByBasisPool set in the loop below.
+        // Pre-filtering to qtyHeld > 0 would silently drop closed pools, allowing the TX
+        // fallback to re-add them even though the pipeline already confirmed they are fully burned.
+        Query basisQuery = new Query(
+                Criteria.where("universeId").is(scope.accountingUniverseId())
+        );
         List<LpReceiptBasisPool> basisPools = mongoOperations.find(basisQuery, LpReceiptBasisPool.class);
         // Track corr IDs that were intentionally excluded by the basisPool loop
         // (zero qty held + LP activity recorded) so the TX fallback loop won't re-add them.

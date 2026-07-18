@@ -310,6 +310,78 @@ class OnChainClassifierTest {
     }
 
     @Test
+    @DisplayName("NEW-14: Rabby gas-payer native top-up becomes sponsored gas in")
+    void rabbyGasPayerNativeTopUpBecomesSponsoredGasIn() {
+        String rabbySender = "0x76dd65529dc6c073c1e0af2a5ecc78434bdbf7d9";
+        RawTransaction rawTransaction = baseRaw(NetworkId.BASE);
+        rawTransaction.setTxHash("0x39dca64e00000000000000000000000000000000000000000000000000000f3d");
+        rawTransaction.getRawData().put("from", rabbySender);
+        rawTransaction.getRawData().put("to", WALLET);
+        rawTransaction.getRawData().put("value", "23691701676293");
+        rawTransaction.getRawData().put("methodId", "0x");
+        rawTransaction.getRawData().put("input", "0x");
+        rawTransaction.getRawData().remove("functionName");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of()).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.BASE, rabbySender))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        rabbySender,
+                        Set.of(NetworkId.BASE),
+                        ProtocolRegistryFamily.AGGREGATOR,
+                        ProtocolRegistryRole.GAS_PAYER,
+                        null,
+                        ConfidenceLevel.HIGH,
+                        "Rabby",
+                        "GasAccount",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.SPONSORED_GAS_IN);
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
+        assertThat(result.protocolName()).isEqualTo("Rabby");
+        assertThat(result.flows())
+                .extracting(NormalizedTransaction.Flow::getRole, NormalizedTransaction.Flow::getAssetSymbol, NormalizedTransaction.Flow::getQuantityDelta)
+                .containsExactly(tuple(NormalizedLegRole.TRANSFER, "ETH", new BigDecimal("0.000023691701676293")));
+    }
+
+    @Test
+    @DisplayName("NEW-14: oversized Rabby native payout stays external transfer in")
+    void oversizedRabbyNativePayoutStaysExternalTransferIn() {
+        String rabbySender = "0x76dd65529dc6c073c1e0af2a5ecc78434bdbf7d9";
+        RawTransaction rawTransaction = baseRaw(NetworkId.BASE);
+        rawTransaction.getRawData().put("from", rabbySender);
+        rawTransaction.getRawData().put("to", WALLET);
+        rawTransaction.getRawData().put("value", "500000000000000000");
+        rawTransaction.getRawData().put("methodId", "0x");
+        rawTransaction.getRawData().put("input", "0x");
+        rawTransaction.getRawData().remove("functionName");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of()).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.BASE, rabbySender))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        rabbySender,
+                        Set.of(NetworkId.BASE),
+                        ProtocolRegistryFamily.AGGREGATOR,
+                        ProtocolRegistryRole.GAS_PAYER,
+                        null,
+                        ConfidenceLevel.HIGH,
+                        "Rabby",
+                        "GasAccount",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.EXTERNAL_TRANSFER_IN);
+        assertThat(result.flows())
+                .extracting(NormalizedTransaction.Flow::getRole)
+                .containsExactly(NormalizedLegRole.BUY);
+    }
+
+    @Test
     @DisplayName("lending deposit keeps principal and receipt flows as transfer")
     void lendingDepositKeepsContinuityRoles() {
         RawTransaction rawTransaction = baseRaw(NetworkId.ETHEREUM);
@@ -3305,7 +3377,11 @@ class OnChainClassifierTest {
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_EXIT);
         assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
-        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        // R1: V3 exit with decreaseLiquidity calldata → triggers full-receipt clarification to
+        // fetch DecreaseLiquidity/Collect event logs for fee-split decomposition.
+        assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_CLARIFICATION);
+        assertThat(result.missingDataReasons())
+                .contains(ClassificationReasonCode.LP_FEE_SPLIT_EVIDENCE_REQUIRED.code());
         assertThat(result.flows())
                 .filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
                 .isNotEmpty()
@@ -4620,8 +4696,12 @@ class OnChainClassifierTest {
     }
 
     @Test
-    @DisplayName("Euler batch share migration resolves to lending loop rebalance when clarification proves lifecycle")
+    @DisplayName("Euler batch sub-account residual release: eUSDC-2 from sub-account and edeUSD-1 mint → lending loop rebalance with both as inbound CREDIT")
     void eulerBatchShareMigrationResolvesToLendingLoopRebalance() {
+        // This transaction represents the second problematic B3 scenario (0xa548b35769):
+        // the Euler V2 sub-account releases residual eUSDC-2 collateral to the main wallet while
+        // the batch also mints edeUSD-1 vault shares. The sub-account → wallet transfer must
+        // generate only a CREDIT (+1444.591868), not a phantom DEBIT pair.
         String subaccount = "0x1111111111111111111111111111111111111110";
         RawTransaction rawTransaction = baseRaw(NetworkId.AVALANCHE);
         rawTransaction.setTxHash("0xa548b35769c68377b33172370d1a414facd1be4f3c8106d21fcc3940e38ee7a5");
@@ -4652,13 +4732,15 @@ class OnChainClassifierTest {
 
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LENDING_LOOP_REBALANCE);
         assertThat(result.status()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
-        assertThat(result.protocolName()).isEqualTo("Euler");
+        // Sub-account → wallet eUSDC-2 transfer must be a single CREDIT (positive) — the main
+        // wallet acquires its residual collateral. The old phantom DEBIT (-1444.591868) caused
+        // the EUSDC-2 basis shortfall (B3). After the fix there is no DEBIT leg for sub-account outflows.
         assertThat(result.flows())
                 .filteredOn(flow -> flow.getAssetSymbol().equals("eUSDC-2"))
                 .singleElement()
                 .satisfies(flow -> {
                     assertThat(flow.getRole()).isEqualTo(NormalizedLegRole.TRANSFER);
-                    assertThat(flow.getQuantityDelta()).isEqualByComparingTo("-1444.591868");
+                    assertThat(flow.getQuantityDelta()).isEqualByComparingTo("1444.591868");
                 });
         assertThat(result.flows())
                 .filteredOn(flow -> flow.getAssetSymbol().equals("edeUSD-1"))
@@ -8003,6 +8085,127 @@ class OnChainClassifierTest {
         assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
                 .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getRole())
                 .containsExactlyInAnyOrder("SUSHI:BUY", "KAT:BUY");
+    }
+
+    @Test
+    @DisplayName("Mantle Merkl claim with wrapped aToken burn-to-0x0 becomes reward claim, not LP exit")
+    void mantleMerklClaimWithWrappedAtokenBurnToZeroBecomesRewardClaim() {
+        // Anchored on tx 0xfe0ad9d20c6d0f10c4006087d40c7785fd4dbdf8d46419daedc5c227b09706b3 (MANTLE):
+        // a Merkl reward claim whose reward token is an Aave aToken that is wrapped then burned to
+        // 0x0 within the same tx (reward-receipt unwrap). The self-canceling wrapper mint/burn must
+        // not trip the generic LP-receipt-burn -> LP_EXIT heuristic.
+        String merklDistributor = "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae";
+        String merklCore = "0xdef1fa4cefe67365ba046a7c630d6b885298e210";
+        String aaveAToken = "0x85d86061e94ce01d3da0f9efa289c86ff136125a";
+        String wrappedReceipt = "0x09e4c43b7ce78ac58ff6a920f1fd5d84a7975f78";
+        RawTransaction rawTransaction = baseRaw(NetworkId.MANTLE);
+        rawTransaction.getRawData().put("to", merklDistributor);
+        rawTransaction.getRawData().put("methodId", "0x71ee95c0");
+        rawTransaction.getRawData().put("functionName", "claim(address[] users,address[] tokens,uint256[] amounts,bytes32[][] proofs)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", aaveAToken)
+                        .append("tokenSymbol", "aManWMNT")
+                        .append("tokenName", "Aave Mantle WMNT")
+                        .append("tokenDecimal", "18")
+                        .append("from", merklDistributor)
+                        .append("to", WALLET)
+                        .append("value", "5535385623173230779"),
+                new Document("contractAddress", aaveAToken)
+                        .append("tokenSymbol", "aManWMNT")
+                        .append("tokenName", "Aave Mantle WMNT")
+                        .append("tokenDecimal", "18")
+                        .append("from", merklCore)
+                        .append("to", WALLET)
+                        .append("value", "16113560210662131120"),
+                new Document("contractAddress", wrappedReceipt)
+                        .append("tokenSymbol", "aManWMNT")
+                        .append("tokenName", "Aave Mantle WMNT (wrapped)")
+                        .append("tokenDecimal", "18")
+                        .append("from", merklDistributor)
+                        .append("to", WALLET)
+                        .append("value", "16113560210662131120"),
+                new Document("contractAddress", wrappedReceipt)
+                        .append("tokenSymbol", "aManWMNT")
+                        .append("tokenName", "Aave Mantle WMNT (wrapped)")
+                        .append("tokenDecimal", "18")
+                        .append("from", WALLET)
+                        .append("to", "0x0000000000000000000000000000000000000000")
+                        .append("value", "16113560210662131120")
+        )).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.MANTLE, merklDistributor))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        merklDistributor,
+                        Set.of(NetworkId.MANTLE),
+                        ProtocolRegistryFamily.YIELD,
+                        ProtocolRegistryRole.REWARD_ROUTER,
+                        ProtocolRegistryEventType.REWARD_CLAIM,
+                        ConfidenceLevel.HIGH,
+                        "Merkl",
+                        "V1",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.REWARD_CLAIM);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
+        List<NormalizedTransaction.Flow> rewardFlows = result.flows().stream()
+                .filter(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .toList();
+        // The wrapper mint (+) and burn-to-0x0 (-) must be netted out entirely: no wrapped-token leg
+        // survives, and every remaining reward leg is a positive ACQUIRE (BUY) on the real aToken.
+        assertThat(rewardFlows).isNotEmpty();
+        assertThat(rewardFlows).allSatisfy(flow -> {
+            assertThat(flow.getRole()).isEqualTo(NormalizedLegRole.BUY);
+            assertThat(flow.getAssetContract()).isEqualTo(aaveAToken);
+            assertThat(flow.getQuantityDelta().signum()).isPositive();
+        });
+        assertThat(rewardFlows).extracting(flow -> flow.getAssetContract()).doesNotContain(wrappedReceipt);
+        BigDecimal netReward = rewardFlows.stream()
+                .map(NormalizedTransaction.Flow::getQuantityDelta)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        assertThat(netReward).isEqualByComparingTo("21.648945833835361899");
+    }
+
+    @Test
+    @DisplayName("Mantle Merkl claimWithRecipient with inbound reward becomes reward claim")
+    void mantleMerklClaimWithRecipientWithInboundBecomesRewardClaim() {
+        String merklDistributor = "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae";
+        RawTransaction rawTransaction = baseRaw(NetworkId.MANTLE);
+        rawTransaction.getRawData().put("to", merklDistributor);
+        rawTransaction.getRawData().put("methodId", "0x9fb67b58");
+        rawTransaction.getRawData().put("functionName", "claimWithRecipient(address[] users,address[] tokens,uint256[] amounts,bytes32[][] proofs,address[] recipients,bytes[] datas)");
+        rawTransaction.getRawData().put("explorer", new Document("tokenTransfers", List.of(
+                new Document("contractAddress", "0x85d86061e94ce01d3da0f9efa289c86ff136125a")
+                        .append("tokenSymbol", "aManWMNT")
+                        .append("tokenName", "Aave Mantle WMNT")
+                        .append("tokenDecimal", "18")
+                        .append("from", merklDistributor)
+                        .append("to", WALLET)
+                        .append("value", "2500000000000000000")
+        )).append("internalTransfers", List.of()));
+        when(protocolRegistryService.lookup(NetworkId.MANTLE, merklDistributor))
+                .thenReturn(Optional.of(new ProtocolRegistryEntry(
+                        merklDistributor,
+                        Set.of(NetworkId.MANTLE),
+                        ProtocolRegistryFamily.YIELD,
+                        ProtocolRegistryRole.REWARD_ROUTER,
+                        ProtocolRegistryEventType.REWARD_CLAIM,
+                        ConfidenceLevel.HIGH,
+                        "Merkl",
+                        "V1",
+                        false,
+                        null
+                )));
+
+        OnChainClassificationResult result = classifier.classify(rawTransaction);
+
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.REWARD_CLAIM);
+        assertThat(result.classifiedBy()).isEqualTo(ClassificationSource.PROTOCOL_REGISTRY);
+        assertThat(result.flows()).filteredOn(flow -> flow.getRole() != NormalizedLegRole.FEE)
+                .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getRole())
+                .containsExactly("aManWMNT:BUY");
     }
 
     @Test

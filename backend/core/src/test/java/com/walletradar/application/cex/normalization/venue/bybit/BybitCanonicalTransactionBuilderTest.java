@@ -1105,4 +1105,66 @@ class BybitCanonicalTransactionBuilderTest {
         assertThat(transaction.getId())
                 .contains("3xKzVeUuM7g5q5Z2nNuG6XJoYwYz5Z9Wxq8KkFaWQRrQRSyDpL77UvabcDEFGH123aBcDeFgHiJ");
     }
+
+    // ─── ADR-051: acquisitionFeeUsd on BUY trades ────────────────────────────────
+
+    @Test
+    void tradePair_buyFeeInBase_setsAcquisitionFeeUsdOnBuyLeg() {
+        // Bybit charges fee in the received (base) asset.
+        // BUY 50 DOGE at 0.239, feePaid = -0.05 DOGE → acquisitionFeeUsd = 0.05 * 0.239 = 0.01195
+        BybitCanonicalTransactionBuilder builder = new BybitCanonicalTransactionBuilder();
+        ExternalLedgerRaw buyRow = trade("doge-buy", "BUY", "DOGE", "50");
+        buyRow.setFilledPrice(new BigDecimal("0.239"));
+        buyRow.setFeePaid(new BigDecimal("-0.05"));
+        ExternalLedgerRaw sellRow = trade("doge-sell", "SELL", "USDT", "-11.95");
+
+        NormalizedTransaction tx = builder.buildTradePair(buyRow, sellRow, Instant.parse("2026-03-25T12:00:00Z"));
+
+        NormalizedTransaction.Flow buyLeg = tx.getFlows().stream()
+                .filter(f -> f.getRole() == NormalizedLegRole.BUY)
+                .findFirst().orElseThrow();
+        assertThat(buyLeg.getAssetSymbol()).isEqualTo("DOGE");
+        // Net qty = 50 - 0.05 = 49.95 (fee already netted into received qty)
+        assertThat(buyLeg.getQuantityDelta()).isEqualByComparingTo("49.95");
+        // acquisitionFeeUsd = 0.05 * 0.239
+        assertThat(buyLeg.getAcquisitionFeeUsd())
+                .as("acquisitionFeeUsd must be |feePaid| * executionPrice")
+                .isEqualByComparingTo("0.01195");
+    }
+
+    @Test
+    void tradePair_noFee_acquisitionFeeUsdIsNull() {
+        BybitCanonicalTransactionBuilder builder = new BybitCanonicalTransactionBuilder();
+        ExternalLedgerRaw buyRow = trade("eth-buy", "BUY", "ETH", "1");
+        buyRow.setFilledPrice(new BigDecimal("2500"));
+        // no feePaid set
+        ExternalLedgerRaw sellRow = trade("usdt-sell", "SELL", "USDT", "-2500");
+
+        NormalizedTransaction tx = builder.buildTradePair(buyRow, sellRow, Instant.parse("2026-03-25T12:00:00Z"));
+
+        NormalizedTransaction.Flow buyLeg = tx.getFlows().stream()
+                .filter(f -> f.getRole() == NormalizedLegRole.BUY)
+                .findFirst().orElseThrow();
+        assertThat(buyLeg.getAcquisitionFeeUsd())
+                .as("No fee set → acquisitionFeeUsd must be null")
+                .isNull();
+    }
+
+    @Test
+    void tradePair_sellLegDoesNotReceiveAcquisitionFeeUsd() {
+        BybitCanonicalTransactionBuilder builder = new BybitCanonicalTransactionBuilder();
+        ExternalLedgerRaw buyRow = trade("eth-buy2", "BUY", "ETH", "1");
+        buyRow.setFilledPrice(new BigDecimal("2500"));
+        buyRow.setFeePaid(new BigDecimal("-0.001"));
+        ExternalLedgerRaw sellRow = trade("usdt-sell2", "SELL", "USDT", "-2500");
+
+        NormalizedTransaction tx = builder.buildTradePair(buyRow, sellRow, Instant.parse("2026-03-25T12:00:00Z"));
+
+        NormalizedTransaction.Flow sellLeg = tx.getFlows().stream()
+                .filter(f -> f.getRole() == NormalizedLegRole.SELL)
+                .findFirst().orElseThrow();
+        assertThat(sellLeg.getAcquisitionFeeUsd())
+                .as("SELL leg must not have acquisitionFeeUsd")
+                .isNull();
+    }
 }

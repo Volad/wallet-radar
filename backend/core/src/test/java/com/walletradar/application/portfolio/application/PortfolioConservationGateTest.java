@@ -17,7 +17,9 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.application.pricing.domain.PriceQuote;
 import com.walletradar.application.pricing.persistence.HistoricalPriceCacheService;
+import com.walletradar.testsupport.CounterpartyHintTestFixtures;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -57,6 +59,13 @@ class PortfolioConservationGateTest {
     private PortfolioConservationGate gate;
     private ListAppender<ILoggingEvent> logAppender;
 
+    @BeforeAll
+    static void bindCounterpartyHints() {
+        // Binds ConservationCounterpartyHints (bridge-payout / relay-source / lp-pool sets) that the
+        // gate reads at runtime — same convention as W1 tests binding NetworkNativeAssets.
+        CounterpartyHintTestFixtures.service();
+    }
+
     @BeforeEach
     void setUp() {
         gate = new PortfolioConservationGate(
@@ -65,7 +74,8 @@ class PortfolioConservationGateTest {
                 accountingUniverseRepository,
                 mongoOperations,
                 historicalPriceCacheService,
-                new ReplayToleranceProperties()
+                new ReplayToleranceProperties(),
+                com.walletradar.testsupport.NetworkTestFixtures.registry()
         );
         lenient().when(historicalPriceCacheService.findCanonicalQuote(any(), any(), any()))
                 .thenReturn(Optional.empty());
@@ -115,7 +125,7 @@ class PortfolioConservationGateTest {
                         fundDeposit("0xexternalhotwallet0000000000000000000001", "1000", "hash-a"),
                         fundDeposit("0xexternalhotwallet0000000000000000000002", "500", "hash-b")
                 ))
-                .thenReturn(List.of())  // BYBIT FUND OUT
+                .thenReturn(List.of())  // CEX OUTFLOW
                 .thenReturn(List.of()); // EVM capital flows
         when(borrowLiabilityRepository.findByUniverseId("u1")).thenReturn(List.of());
         when(accountingUniverseRepository.findById("u1")).thenReturn(Optional.of(universeWithFundAndEvm()));
@@ -132,14 +142,13 @@ class PortfolioConservationGateTest {
 
     @Test
     void fundDepositNonStablecoinFromNonMemberCounterpartyExcludedFromNecInflow() {
-        // RC1: MNT, DOGS, SOL etc. received into BYBIT FUND from external addresses are
-        // crypto-to-crypto movements, not fiat capital injections → excluded from NEC inflow.
+        // RC1 is encoded in externalCapitalBoundary: BybitVenueDescriptor.isEligibleInflowAsset
+        // returns false for MNT/SOL/etc., so CexBoundaryContractStamper does NOT stamp INFLOW.
+        // The gate queries by externalCapitalBoundary=INFLOW; non-stablecoin txs are not found.
         when(counterpartyBasisPoolRepository.findByUniverseId("u1")).thenReturn(List.of());
-        NormalizedTransaction mntDeposit = fundDeposit("0x5c30940a4544ca845272fe97c4a27f2ed2cd7b64", "744", "hash-mnt");
-        mntDeposit.getFlows().getFirst().setAssetSymbol("MNT");
         when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
-                .thenReturn(List.of(mntDeposit))
-                .thenReturn(List.of())  // BYBIT FUND OUT
+                .thenReturn(List.of())  // CEX INFLOW (MNT deposit not stamped → not in query result)
+                .thenReturn(List.of())  // CEX OUTFLOW
                 .thenReturn(List.of()); // EVM capital flows
         when(borrowLiabilityRepository.findByUniverseId("u1")).thenReturn(List.of());
         when(accountingUniverseRepository.findById("u1")).thenReturn(Optional.of(universeWithFundAndEvm()));
@@ -161,7 +170,7 @@ class PortfolioConservationGateTest {
                 .thenReturn(List.of(
                         fundDeposit("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f", "900", "hash-own-evm")
                 ))
-                .thenReturn(List.of())  // BYBIT FUND OUT
+                .thenReturn(List.of())  // CEX OUTFLOW
                 .thenReturn(List.of()); // EVM capital flows
         when(borrowLiabilityRepository.findByUniverseId("u1")).thenReturn(List.of());
         when(accountingUniverseRepository.findById("u1")).thenReturn(Optional.of(universeWithFundAndEvm()));
@@ -180,8 +189,8 @@ class PortfolioConservationGateTest {
     void nonFundWalletDepositsExcluded() {
         when(counterpartyBasisPoolRepository.findByUniverseId("u1")).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
-                .thenReturn(List.of())  // BYBIT FUND IN
-                .thenReturn(List.of())  // BYBIT FUND OUT
+                .thenReturn(List.of())  // CEX INFLOW
+                .thenReturn(List.of())  // CEX OUTFLOW
                 .thenReturn(List.of()); // EVM capital flows
         when(borrowLiabilityRepository.findByUniverseId("u1")).thenReturn(List.of());
         when(accountingUniverseRepository.findById("u1")).thenReturn(Optional.of(universeWithFundAndEvm()));
@@ -203,7 +212,7 @@ class PortfolioConservationGateTest {
                         fundDeposit("0xexternalhotwallet0000000000000000000003", "300", "hash-real-in"),
                         fundDeposit("0xparadexdeposit", "900", "hash-venue-in")
                 ))
-                .thenReturn(List.of())  // BYBIT FUND OUT
+                .thenReturn(List.of())  // CEX OUTFLOW
                 .thenReturn(List.of()); // EVM capital flows
         when(borrowLiabilityRepository.findByUniverseId("u1")).thenReturn(List.of());
         when(accountingUniverseRepository.findById("u1")).thenReturn(Optional.of(universeWithVenue()));
@@ -222,8 +231,8 @@ class PortfolioConservationGateTest {
     void netExternalCapitalEqualsInflowMinusOutflow() {
         when(counterpartyBasisPoolRepository.findByUniverseId("u1")).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
-                .thenReturn(List.of(fundDeposit("0xexternalhotwallet0000000000000000000004", "1000", "hash-in")))
-                .thenReturn(List.of(fundWithdraw("0xexternalhotwallet0000000000000000000005", "200", "hash-out")))
+                .thenReturn(List.of(fundDeposit("0xexternalhotwallet0000000000000000000004", "1000", "hash-in")))   // CEX INFLOW
+                .thenReturn(List.of(fundWithdraw("0xexternalhotwallet0000000000000000000005", "200", "hash-out"))) // CEX OUTFLOW
                 .thenReturn(List.of()); // EVM capital flows
         when(borrowLiabilityRepository.findByUniverseId("u1")).thenReturn(List.of());
         when(accountingUniverseRepository.findById("u1")).thenReturn(Optional.of(universeWithFundAndEvm()));
@@ -244,8 +253,8 @@ class PortfolioConservationGateTest {
     void evmExternalTransferInFromNonUniverseCounterpartyAddedToNecInflow() {
         when(counterpartyBasisPoolRepository.findByUniverseId("u1")).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
-                .thenReturn(List.of(fundDeposit("0xexternalhotwallet0000000000000000000006", "500", "hash-fund")))
-                .thenReturn(List.of())  // BYBIT FUND OUT
+                .thenReturn(List.of(fundDeposit("0xexternalhotwallet0000000000000000000006", "500", "hash-fund"))) // CEX INFLOW
+                .thenReturn(List.of())  // CEX OUTFLOW
                 .thenReturn(List.of(   // EVM capital flows
                         evmExternalIn(EVM_WALLET_A, "0xdeadbeefdeadbeefdeadbeefdeadbeef00000001", "700", "hash-evm-in-a"),
                         evmExternalIn(EVM_WALLET_B, "0xdeadbeefdeadbeefdeadbeefdeadbeef00000002", "300", "hash-evm-in-b")
@@ -255,7 +264,7 @@ class PortfolioConservationGateTest {
 
         PortfolioConservationGate.ConservationResult result = gate.evaluate(inputs(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO));
 
-        // BYBIT FUND IN 500 + EVM wallet A 700 + EVM wallet B 300 = 1500
+        // CEX INFLOW 500 + EVM wallet A 700 + EVM wallet B 300 = 1500
         assertThat(result.lifetimeExternalInflowUsd()).isEqualByComparingTo("1500");
         assertThat(result.netExternalCapitalUsd()).isEqualByComparingTo("1500");
     }
@@ -264,8 +273,8 @@ class PortfolioConservationGateTest {
     void evmExternalTransferOutToNonUniverseCounterpartyAddedToNecOutflow() {
         when(counterpartyBasisPoolRepository.findByUniverseId("u1")).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
-                .thenReturn(List.of())  // BYBIT FUND IN
-                .thenReturn(List.of())  // BYBIT FUND OUT
+                .thenReturn(List.of())  // CEX INFLOW
+                .thenReturn(List.of())  // CEX OUTFLOW
                 .thenReturn(List.of(   // EVM capital flows: 400 in, 250 out → net 150
                         evmExternalIn(EVM_WALLET_A, "0xdeadbeefdeadbeefdeadbeefdeadbeef00000003", "400", "hash-evm-in"),
                         evmExternalOut(EVM_WALLET_A, "0xdeadbeefdeadbeefdeadbeefdeadbeef00000004", "250", "hash-evm-out")
@@ -284,8 +293,8 @@ class PortfolioConservationGateTest {
         // EXTERNAL_TRANSFER between two universe EVM wallets must not be double-counted.
         when(counterpartyBasisPoolRepository.findByUniverseId("u1")).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
-                .thenReturn(List.of())  // BYBIT FUND IN
-                .thenReturn(List.of())  // BYBIT FUND OUT
+                .thenReturn(List.of())  // CEX INFLOW
+                .thenReturn(List.of())  // CEX OUTFLOW
                 .thenReturn(List.of(   // EVM capital flows
                         evmExternalIn(EVM_WALLET_A, EVM_WALLET_B, "600", "hash-internal-in")
                 ));
@@ -303,8 +312,8 @@ class PortfolioConservationGateTest {
     void evmBridgeInFromExternalCounterpartyCountsAsNecInflow() {
         when(counterpartyBasisPoolRepository.findByUniverseId("u1")).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
-                .thenReturn(List.of())  // BYBIT FUND IN
-                .thenReturn(List.of())  // BYBIT FUND OUT
+                .thenReturn(List.of())  // CEX INFLOW
+                .thenReturn(List.of())  // CEX OUTFLOW
                 .thenReturn(List.of(   // EVM capital flows
                         evmBridgeIn(EVM_WALLET_A, "0x00000000000000000000000000externalbridge", "800", "hash-bridge-in", null)
                 ));
@@ -324,8 +333,8 @@ class PortfolioConservationGateTest {
         String corridorId = "corridor-xyz-001";
         when(counterpartyBasisPoolRepository.findByUniverseId("u1")).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
-                .thenReturn(List.of())  // BYBIT FUND IN
-                .thenReturn(List.of())  // BYBIT FUND OUT
+                .thenReturn(List.of())  // CEX INFLOW
+                .thenReturn(List.of())  // CEX OUTFLOW
                 .thenReturn(List.of(   // EVM capital flows: paired corridor
                         evmBridgeOut(EVM_WALLET_A, "0x00000000000000000000000000bridgerouter01", "900", "hash-bridge-out", corridorId),
                         evmBridgeIn(EVM_WALLET_B, "0x00000000000000000000000000bridgerouter01", "890", "hash-bridge-in", corridorId)
@@ -344,8 +353,8 @@ class PortfolioConservationGateTest {
         // BRIDGE_OUT with no matching BRIDGE_IN in the universe → genuine external outflow.
         when(counterpartyBasisPoolRepository.findByUniverseId("u1")).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
-                .thenReturn(List.of())  // BYBIT FUND IN
-                .thenReturn(List.of())  // BYBIT FUND OUT
+                .thenReturn(List.of())  // CEX INFLOW
+                .thenReturn(List.of())  // CEX OUTFLOW
                 .thenReturn(List.of(   // EVM capital flows: only BRIDGE_OUT, no matching BRIDGE_IN
                         evmBridgeOut(EVM_WALLET_A, "0x00000000000000000000000000externalchain", "1100", "hash-bridge-out-ext", "orphan-corr-001")
                 ));
@@ -425,8 +434,8 @@ class PortfolioConservationGateTest {
         // assets departing to a multi-output bridge router are a genuine external outflow.
         when(counterpartyBasisPoolRepository.findByUniverseId("u1")).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
-                .thenReturn(List.of())  // BYBIT FUND IN
-                .thenReturn(List.of())  // BYBIT FUND OUT
+                .thenReturn(List.of())  // CEX INFLOW
+                .thenReturn(List.of())  // CEX OUTFLOW
                 .thenReturn(List.of(   // EVM capital flows
                         evmBridgeOutWithMultiCp(EVM_WALLET_A, "1200", "hash-bridge-out-multi", "orphan-multi-001")
                 ));
@@ -443,8 +452,8 @@ class PortfolioConservationGateTest {
         // BRIDGE_IN from a "MULTI" counterparty is ambiguous source — must remain suppressed.
         when(counterpartyBasisPoolRepository.findByUniverseId("u1")).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
-                .thenReturn(List.of())  // BYBIT FUND IN
-                .thenReturn(List.of())  // BYBIT FUND OUT
+                .thenReturn(List.of())  // CEX INFLOW
+                .thenReturn(List.of())  // CEX OUTFLOW
                 .thenReturn(List.of(   // EVM capital flows
                         evmBridgeInWithMultiCp(EVM_WALLET_A, "800", "hash-bridge-in-multi", null)
                 ));
@@ -462,8 +471,8 @@ class PortfolioConservationGateTest {
         // sibling FEE flow carries a unit price for the same ETH-family asset.
         when(counterpartyBasisPoolRepository.findByUniverseId("u1")).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
-                .thenReturn(List.of())  // BYBIT FUND IN
-                .thenReturn(List.of())  // BYBIT FUND OUT
+                .thenReturn(List.of())  // CEX INFLOW
+                .thenReturn(List.of())  // CEX OUTFLOW
                 .thenReturn(List.of(   // EVM capital flows
                         evmBridgeOutEthUnpricedWithFee(EVM_WALLET_A, "2", "2500", "hash-bridge-eth-fee", "orphan-eth-001")
                 ));
@@ -484,8 +493,8 @@ class PortfolioConservationGateTest {
         // valued 1:1 with quantity.
         when(counterpartyBasisPoolRepository.findByUniverseId("u1")).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
-                .thenReturn(List.of())  // BYBIT FUND IN
-                .thenReturn(List.of())  // BYBIT FUND OUT
+                .thenReturn(List.of())  // CEX INFLOW
+                .thenReturn(List.of())  // CEX OUTFLOW
                 .thenReturn(List.of(
                         evmBridgeOutStableSymbol(EVM_WALLET_A, "USD\u20AE0", "493", "hash-usdt0-out", "corr-usdt0-001")
                 ));
@@ -502,8 +511,8 @@ class PortfolioConservationGateTest {
         // vbUSDC is a vault-prefixed USDC; should strip "vb" prefix → USDC → stablecoin.
         when(counterpartyBasisPoolRepository.findByUniverseId("u1")).thenReturn(List.of());
         when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
-                .thenReturn(List.of())  // BYBIT FUND IN
-                .thenReturn(List.of())  // BYBIT FUND OUT
+                .thenReturn(List.of())  // CEX INFLOW
+                .thenReturn(List.of())  // CEX OUTFLOW
                 .thenReturn(List.of(
                         evmExternalOutStableSymbol(EVM_WALLET_A, "vbUSDC", "0xdeadbeefdeadbeefdeadbeefdeadbeef00000010", "21", "hash-vbusdc-out")
                 ));

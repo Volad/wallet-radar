@@ -1,0 +1,23 @@
+{
+  "_comment": "Global selector -> NormalizedTransactionType fallback map used by the selector fallback stage (DirectMethodIdSupport). These are address-agnostic, cross-protocol standard 4-byte selectors (Uniswap/router swaps, Aave/Compound lend-borrow-repay-withdraw, bridge send, GMX custody, reward claim, ERC-20 approve). Selectors that collide across protocol families must be handled by verified family classifiers, NOT added here. Values must be valid NormalizedTransactionType enum names (validated fail-fast at load).",
+  "methodTypes": {
+    "0x7ff36ab5": "SWAP",
+    "0x18cbafe5": "SWAP",
+    "0x38ed1739": "SWAP",
+    "0x414bf389": "SWAP",
+    "0xc04b8d59": "SWAP",
+    "0xdb3e2198": "SWAP",
+    "0x617ba037": "LENDING_DEPOSIT",
+    "0xe8eda9df": "LENDING_DEPOSIT",
+    "0xa415bcad": "BORROW",
+    "0x573ade81": "REPAY",
+    "0x852a12e3": "LENDING_DEPOSIT",
+    "0xdb006a75": "LENDING_WITHDRAW",
+    "0xa5d4d0cc": "BRIDGE_OUT",
+    "0x9fbf10fc": "BRIDGE_OUT",
+    "0xec51b4c9": "PROTOCOL_CUSTODY_DEPOSIT",
+    "0x6eba5d0c": "PROTOCOL_CUSTODY_WITHDRAW",
+    "0xb88a802f": "REWARD_CLAIM",
+    "0x095ea7b3": "APPROVE"
+  }
+}

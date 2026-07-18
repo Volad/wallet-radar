@@ -20,13 +20,15 @@ public final class CanonicalAssetCatalog {
     private static final Set<String> USD_STABLE_SYMBOLS = Set.of(
             "USDC",
             "USDT",
+            "USD",
             "USD₮0",
             "USDT0",
             "USDB",
             "USDBC",
             "USDE",
             "GHO",
-            "AUSD"
+            "AUSD",
+            "DAI"
     );
 
     private static final Set<String> EUR_STABLE_SYMBOLS = Set.of(
@@ -48,8 +50,10 @@ public final class CanonicalAssetCatalog {
             Map.entry("AMANWETH", "ETH"),    // Mantle
             Map.entry("AZKSWETH", "ETH"),    // zkSync
             Map.entry("ASCRWETH", "ETH"),    // Scroll
+            // VBETH is C1 = ETH bridged to Katana; correct to price as ETH. The C2 ETH-derivatives
+            // (CMETH/METH/WEETH/YVVBETH/WSTETH) resolve their OWN market USD price via DefiLlama-by-
+            // contract / Bybit and are intentionally NOT aliased to ETH (ADR-054 §6, plan §7c).
             Map.entry("VBETH", "ETH"),
-            Map.entry("YVVBETH", "ETH"),
             // Aave aToken BTC family — WBTC receipt tokens trade 1:1 with WBTC (= BTC for pricing).
             Map.entry("AWBTC", "BTC"),       // Ethereum V2 (aWBTC)
             Map.entry("AETHWBTC", "BTC"),    // Ethereum V3
@@ -66,14 +70,10 @@ public final class CanonicalAssetCatalog {
             Map.entry("AAVASAVAX", "AVAX"),
             Map.entry("WMNT", "MNT"),
             Map.entry("WXPL", "XPL"),
-            Map.entry("WXPL9", "XPL"),
             Map.entry("USDBC", "USDC"),
             Map.entry("USD₮0", "USDT"),
             Map.entry("USDT0", "USDT"),
             Map.entry("POL", "MATIC"),
-            Map.entry("CMETH", "ETH"),
-            Map.entry("METH", "ETH"),
-            Map.entry("WEETH", "ETH"),
             Map.entry("BBSOL", "SOL"),
             // Aave aToken USD-stable family
             Map.entry("AAVAUSDC", "USDC"),
@@ -122,7 +122,13 @@ public final class CanonicalAssetCatalog {
             Map.entry("USR", "resolv-usr"),
             Map.entry("WSTUSR", "resolv-wstusr"),
             Map.entry("CAKE", "pancakeswap-token"),
-            Map.entry("WSTETH", "staked-ether"),
+            // ADR-054 §6 / plan §7c: corrected LAST-RESORT ids for C2 ETH-derivatives. These are
+            // rarely hit because DefiLlama-by-contract / Bybit resolve first; they exist so the last
+            // resort prices the token itself (not ETH). wstETH is its own market (wrapped-steth).
+            Map.entry("WSTETH", "wrapped-steth"),
+            Map.entry("CMETH", "mantle-restaked-eth"),
+            Map.entry("METH", "mantle-staked-ether"),
+            Map.entry("WEETH", "wrapped-eeth"),
             Map.entry("STETH", "staked-ether"),
             Map.entry("CBETH", "coinbase-wrapped-staked-eth"),
             Map.entry("PENDLE", "pendle"),
@@ -150,7 +156,8 @@ public final class CanonicalAssetCatalog {
     );
 
     private static final Map<String, List<String>> EXCHANGE_MARKET_FALLBACKS = Map.ofEntries(
-            Map.entry("WSTETH", List.of("STETH", "ETH")),
+            // WSTETH intentionally omitted: it must resolve via its own DefiLlama contract price;
+            // a STETH/ETH fallback distorts wstETH toward the ETH peg (ADR-054 §6, plan §7c).
             Map.entry("STETH", List.of("ETH"))
     );
 
@@ -178,15 +185,14 @@ public final class CanonicalAssetCatalog {
      * leg whose continuity carry failed (e.g. Bybit corridor with empty source sub-account).
      *
      * <p>Whitelist is intentionally narrow: only symbols whose alias to a marketable canonical
-     * is unambiguous and where the protocol guarantees ~1:1 economic equivalence (custodial
-     * Bybit-issued CMETH, Mantle native staked ETH METH, EtherFi weETH, Bybit liquid SOL BBSOL).
+     * is unambiguous and where the protocol guarantees ~1:1 economic equivalence (Bybit liquid
+     * SOL BBSOL). ADR-054 §6 / plan §7c: the C2 ETH-derivatives (CMETH/METH/WEETH) were removed —
+     * they now resolve their OWN market USD price via DefiLlama-by-contract / Bybit rather than
+     * inheriting the ETH sibling quote through {@code PeggedNativePriceResolver}.
      * Aave / Morpho aTokens are NOT included because their basis carry is handled by the
      * family-equivalent custody path.</p>
      */
     private static final Set<String> PEGGED_NATIVE_SYMBOLS = Set.of(
-            "CMETH",
-            "METH",
-            "WEETH",
             "BBSOL"
     );
 

@@ -70,6 +70,24 @@ class ReplayTransactionRouterTest {
     }
 
     @Test
+    void routesGmxLpExitSettlementToAsyncLpExitSettlement() {
+        NormalizedTransaction settlement = transaction(NormalizedTransactionType.LP_EXIT_SETTLEMENT);
+        settlement.setCorrelationId("gmx-lp:arbitrum:glv-weth-usdc");
+
+        ReplayRoutingDecision decision = router.route(
+                settlement,
+                ignored -> false,
+                ignored -> false,
+                ignored -> false,
+                ignored -> false,
+                ignored -> LiquidStakingFlowSelection.empty(),
+                ignored -> SimpleFamilyCustodySelection.empty()
+        );
+
+        assertThat(decision.route()).isEqualTo(ReplayRoute.ASYNC_LP_EXIT_SETTLEMENT);
+    }
+
+    @Test
     void fallsBackToGenericWhenNoSpecializedRouteMatches() {
         ReplayRoutingDecision decision = router.route(
                 transaction(NormalizedTransactionType.SWAP),

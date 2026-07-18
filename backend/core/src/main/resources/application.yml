@@ -39,6 +39,8 @@ walletradar:
   integration:
     bybit:
       live-balance-refresh-interval-ms: 300000
+    dzengi:
+      live-balance-refresh-interval-ms: 300000
   lending:
     market-rates:
       startup-refresh-enabled: true
@@ -362,6 +364,10 @@ walletradar:
       enabled: true
       batch-size: 250
       schedule-interval-ms: 90000
+    dzengi:
+      enabled: true
+      batch-size: 250
+      schedule-interval-ms: 90000
     # ADR-044 D5: router-agnostic native-settlement recovery (D2) + clarification trigger (D3).
     # Defaults OFF; enable per-chain (empty `chains` = all EVM) after the reconciliation gate is
     # green on a clean rebuild for the affected chains.
@@ -398,6 +404,11 @@ walletradar:
     validation-batch-size: 250
     schedule-interval-ms: 120000
     retry-delay-seconds: 120
+    # ADR-051: capitalize buy-side CEX commissions into Net AVCO only (Market AVCO = clean price).
+    # Set to empty list to disable globally.
+    net-avco-fee-capitalization-sources:
+      - DZENGI
+      - BYBIT
     # ADR-044 D4: native-pool reconciliation gate severity. WARN emits diagnostics; flip to
     # HARD_FAIL only after a clean rebuild reconciles every in-scope NATIVE:<chain> pool.
     native-pool-reconciliation:
@@ -419,8 +430,8 @@ walletradar:
   pipeline:
     jobs:
       heartbeat-interval-ms: 30000
-      resume-interval-ms: 60000
-    resume-interval-ms: 60000
+      resume-interval-ms: 15000
+    resume-interval-ms: 15000
 
   async:
     backfill-coordinator:
@@ -448,6 +459,11 @@ walletradar:
     pool-size: 4
 
   pricing:
+    latest:
+      refresh-interval-ms: 1800000
+      divergence-tolerance-pct: 0.05
+      stale-after-ms: 5400000
+      registry-prune-ttl-days: 7
     enabled: true
     bridge-out:
       upstream-lookback-hours: 24

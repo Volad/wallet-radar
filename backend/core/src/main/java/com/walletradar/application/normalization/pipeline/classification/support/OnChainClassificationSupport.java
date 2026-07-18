@@ -1,5 +1,6 @@
 package com.walletradar.application.normalization.pipeline.classification.support;
 
+import com.walletradar.application.costbasis.support.AccountingAssetClassificationSupport;
 import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
 import com.walletradar.domain.common.ConfidenceLevel;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
@@ -444,8 +445,8 @@ public final class OnChainClassificationSupport {
         if (leg == null || liquidStakingFamilies.isEmpty()) {
             return false;
         }
-        String continuityIdentity = AccountingAssetFamilySupport.continuityIdentity(leg.assetSymbol(), leg.assetContract());
-        return continuityIdentity != null && liquidStakingFamilies.contains(continuityIdentity);
+        String clusterKey = liquidStakingClusterKey(leg.assetSymbol(), leg.assetContract());
+        return clusterKey != null && liquidStakingFamilies.contains(clusterKey);
     }
 
     private static Set<String> liquidStakingContinuityFamilies(
@@ -463,23 +464,35 @@ public final class OnChainClassificationSupport {
             if (leg == null || leg.fee() || leg.quantityDelta() == null || leg.quantityDelta().signum() == 0) {
                 continue;
             }
-            String continuityIdentity = AccountingAssetFamilySupport.continuityIdentity(leg.assetSymbol(), leg.assetContract());
-            if (continuityIdentity == null || !continuityIdentity.startsWith("FAMILY:")) {
+            String clusterKey = liquidStakingClusterKey(leg.assetSymbol(), leg.assetContract());
+            if (clusterKey == null || clusterKey.isBlank()) {
                 continue;
             }
             if (leg.quantityDelta().signum() > 0) {
-                hasInbound.put(continuityIdentity, true);
+                hasInbound.put(clusterKey, true);
             } else {
-                hasOutbound.put(continuityIdentity, true);
+                hasOutbound.put(clusterKey, true);
             }
         }
         Set<String> matchedFamilies = new LinkedHashSet<>();
-        for (String continuityIdentity : hasInbound.keySet()) {
-            if (Boolean.TRUE.equals(hasOutbound.get(continuityIdentity))) {
-                matchedFamilies.add(continuityIdentity);
+        for (String clusterKey : hasInbound.keySet()) {
+            if (Boolean.TRUE.equals(hasOutbound.get(clusterKey))) {
+                matchedFamilies.add(clusterKey);
             }
         }
         return matchedFamilies;
+    }
+
+    private static String liquidStakingClusterKey(String assetSymbol, String assetContract) {
+        String cluster = AccountingAssetClassificationSupport.normalizationClusterForSymbol(assetSymbol);
+        if (cluster != null) {
+            return cluster;
+        }
+        String continuityIdentity = AccountingAssetFamilySupport.continuityIdentity(assetSymbol, assetContract);
+        if (continuityIdentity != null && continuityIdentity.startsWith("FAMILY:")) {
+            return continuityIdentity;
+        }
+        return null;
     }
 
     private static String functionKey(String functionName) {

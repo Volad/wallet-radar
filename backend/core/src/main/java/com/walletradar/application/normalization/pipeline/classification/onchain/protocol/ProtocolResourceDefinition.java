@@ -1,13 +1,39 @@
 package com.walletradar.application.normalization.pipeline.classification.onchain.protocol;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Protocol-local discovery metadata loaded from classpath resources.
+ *
+ * <p>The optional descriptor-plane fields ({@code semanticClassifier}, {@code lpPresentation},
+ * {@code lending}, {@code valuationSource}) hold protocol-level metadata folded in from the
+ * retired {@code protocol-descriptors/*.json} plane, making {@code protocols/*.json} the single
+ * source of truth. They are canonical metadata for future consumers and are intentionally not
+ * wired into any runtime behavior yet.
+ *
+ * <p>{@code handlerContracts} (Wave W3) holds the per-network set of protocol handler/vault
+ * contract addresses previously hardcoded in Java support classes (e.g.
+ * {@code GmxV2HandlerRegistry}). Keys are network names, values are lowercase {@code 0x}
+ * addresses; membership is consumed network-agnostically via {@link #handlerContractAddresses()}.
+ *
+ * <p>{@code contractSets} (Wave W7) is a generic, key-partitioned set of protocol contract
+ * addresses previously hardcoded in Java (e.g. {@code EtherFiOftBridgeInClassifier},
+ * {@code PancakeMasterChefEnricher}). Unlike {@code handlerContracts}, the keys are meaningful
+ * partitions that MUST stay distinct — either semantic roles (e.g. {@code weethOftTokens},
+ * {@code minterProxies}, where a consumer requires one address in one role and another in a
+ * different role) or network ids (e.g. {@code BSC}, {@code ETHEREUM}, mapping each chain to its
+ * per-network contract). Values are lowercase {@code 0x} addresses; a single partition's set is
+ * read via {@link #contractSet(String)}, or the whole map via the record accessor
+ * {@link #contractSets()}.
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 public record ProtocolResourceDefinition(
         String key,
         String protocol,
@@ -16,7 +42,13 @@ public record ProtocolResourceDefinition(
         List<String> capabilities,
         List<String> families,
         List<String> clarificationHints,
-        ProtocolResourceMarkers markers
+        ProtocolResourceMarkers markers,
+        String semanticClassifier,
+        LpPresentationConfig lpPresentation,
+        LendingConfig lending,
+        ValuationSourceConfig valuationSource,
+        Map<String, List<String>> handlerContracts,
+        Map<String, List<String>> contractSets
 ) {
 
     public ProtocolResourceDefinition {
@@ -25,6 +57,31 @@ public record ProtocolResourceDefinition(
         families = immutableList(families);
         clarificationHints = immutableList(clarificationHints);
         markers = markers == null ? ProtocolResourceMarkers.empty() : markers;
+        handlerContracts = ProtocolResourceMarkers.normalizeMap(handlerContracts);
+        contractSets = ProtocolResourceMarkers.normalizeMap(contractSets);
+    }
+
+    /**
+     * Flattened, network-agnostic set of handler/vault contract addresses (lowercase). Used by the
+     * runtime binder that populates {@code GmxV2HandlerRegistry} and equivalents.
+     */
+    public Set<String> handlerContractAddresses() {
+        return handlerContracts.values().stream()
+                .flatMap(List::stream)
+                .collect(Collectors.toUnmodifiableSet());
+    }
+
+    /**
+     * Normalized (lowercase) set of contract addresses registered under a semantic {@code role}
+     * in {@code contractSets}, or an empty set if the role is absent. Roles are matched
+     * case-insensitively.
+     */
+    public Set<String> contractSet(String role) {
+        String normalizedRole = normalize(role);
+        if (normalizedRole == null) {
+            return Set.of();
+        }
+        return Set.copyOf(contractSets.getOrDefault(normalizedRole, List.of()));
     }
 
     public boolean matchesMethodSelector(String group, String selector) {
@@ -71,6 +128,42 @@ public record ProtocolResourceDefinition(
         return values == null ? List.of() : List.copyOf(values);
     }
 
+    /**
+     * Optional LP-presentation metadata folded in from the retired descriptor plane.
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record LpPresentationConfig(
+            String positionIdentityStrategy,
+            List<String> receiptTokenPatterns
+    ) {
+        public LpPresentationConfig {
+            receiptTokenPatterns = immutableList(receiptTokenPatterns);
+        }
+    }
+
+    /**
+     * Optional lending metadata folded in from the retired descriptor plane.
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record LendingConfig(
+            String marketRateSource,
+            boolean supportsVariableDebt
+    ) {
+    }
+
+    /**
+     * Optional valuation-source metadata folded in from the retired descriptor plane.
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record ValuationSourceConfig(
+            String primarySource,
+            List<String> fallbackSources
+    ) {
+        public ValuationSourceConfig {
+            fallbackSources = immutableList(fallbackSources);
+        }
+    }
+
     private static String normalize(String value) {
         if (value == null || value.isBlank()) {
             return null;
@@ -78,6 +171,7 @@ public record ProtocolResourceDefinition(
         return value.trim().toLowerCase(Locale.ROOT);
     }
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public record ProtocolResourceMarkers(
             Map<String, List<String>> methodSelectors,
             Map<String, List<String>> functionNames,

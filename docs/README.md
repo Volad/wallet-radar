@@ -31,7 +31,7 @@ Global reference for product context, domain model, backend pipeline stages, fro
 |-------|-------|
 | [Pipeline index](pipeline/README.md) | End-to-end sequence diagram |
 | [Backfill](pipeline/backfill/01-overview.md) | Raw acquisition |
-| [Normalization](pipeline/normalization/01-overview.md) | On-chain + Bybit canonicalization |
+| [Normalization](pipeline/normalization/01-overview.md) | On-chain + Bybit + Dzengi canonicalization |
 | [Normalization rules](pipeline/normalization/rules/README.md) | Families, protocols, three-layer contract |
 | [Classification spec](pipeline/normalization/classification-spec.md) | Full classification rules + leg-extraction reference |
 | [Linking](pipeline/linking/01-overview.md) | Correlation, continuity, repairs |
@@ -43,6 +43,18 @@ Global reference for product context, domain model, backend pipeline stages, fro
 > Current Bybit Earn corridor work: see `tasks/bybit-earn-corridor-pairing-implementation-plan.md`
 > and `adr/ADR-041-bybit-earn-corridor-pairing-and-fund-carry-symmetry.md` for the linking contract,
 > same-asset continuity semantics, and the read-model rule that live excess above ledger stays uncovered.
+>
+> Current cost-basis / linking work:
+> - **Cost basis:** `adr/ADR-054-per-asset-avco-for-staked-derivatives.md` — per-asset AVCO pools;
+>   staked/derivative (C2) ETH held out of the `FAMILY:ETH` spot chart; Market/Net lane naming.
+> - **Bybit trading bot:** `adr/ADR-058-bybit-bot-compartment-cost-basis.md` (Accepted) +
+>   `tasks/bybit-bot-execution-basis-phase2-implementation-plan.md` /
+>   `tasks/bybit-bot-internal-transfer-and-phantom-basis-implementation-plan.md` — `BYBIT:<uid>:BOT`
+>   compartment, normalization-time per-asset execution split (NEW-12-R).
+> - **Bridge / GMX linking:** `tasks/bridge-cross-asset-correlation-implementation-plan.md` (NEW-08
+>   cross-asset bridge pairing) and
+>   `tasks/gmx-glv-settlement-carry-and-relay-classification-implementation-plan.md` (NEW-09 GMX GLV/GM
+>   keeper settlement carry; NEW-11 Relay inbound classification).
 
 ### 3. Frontend
 
@@ -93,7 +105,7 @@ Global reference for product context, domain model, backend pipeline stages, fro
 | **Ingestion** | Java subsystem (`com.walletradar.ingestion` adapters) inside backfill; **not** a pipeline stage |
 | **NormalizedTransaction** | Canonical economic document in `normalized_transactions` (no separate `EconomicEvent` entity) |
 | **Portfolio snapshot** | Stage `PORTFOLIO_SNAPSHOT_REFRESH` + collections `on_chain_balances`, `current_price_quotes` + read-time dashboard assembly |
-| **Move basis** | UI name for asset-ledger page; route `/sessions/:sessionId/assets/:familyIdentity` |
+| **Move basis** | UI name for asset-ledger page; route `/move-basis/:familyIdentity` |
 
 ## Pipeline stage order
 
@@ -103,6 +115,7 @@ BACKFILL
   → ON_CHAIN_CLARIFICATION
   → ON_CHAIN_RECLASSIFICATION
   → BYBIT_NORMALIZATION
+  → DZENGI_NORMALIZATION
   → LINKING
   → PRICING
   → ACCOUNTING_REPLAY

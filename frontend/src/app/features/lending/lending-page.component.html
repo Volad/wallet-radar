@@ -96,19 +96,19 @@
           <header class="cycle-summary-bar">
             <div class="summary-stat">
               <span>Total supplied</span>
-              <strong class="mono pos">{{ formatUsd(currentData.summary.totalSuppliedUsd) }}</strong>
+              <strong class="mono pos"><wr-smart-amount [value]="currentData.summary.totalSuppliedUsd" /></strong>
             </div>
             <div class="summary-stat">
               <span>Total borrowed</span>
-              <strong class="mono borrow">{{ formatUsd(currentData.summary.totalBorrowedUsd) }}</strong>
+              <strong class="mono borrow"><wr-smart-amount [value]="currentData.summary.totalBorrowedUsd" /></strong>
             </div>
             <div class="summary-stat">
               <span>Net exposure</span>
-              <strong class="mono">{{ formatUsd(currentData.summary.netExposureUsd) }}</strong>
+              <strong class="mono"><wr-smart-amount [value]="currentData.summary.netExposureUsd" /></strong>
             </div>
             <div class="summary-stat">
               <span>Closed P&L</span>
-              <strong class="mono" [ngClass]="pnlClass(closedPnlTotal())">{{ formatSignedUsd(closedPnlTotal()) }}</strong>
+              <strong class="mono" [ngClass]="pnlClass(closedPnlTotal())"><wr-smart-amount [value]="closedPnlTotal()" mode="usd-signed" /></strong>
             </div>
             <div class="summary-divider"></div>
             <div class="cycle-toggle-row">
@@ -182,11 +182,11 @@
                   <span class="protocol-supply-borrow">
                     <span class="sb-row">
                       <small>Supply</small>
-                      <b class="mono pos">{{ formatUsd(group.supplyUsd) }}</b>
+                      <b class="mono pos"><wr-smart-amount [value]="group.supplyUsd" /></b>
                     </span>
                     <span class="sb-row">
                       <small>Borrow</small>
-                      <b class="mono" [ngClass]="group.borrowUsd > 0 ? 'borrow' : 'muted-value'">{{ group.borrowUsd > 0 ? formatUsd(group.borrowUsd) : '--' }}</b>
+                      <b class="mono" [ngClass]="group.borrowUsd > 0 ? 'borrow' : 'muted-value'">{{ group.borrowUsd > 0 ? '' : '--' }}<wr-smart-amount [value]="group.borrowUsd > 0 ? group.borrowUsd : null" /></b>
                     </span>
                   </span>
 
@@ -213,13 +213,13 @@
                     @if (runningPnl !== null) {
                       <span>
                         <small>Running</small>
-                        <b class="mono" [ngClass]="pnlClass(runningPnl)">{{ formatSignedUsd(runningPnl) }}</b>
+                        <b class="mono" [ngClass]="pnlClass(runningPnl)"><wr-smart-amount [value]="runningPnl" mode="usd-signed" /></b>
                       </span>
                     }
                     @if (closedPnl !== null) {
                       <span>
                         <small>Closed</small>
-                        <b class="mono" [ngClass]="pnlClass(closedPnl)">{{ formatSignedUsd(closedPnl) }}</b>
+                        <b class="mono" [ngClass]="pnlClass(closedPnl)"><wr-smart-amount [value]="closedPnl" mode="usd-signed" /></b>
                       </span>
                     }
                     @if (runningPnl === null && closedPnl === null) {
@@ -251,15 +251,15 @@
                     <div class="net-exposure-strip">
                       <span class="ne-item">
                         <small>Net exposure</small>
-                        <b class="mono">{{ formatUsd(group.netExposureUsd) }}</b>
+                        <b class="mono"><wr-smart-amount [value]="group.netExposureUsd" /></b>
                       </span>
                       <span class="ne-item">
                         <small>Supply</small>
-                        <b class="mono pos">{{ formatUsd(group.supplyUsd) }}</b>
+                        <b class="mono pos"><wr-smart-amount [value]="group.supplyUsd" /></b>
                       </span>
                       <span class="ne-item">
                         <small>Borrow</small>
-                        <b class="mono" [ngClass]="group.borrowUsd > 0 ? 'borrow' : 'muted-value'">{{ group.borrowUsd > 0 ? formatUsd(group.borrowUsd) : '--' }}</b>
+                        <b class="mono" [ngClass]="group.borrowUsd > 0 ? 'borrow' : 'muted-value'">{{ group.borrowUsd > 0 ? '' : '--' }}<wr-smart-amount [value]="group.borrowUsd > 0 ? group.borrowUsd : null" /></b>
                       </span>
                       <span class="ne-divider"></span>
                       <span class="ne-item ne-apy">
@@ -289,13 +289,13 @@
                                   <small>{{ position.underlyingSymbol }}</small>
                                 </span>
                                 <span class="align-right">
-                                  <b class="mono">{{ formatQuantity(position.quantity) }}</b>
+                                  <b class="mono"><wr-smart-amount [value]="position.quantity" mode="qty" /></b>
                                 </span>
                                 <span class="align-right">
-                                  <b class="mono pos">{{ formatUsd(position.valueUsd) }}</b>
+                                  <b class="mono pos"><wr-smart-amount [value]="position.valueUsd" /></b>
                                 </span>
                                 <span class="align-right">
-                                  <b class="mono pos">{{ formatUsd(position.earnedUsd) }}</b>
+                                  <b class="mono pos"><wr-smart-amount [value]="position.earnedUsd" /></b>
                                 </span>
                                 <span class="align-right" [title]="positionMetricTitle(position)">
                                   <b class="mono" [ngClass]="apyClass(position)">{{ formatApy(position) }}</b>
@@ -322,13 +322,13 @@
                                   <small>{{ position.underlyingSymbol }}</small>
                                 </span>
                                 <span class="align-right">
-                                  <b class="mono">{{ formatQuantity(position.quantity) }}</b>
+                                  <b class="mono"><wr-smart-amount [value]="position.quantity" mode="qty" /></b>
                                 </span>
                                 <span class="align-right">
-                                  <b class="mono borrow">{{ formatUsd(position.valueUsd) }}</b>
+                                  <b class="mono borrow"><wr-smart-amount [value]="position.valueUsd" /></b>
                                 </span>
                                 <span class="align-right">
-                                  <b class="mono borrow">{{ formatUsd(position.valueUsd) }}</b>
+                                  <b class="mono borrow"><wr-smart-amount [value]="position.valueUsd" /></b>
                                 </span>
                                 <span class="align-right" [title]="positionMetricTitle(position)">
                                   <b class="mono" [ngClass]="apyClass(position)">{{ formatApy(position) }}</b>
@@ -388,7 +388,7 @@
                             <span class="vault-icon">▣</span>
                             <span>
                               <strong>{{ section.label }}</strong>
-                              <small>Supply <b class="mono pos">{{ formatUsd(section.supplyUsd) }}</b> · Borrow <b class="mono borrow">{{ formatUsd(section.borrowUsd) }}</b></small>
+                              <small>Supply <b class="mono pos"><wr-smart-amount [value]="section.supplyUsd" /></b> · Borrow <b class="mono borrow"><wr-smart-amount [value]="section.borrowUsd" /></b></small>
                             </span>
                             @if (group.status === 'OPEN') {
                               <span class="vault-health mono" [style.color]="healthColor(group)">{{ healthDisplay(group) }}</span>
@@ -442,7 +442,7 @@
 
                             <span class="cycle-net-pnl" [ngClass]="pnlClass(cycle.status === 'OPEN' ? cycle.totalValuation.unrealizedTotalUsdPnl : cycle.totalValuation.totalUsdPnl)">
                               <small>{{ cycle.status === 'OPEN' ? 'Running P&L' : 'Net P&L' }}</small>
-                              <b class="mono">{{ formatSignedUsd(cycle.status === 'OPEN' ? cycle.totalValuation.unrealizedTotalUsdPnl : cycle.totalValuation.totalUsdPnl) }}</b>
+                              <b class="mono"><wr-smart-amount [value]="cycle.status === 'OPEN' ? cycle.totalValuation.unrealizedTotalUsdPnl : cycle.totalValuation.totalUsdPnl" mode="usd-signed" /></b>
                             </span>
 
                             <span class="chevron" [class.open]="isCycleExpanded(cycle)">⌄</span>
@@ -464,17 +464,17 @@
                               <div class="cycle-stats-strip">
                                 <div class="cs-item">
                                   <small>Peak supply</small>
-                                  <b class="mono pos">{{ formatUsd(cycle.peakSupplyUsd) }}</b>
+                                  <b class="mono pos"><wr-smart-amount [value]="cycle.peakSupplyUsd" /></b>
                                 </div>
                                 <div class="cs-item">
                                   <small>Peak borrow</small>
                                   <b class="mono" [ngClass]="cycle.peakBorrowUsd > 0 ? 'borrow' : 'muted-value'">
-                                    {{ cycle.peakBorrowUsd > 0 ? formatUsd(cycle.peakBorrowUsd) : '--' }}
+                                    {{ cycle.peakBorrowUsd > 0 ? '' : '--' }}<wr-smart-amount [value]="cycle.peakBorrowUsd > 0 ? cycle.peakBorrowUsd : null" />
                                   </b>
                                 </div>
                                 <div class="cs-item">
                                   <small>Gas paid</small>
-                                  <b class="mono muted-value">{{ formatUsd(cycle.totalValuation.gasUsd) }}</b>
+                                  <b class="mono muted-value"><wr-smart-amount [value]="cycle.totalValuation.gasUsd" /></b>
                                 </div>
                                 @if (assetPnlLines(cycle).length > 0) {
                                   <span class="cs-divider"></span>
@@ -521,7 +521,7 @@
                                                 <span class="tag" [ngClass]="txItemClass(item.type)">{{ item.label }}</span>
                                                 <strong>{{ item.assetSymbol }}</strong>
                                                 <span class="mono tx-qty">{{ txSignedQuantity(item.type, item.quantity) }} {{ item.assetSymbol }}</span>
-                                                <span class="mono muted">{{ formatUsd(item.valueUsd) }}</span>
+                                                <span class="mono muted"><wr-smart-amount [value]="item.valueUsd" /></span>
                                                 @if (item.txHash !== null) {
                                                   <button type="button" class="tx-copy" [class.copied]="isHashCopied(item.txHash)"
                                                     (click)="$event.stopPropagation(); copyTxHash(item.txHash)"
@@ -551,7 +551,7 @@
                                             <span class="tag" [ngClass]="txItemClass(item.type)">{{ item.label }}</span>
                                             <strong>{{ item.assetSymbol }}</strong>
                                             <span class="mono tx-qty">{{ txSignedQuantity(item.type, item.quantity) }} {{ item.assetSymbol }}</span>
-                                            <span class="mono muted">{{ formatUsd(item.valueUsd) }}</span>
+                                            <span class="mono muted"><wr-smart-amount [value]="item.valueUsd" /></span>
                                             @if (item.txHash !== null) {
                                               <button type="button" class="tx-copy" [class.copied]="isHashCopied(item.txHash)"
                                                 (click)="$event.stopPropagation(); copyTxHash(item.txHash)"

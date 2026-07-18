@@ -253,6 +253,7 @@ public class StatValidationService {
         copy.setUpdatedAt(transaction.getUpdatedAt());
         copy.setConfirmedAt(transaction.getConfirmedAt());
         copy.setClientId(transaction.getClientId());
+        copy.setExternalCapitalBoundary(transaction.getExternalCapitalBoundary());
         copy.setMissingDataReasons(new ArrayList<>(transaction.getMissingDataReasons() == null
                 ? List.of()
                 : transaction.getMissingDataReasons()));
@@ -276,6 +277,7 @@ public class StatValidationService {
             flowCopy.setCounterpartyAddress(flow.getCounterpartyAddress());
             flowCopy.setCounterpartyType(flow.getCounterpartyType());
             flowCopy.setAccountRef(flow.getAccountRef());
+            flowCopy.setAcquisitionFeeUsd(flow.getAcquisitionFeeUsd());
             flows.add(flowCopy);
         }
         copy.setFlows(flows);

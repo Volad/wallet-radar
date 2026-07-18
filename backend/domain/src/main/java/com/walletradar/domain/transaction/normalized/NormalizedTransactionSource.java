@@ -5,5 +5,6 @@ package com.walletradar.domain.transaction.normalized;
  */
 public enum NormalizedTransactionSource {
     ON_CHAIN,
-    BYBIT
+    BYBIT,
+    DZENGI
 }

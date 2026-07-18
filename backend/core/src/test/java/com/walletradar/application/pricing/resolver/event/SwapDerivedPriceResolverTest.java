@@ -196,6 +196,81 @@ class SwapDerivedPriceResolverTest {
         assertThat(result).isPresent();
     }
 
+    // ──────────────────────────────────────────────────────────────
+    // Multi-sell guard tests (hasMultipleDistinctNonStableSellAssets)
+    // ──────────────────────────────────────────────────────────────
+
+    @Test
+    void multiNonStableSell_sellFlowReturnsEmpty() {
+        // Bybit convert: BBSOL + ETH + XRP + USDT → MNT
+        // ETH SELL flow must be skipped so external market price applies.
+        NormalizedTransaction tx = swapTx(List.of(
+                flow("BBSOL", "-0.000030",  NormalizedLegRole.SELL),
+                flow("ETH",   "-0.00000272", NormalizedLegRole.SELL),
+                flow("XRP",   "-0.000050",  NormalizedLegRole.SELL),
+                flow("USDT",  "-0.0001",    NormalizedLegRole.SELL),
+                flow("MNT",   "0.032190",   NormalizedLegRole.BUY)
+        ));
+        Map<Integer, PriceQuote> resolved = Map.of(
+                4, quote(new BigDecimal("0.002107"))
+        );
+
+        // All non-stablecoin SELL flows (BBSOL, ETH, XRP) must return empty
+        assertThat(RESOLVER.resolve(context(tx, 0, resolved))).isEmpty();
+        assertThat(RESOLVER.resolve(context(tx, 1, resolved))).isEmpty();
+        assertThat(RESOLVER.resolve(context(tx, 2, resolved))).isEmpty();
+    }
+
+    @Test
+    void multiNonStableSell_buyFlowNotAffectedByGuard() {
+        // The BUY side (MNT) must NOT be blocked by the multi-sell guard,
+        // so once SELL legs have external prices the BUY can still use SWAP_DERIVED.
+        NormalizedTransaction tx = swapTx(List.of(
+                flow("BBSOL", "-0.000030",   NormalizedLegRole.SELL),
+                flow("ETH",   "-0.00000272", NormalizedLegRole.SELL),
+                flow("XRP",   "-0.000050",   NormalizedLegRole.SELL),
+                flow("MNT",   "0.032190",    NormalizedLegRole.BUY)
+        ));
+        // Suppose external chain priced each SELL:
+        Map<Integer, PriceQuote> resolved = Map.of(
+                0, quote(new BigDecimal("150.00")),   // BBSOL
+                1, quote(new BigDecimal("2500.00")),  // ETH
+                2, quote(new BigDecimal("2.50"))      // XRP
+        );
+        PriceResolutionContext mntCtx = context(tx, 3, resolved);
+
+        Optional<PriceQuote> result = RESOLVER.resolve(mntCtx);
+
+        // MNT BUY should receive a SWAP_DERIVED price aggregated from all SELL values
+        assertThat(result).isPresent();
+        assertThat(result.get().source()).isEqualTo(PriceSource.SWAP_DERIVED);
+    }
+
+    @Test
+    void singleNonStableSellPlusStablecoin_guardDoesNotFire() {
+        // ETH SELL + USDT SELL → BTC BUY: only 1 distinct non-stablecoin SELL (ETH).
+        // Guard must NOT fire; ETH SELL is still priced by SWAP_DERIVED.
+        NormalizedTransaction tx = swapTx(List.of(
+                flow("ETH",  "-0.01",  NormalizedLegRole.SELL),
+                flow("USDT", "-25.00", NormalizedLegRole.SELL),
+                flow("BTC",  "0.0004", NormalizedLegRole.BUY)
+        ));
+        Map<Integer, PriceQuote> resolved = Map.of(
+                2, quote(new BigDecimal("60000.00"))  // BTC buy side priced → derive ETH price
+        );
+        // Actually for ETH SELL we need BTC BUY to be on the counterpart side already resolved.
+        // Let's test from ETH's perspective with BTC priced.
+        Optional<PriceQuote> result = RESOLVER.resolve(context(tx, 0, resolved));
+
+        // Guard did not fire (only 1 non-stablecoin SELL asset); derivation attempted from BTC.
+        // Since BTC is priced and is a counterpart BUY, result may be present.
+        // We only assert guard didn't block — result may be empty if USDT unresolved.
+        // The key test: resolver was not blocked by multi-sell guard.
+        // (asserting isEmpty would mean swap-derived didn't have the BTC price yet in sibling map)
+        // We have BTC at index 2 in resolved, so should produce a price.
+        assertThat(result).isPresent();
+    }
+
     // ──────────────────────────────────────────────
     // Helpers
     // ──────────────────────────────────────────────

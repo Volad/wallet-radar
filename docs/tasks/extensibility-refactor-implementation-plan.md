@@ -16,15 +16,22 @@ Authoritative design: Cursor plan `extensibility_refactor_architecture` (not edi
 | A6 | Gradle subprojects | MVP done — `:backend:domain`, `:backend:canonical`, `:backend:core`, `:backend` launcher ([a6-gradle-modules.md](a6-gradle-modules.md)); vertical app splits pending |
 | A-docs | Documentation consolidation (layered architecture, module pages, extensibility guides, doc-coverage test) | Done |
 
-## Track B — design-ready stubs
+## Track B — extensible venue abstraction (ADR-052)
 
 | Item | Deliverable | Status |
 |------|-------------|--------|
 | B1 | `CexLedgerSource`, `CexVenueProfile`, `CexLedgerEvent` in `application.cex.port` + [add-an-integration](../reference/extensibility/add-an-integration.md) | Done (interfaces + doc) |
 | B2 | `NetworkFamily` in `platform.networks` + [add-a-network](../reference/extensibility/add-a-network.md) (TON/Solana) | Done (interface + doc) |
 | B3 | `AbstractProtocolCapabilityContractTest` kit + [add-a-protocol](../reference/extensibility/add-a-protocol.md) cross-link | Done (test stub + doc) |
+| B4 | `WalletRef` + `WalletDomainKind` domain value objects; `OnChainAddressClassifier`; `CorrelationContract` constants | Done ([ADR-052](../adr/ADR-052-venue-capability-spi-walletref-normalization-boundary-invariant.md)) |
+| B5 | `VenueDescriptor` SPI with four segregated capabilities (`VenueIdentity`, `VenueWalletModel`, `VenueLiveBalanceCapability`, `VenueExternalCapitalPolicy`); `VenueRegistry` ingestion-plane only | Done ([ADR-052](../adr/ADR-052-venue-capability-spi-walletref-normalization-boundary-invariant.md)) |
+| B6 | `BybitVenueDescriptor` + `DzengiVenueDescriptor` concrete implementations | Done |
+| B7 | Normalization stamps venue-neutral boundary contract (`walletDomainKind`, `venueId`, `subAccount`, `umbrellaKey`, `externalCapitalBoundary`, `externalCapitalEligibleUsd`) on `NormalizedTransaction` | Done |
+| B8 | `RoutingCexLiveBalancePort` routes via registry; `AccountingUniverseService` / `PortfolioConservationGate` / dashboard read paths consume neutral fields only | Done |
+| B9 | `ModuleDependencyArchTest` post-normalization invariant + `VenuePrefixGuardTest` literal scan | Done |
+| B10 | Frontend `wallet-ref.util.ts` + all `startsWith` checks replaced; `domain`/`venueId`/`subAccount` in DTOs | Done |
 
-Full wiring (registry beans, TON adapter, multi-CEX) remains **Pending** — stubs are compile-time contracts only.
+Full wiring (TON adapter, additional CEX venues) remains **Pending** — existing venues validate the SPI is complete and correct.
 
 ## Verification (every data-affecting phase)
 

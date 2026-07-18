@@ -104,7 +104,9 @@ class PositionScopedLpExitReplayHandlerTest {
         NormalizedTransaction partialExit = tx(
                 "partial",
                 NormalizedTransactionType.LP_EXIT,
-                flow(NormalizedLegRole.TRANSFER, "USDT", "0x55d398326f99059ff775485246999027b3197955", "5"),
+                // No contract: symbol-based stablecoin check fires in unit-test env
+                // (NetworkStablecoinContracts is unbound, so contract lookup returns empty).
+                flow(NormalizedLegRole.TRANSFER, "USDT", null, "5"),
                 flow(NormalizedLegRole.TRANSFER, "XYZ", "0xxyz", "40")
         );
         handler.apply(partialExit, state);
@@ -211,6 +213,97 @@ class PositionScopedLpExitReplayHandlerTest {
         assertThat(wethPool.getBasisHeldUsd()).isEqualByComparingTo("0");
         // USDC pool also fully drained because requested qty exceeded held qty.
         assertThat(usdcPool.getQtyHeld()).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void dualTokenExitCarriesUsdcPegCapSurplusToVolatileSibling() {
+        // R2: dual-token WETH+USDC exit. USDC pool basis $593.92 exceeds qty×$1 = $322.23, so
+        // $271.69 surplus is injected into the WETH pool. WETH absorbs combined remainder:
+        // $1,460 (own pool) + $271.69 (surplus) = $1,731.69. USDC AVCO stays at $1.000.
+        String corr = "lp-position:base:pancakeswap:72791605";
+        String universe = "R2";
+        ReplayAssetSupport assetSupport = new ReplayAssetSupport();
+        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine(null));
+        ReplaySettlementAllocator settlementAllocator = new ReplaySettlementAllocator(assetSupport, flowSupport);
+        LpReceiptBasisPoolRepository repo = mock(LpReceiptBasisPoolRepository.class);
+        when(repo.findByUniverseId(anyString())).thenReturn(List.of());
+        LpReceiptBasisPoolService poolService = new LpReceiptBasisPoolService(repo);
+        ReplayPendingTransferKeyFactory keyFactory = new ReplayPendingTransferKeyFactory(assetSupport);
+        PositionScopedLpExitReplayHandler handler = new PositionScopedLpExitReplayHandler(
+                assetSupport, flowSupport, settlementAllocator, poolService, keyFactory);
+
+        LinkedHashMap<LpReceiptBasisPoolKey, LpReceiptBasisPool> pools = new LinkedHashMap<>();
+        HashSet<LpReceiptBasisPoolKey> dirty = new HashSet<>();
+        Instant entryTs = Instant.parse("2026-03-25T09:00:00Z");
+
+        // WETH pool: 0.157 qty held, $1460 tax basis
+        LpReceiptBasisPool wethPool = poolService.lookupOrCreate(
+                universe, corr, "wallet-a", NetworkId.BSC,
+                "FAMILY:ETH", "WETH", "0x4200000000000000000000000000000000000006",
+                pools, dirty, entryTs);
+        poolService.deposit(wethPool, new BigDecimal("0.157"), new BigDecimal("1460"), BigDecimal.ZERO);
+
+        // USDC pool: 322.23 qty held, $593.92 tax basis (above $1 peg for the qty)
+        LpReceiptBasisPool usdcPool = poolService.lookupOrCreate(
+                universe, corr, "wallet-a", NetworkId.BSC,
+                "FAMILY:USDC", "USDC", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                pools, dirty, entryTs);
+        poolService.deposit(usdcPool, new BigDecimal("322.23"), new BigDecimal("593.92"), BigDecimal.ZERO);
+
+        List<AssetLedgerPoint> points = new ArrayList<>();
+        ReplayExecutionState state = new ReplayExecutionState(
+                null,
+                new LedgerPointCollector(universe, points, Instant.now()),
+                null, null,
+                new LpReceiptBasisPoolReplayContext(universe, pools, dirty)
+        );
+
+        NormalizedTransaction exit = new NormalizedTransaction();
+        exit.setId("exit-dual");
+        exit.setTxHash("0x72791605exit");
+        exit.setWalletAddress("wallet-a");
+        exit.setNetworkId(NetworkId.BSC);
+        exit.setSource(NormalizedTransactionSource.ON_CHAIN);
+        exit.setType(NormalizedTransactionType.LP_EXIT_FINAL);
+        exit.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        exit.setBlockTimestamp(Instant.parse("2026-03-25T11:00:00Z"));
+        exit.setCorrelationId(corr);
+
+        // USDC is first, WETH second — stable before volatile
+        NormalizedTransaction.Flow usdcIn = new NormalizedTransaction.Flow();
+        usdcIn.setRole(NormalizedLegRole.TRANSFER);
+        usdcIn.setAssetSymbol("USDC");
+        usdcIn.setAssetContract("0x833589fcd6edb6e08f4c7c32d4f71b54bda02913");
+        usdcIn.setQuantityDelta(new BigDecimal("322.23"));
+        usdcIn.setPriceSource(PriceSource.UNKNOWN);
+
+        NormalizedTransaction.Flow wethIn = new NormalizedTransaction.Flow();
+        wethIn.setRole(NormalizedLegRole.TRANSFER);
+        wethIn.setAssetSymbol("WETH");
+        wethIn.setAssetContract("0x4200000000000000000000000000000000000006");
+        wethIn.setQuantityDelta(new BigDecimal("0.157"));
+        wethIn.setPriceSource(PriceSource.UNKNOWN);
+
+        exit.setFlows(List.of(usdcIn, wethIn));
+        handler.apply(exit, state);
+
+        // USDC: peg-capped at $1/unit → $322.23 basis (not $593.92)
+        AssetLedgerPoint usdcPoint = points.stream()
+                .filter(p -> "USDC".equals(p.getAssetSymbol()) && p.getBasisEffect() == AssetLedgerPoint.BasisEffect.REALLOCATE_IN)
+                .reduce((a, b) -> b).orElseThrow();
+        assertThat(usdcPoint.getTotalCostBasisAfterUsd()).isEqualByComparingTo("322.23");
+
+        // WETH: own pool ($1460) + USDC peg-cap surplus ($271.69) = $1731.69
+        AssetLedgerPoint wethPoint = points.stream()
+                .filter(p -> "WETH".equals(p.getAssetSymbol()) && p.getBasisEffect() == AssetLedgerPoint.BasisEffect.REALLOCATE_IN)
+                .reduce((a, b) -> b).orElseThrow();
+        assertThat(wethPoint.getTotalCostBasisAfterUsd()).isEqualByComparingTo("1731.69");
+
+        // All pools fully drained
+        assertThat(usdcPool.getQtyHeld()).isEqualByComparingTo("0");
+        assertThat(usdcPool.getBasisHeldUsd()).isEqualByComparingTo("0");
+        assertThat(wethPool.getQtyHeld()).isEqualByComparingTo("0");
+        assertThat(wethPool.getBasisHeldUsd()).isEqualByComparingTo("0");
     }
 
     @Test

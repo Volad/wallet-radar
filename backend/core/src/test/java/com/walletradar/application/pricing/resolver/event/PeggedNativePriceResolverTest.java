@@ -19,7 +19,32 @@ class PeggedNativePriceResolverTest {
     private final PeggedNativePriceResolver resolver = new PeggedNativePriceResolver();
 
     @Test
-    void reusesSiblingEthQuoteForCmethWithPeggedNativeSource() {
+    void reusesSiblingSolQuoteForBbsolWithPeggedNativeSource() {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        NormalizedTransaction.Flow sol = flow("SOL", "1", NormalizedLegRole.TRANSFER);
+        NormalizedTransaction.Flow bbsol = flow("BBSOL", "1", NormalizedLegRole.TRANSFER);
+        tx.setFlows(java.util.List.of(sol, bbsol));
+
+        PriceQuote solQuote = new PriceQuote(
+                new BigDecimal("172.44"),
+                PriceSource.BINANCE,
+                Instant.parse("2025-02-06T17:07:57Z"),
+                "SOL",
+                "external"
+        );
+        PriceResolutionContext context = new PriceResolutionContext(tx, bbsol, 1, Map.of(0, solQuote));
+
+        Optional<PriceQuote> quote = resolver.resolve(context);
+
+        assertThat(quote).isPresent();
+        assertThat(quote.orElseThrow().unitPriceUsd()).isEqualByComparingTo("172.44");
+        assertThat(quote.orElseThrow().source()).isEqualTo(PriceSource.PEGGED_NATIVE);
+    }
+
+    @Test
+    void skipsC2EthDerivativeNoLongerPeggedToEth() {
+        // ADR-054 §6 / plan §7c: CMETH resolves its OWN market price and is no longer pegged-native,
+        // so it must NOT inherit the sibling ETH quote here.
         NormalizedTransaction tx = new NormalizedTransaction();
         NormalizedTransaction.Flow eth = flow("ETH", "1", NormalizedLegRole.TRANSFER);
         NormalizedTransaction.Flow cmeth = flow("CMETH", "1", NormalizedLegRole.TRANSFER);
@@ -34,11 +59,7 @@ class PeggedNativePriceResolverTest {
         );
         PriceResolutionContext context = new PriceResolutionContext(tx, cmeth, 1, Map.of(0, ethQuote));
 
-        Optional<PriceQuote> quote = resolver.resolve(context);
-
-        assertThat(quote).isPresent();
-        assertThat(quote.orElseThrow().unitPriceUsd()).isEqualByComparingTo("2175.66");
-        assertThat(quote.orElseThrow().source()).isEqualTo(PriceSource.PEGGED_NATIVE);
+        assertThat(resolver.resolve(context)).isEmpty();
     }
 
     @Test

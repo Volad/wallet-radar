@@ -142,6 +142,15 @@ import java.util.List;
         @CompoundIndex(
                 name = "normalized_source_type_excluded_idx",
                 def = "{'source': 1, 'type': 1, 'excludedFromAccounting': 1}"
+        ),
+        // B-ETH-02: LendingLoopOpenClosePairLinkService looks back for the still-open
+        // LENDING_LOOP_OPEN of a given wallet whose type/timestamp precede a
+        // LENDING_LOOP_DECREASE/CLOSE. The lookback is keyed by walletAddress + type with a
+        // blockTimestamp range (protocolName / positionKey are low-selectivity residual filters),
+        // so a leading {walletAddress, type, blockTimestamp} index keeps it out of a full scan.
+        @CompoundIndex(
+                name = "normalized_wallet_type_timestamp_idx",
+                def = "{'walletAddress': 1, 'type': 1, 'blockTimestamp': 1}"
         )
 })
 @NoArgsConstructor
@@ -205,6 +214,17 @@ public class NormalizedTransaction {
     /** Bybit master UID extracted from {@code walletAddress} for venue-internal routing. */
     private String bybitUid;
 
+    // ---- Boundary contract (venue-neutral, stamped at normalization time) ----
+
+    /**
+     * External-capital boundary direction for CEX capital-gate sub-accounts.
+     * {@code null} for on-chain rows and non-capital-gate CEX sub-accounts.
+     * Post-normalization consumers use this field instead of venue-specific predicates.
+     *
+     * @see ExternalCapitalBoundary
+     */
+    private ExternalCapitalBoundary externalCapitalBoundary;
+
     @NoArgsConstructor
     @Getter
     @Setter
@@ -225,5 +245,12 @@ public class NormalizedTransaction {
         private String counterpartyAddress;
         private String counterpartyType;
         private String accountRef;
+        /**
+         * Buy-side venue commission in USD attributed to this BUY leg.
+         * Set at normalization time for CEX venues (Dzengi, Bybit) where fee data is available.
+         * Null / zero means no capitalization — on-chain flows always leave this null.
+         * Consumed by the replay engine to raise Net AVCO without touching Market AVCO.
+         */
+        private BigDecimal acquisitionFeeUsd;
     }
 }

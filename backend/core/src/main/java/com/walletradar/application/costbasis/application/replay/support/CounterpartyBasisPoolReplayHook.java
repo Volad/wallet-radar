@@ -65,6 +65,7 @@ public class CounterpartyBasisPoolReplayHook {
         }
         return type == NormalizedTransactionType.EXTERNAL_TRANSFER_IN
                 || type == NormalizedTransactionType.EXTERNAL_TRANSFER_OUT
+                || type == NormalizedTransactionType.FIAT_EXIT
                 || type == NormalizedTransactionType.INTERNAL_TRANSFER;
     }
 

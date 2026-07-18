@@ -3,7 +3,7 @@ package com.walletradar.application.lending.application;
 import com.walletradar.application.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.application.costbasis.domain.OnChainBalance;
 import com.walletradar.application.pricing.domain.CanonicalAssetCatalog;
-import com.walletradar.application.pricing.persistence.CurrentPriceQuoteDocument;
+import com.walletradar.application.pricing.latest.CurrentPriceReadService;
 import com.walletradar.application.pricing.persistence.HistoricalPriceDocument;
 import com.walletradar.application.session.application.AccountingUniverseService;
 import com.walletradar.domain.session.UserSession;
@@ -68,6 +68,7 @@ public class SessionLendingQueryService {
     private final AccountingUniverseService accountingUniverseService;
     private final MongoOperations mongoOperations;
     private final LendingCycleBuilder cycleBuilder;
+    private final CurrentPriceReadService currentPriceReadService;
     private final Cache<String, SessionLendingView> sessionLendingCache = Caffeine.newBuilder()
             .maximumSize(64)
             .expireAfterWrite(45, TimeUnit.SECONDS)
@@ -274,22 +275,15 @@ public class SessionLendingQueryService {
             return Map.of();
         }
         Map<String, BigDecimal> prices = new LinkedHashMap<>();
+        // Stablecoin pins — handled locally before delegating to the shared read service
         for (String symbol : symbols) {
             if (CanonicalAssetCatalog.isUsdStablecoin(null, null, symbol, null)) {
                 prices.put(LendingAssetSymbolSupport.normalizeSymbol(symbol), BigDecimal.ONE);
             }
         }
-        Query query = Query.query(Criteria.where("symbol").in(symbols))
-                .with(Sort.by(
-                        Sort.Order.desc("pricedAt"),
-                        Sort.Order.desc("fetchedAt")
-                ));
-        for (CurrentPriceQuoteDocument document : mongoOperations.find(query, CurrentPriceQuoteDocument.class)) {
-            if (document.getPriceUsd() == null) {
-                continue;
-            }
-            prices.putIfAbsent(LendingAssetSymbolSupport.normalizeSymbol(document.getSymbol()), document.getPriceUsd());
-        }
+        currentPriceReadService.resolveLatest(symbols).forEach((sym, resolved) ->
+                prices.merge(LendingAssetSymbolSupport.normalizeSymbol(sym), resolved.priceUsd(), (existing, v) -> existing)
+        );
         return prices;
     }
 

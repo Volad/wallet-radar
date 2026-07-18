@@ -89,6 +89,13 @@ db.getCollection("bybit_extracted_events").updateMany(
   }
 );
 
+// Dzengi: reset CONFIRMED → RAW so normalization re-runs on the next pipeline trigger.
+// EXCLUDED rows stay EXCLUDED (they were explicitly skipped by the builder).
+db.getCollection("dzengi_extracted_events").updateMany(
+  {status: "CONFIRMED"},
+  {\$set: {status: "RAW"}}
+);
+
 db.getCollection("normalized_transactions").deleteMany({});
 db.getCollection("asset_ledger_points").deleteMany({});
 db.getCollection("counterparty_basis_pools").deleteMany({});

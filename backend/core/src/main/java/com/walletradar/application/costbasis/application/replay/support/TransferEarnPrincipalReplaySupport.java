@@ -4,6 +4,8 @@ import com.walletradar.canonical.correlation.CorrelationContract;
 import com.walletradar.application.costbasis.application.replay.model.AssetKey;
 import com.walletradar.application.costbasis.application.replay.model.PositionState;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.wallet.WalletDomainKind;
+import com.walletradar.domain.wallet.WalletRef;
 
 import java.math.BigDecimal;
 import java.math.MathContext;
@@ -32,11 +34,16 @@ public final class TransferEarnPrincipalReplaySupport {
                 || !correlationId.startsWith(CorrelationContract.BYBIT_EARN_PRINCIPAL_V1_PREFIX)) {
             return false;
         }
-        return Boolean.TRUE.equals(transaction.getContinuityCandidate())
-                || (transaction.getWalletAddress() != null
-                && transaction.getWalletAddress().toUpperCase(Locale.ROOT).endsWith(":EARN"))
-                || (transaction.getWalletAddress() != null
-                && !transaction.getWalletAddress().toUpperCase(Locale.ROOT).endsWith(":EARN"));
+        if (Boolean.TRUE.equals(transaction.getContinuityCandidate())) {
+            return true;
+        }
+        String walletAddress = transaction.getWalletAddress();
+        if (walletAddress == null) {
+            return false;
+        }
+        WalletRef ref = WalletRef.parse(walletAddress);
+        String sub = ref.subAccount() != null ? ref.subAccount().toUpperCase(Locale.ROOT) : null;
+        return "EARN".equals(sub) || !"EARN".equals(sub);
     }
 
     public static boolean multiSourceEarnPrincipalBundle(NormalizedTransaction transaction) {

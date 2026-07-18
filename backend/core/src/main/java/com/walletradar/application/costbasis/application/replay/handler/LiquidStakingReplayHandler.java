@@ -1,5 +1,6 @@
 package com.walletradar.application.costbasis.application.replay.handler;
 
+import com.walletradar.application.costbasis.support.AccountingAssetClassificationSupport;
 import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
 import com.walletradar.application.costbasis.application.replay.model.AssetKey;
 import com.walletradar.application.costbasis.application.replay.model.CarryTransfer;
@@ -18,6 +19,8 @@ import com.walletradar.application.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.domain.wallet.WalletDomainKind;
+import com.walletradar.domain.wallet.WalletRef;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -82,6 +85,9 @@ public class LiquidStakingReplayHandler {
                     .distinct()
                     .count();
             if (!hasOutbound || !hasInbound || distinctAssets < 2) {
+                continue;
+            }
+            if (!familyFlowsShareCanonicalTokenIdentity(familyFlows)) {
                 continue;
             }
             for (IndexedFlow familyFlow : familyFlows) {
@@ -239,7 +245,11 @@ public class LiquidStakingReplayHandler {
             return replayState.position(accountRefKey);
         }
         String wallet = transaction == null ? null : transaction.getWalletAddress();
-        if (wallet == null || !wallet.trim().toUpperCase(Locale.ROOT).endsWith(":FUND")) {
+        if (wallet == null) {
+            return umbrellaPosition;
+        }
+        WalletRef walletRef = WalletRef.parse(wallet.trim());
+        if (walletRef.domain() != WalletDomainKind.CEX || !"FUND".equalsIgnoreCase(walletRef.subAccount())) {
             return umbrellaPosition;
         }
         if (positionCoversQuantity(umbrellaPosition, outboundQuantity)) {
@@ -276,6 +286,26 @@ public class LiquidStakingReplayHandler {
             return true;
         }
         return qty.compareTo(outboundQuantity.multiply(ReplayToleranceSupport.carrySourceCoverageRatio(), MC)) >= 0;
+    }
+
+    private static boolean familyFlowsShareCanonicalTokenIdentity(List<IndexedFlow> familyFlows) {
+        String sharedIdentity = null;
+        for (IndexedFlow indexedFlow : familyFlows) {
+            NormalizedTransaction.Flow flow = indexedFlow.flow();
+            String identity = AccountingAssetClassificationSupport.canonicalTokenIdentity(
+                    flow.getAssetSymbol(),
+                    flow.getAssetContract()
+            );
+            if (identity == null || identity.isBlank()) {
+                return false;
+            }
+            if (sharedIdentity == null) {
+                sharedIdentity = identity;
+            } else if (!sharedIdentity.equals(identity)) {
+                return false;
+            }
+        }
+        return sharedIdentity != null;
     }
 
     private boolean isPrincipalCandidate(NormalizedTransaction.Flow flow) {

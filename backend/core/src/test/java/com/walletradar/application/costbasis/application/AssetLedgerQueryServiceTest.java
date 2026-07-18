@@ -1,7 +1,12 @@
 package com.walletradar.application.costbasis.application;
 
+import com.walletradar.application.costbasis.breakeven.BreakEvenAttributionLoader;
+import com.walletradar.application.costbasis.breakeven.BreakEvenAttributionService;
+import com.walletradar.application.costbasis.breakeven.BreakEvenCalculator;
 import com.walletradar.application.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.application.costbasis.domain.AssetLedgerPointRepository;
+import com.walletradar.application.costbasis.domain.LpReceiptBasisPool;
+import com.walletradar.application.costbasis.domain.LpReceiptBasisPoolRepository;
 import com.walletradar.application.costbasis.domain.OnChainBalance;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.session.UserSession;
@@ -49,15 +54,22 @@ class AssetLedgerQueryServiceTest {
     private MongoOperations mongoOperations;
     @Mock
     private CexLiveBalancePort cexLiveBalancePort;
+    @Mock
+    private LpReceiptBasisPoolRepository lpReceiptBasisPoolRepository;
 
     private AssetLedgerQueryService service() {
+        BreakEvenAttributionService attributionService =
+                new BreakEvenAttributionService(new BreakEvenAttributionLoader(new com.fasterxml.jackson.databind.ObjectMapper()));
         return new AssetLedgerQueryService(
                 userSessionRepository,
                 assetLedgerPointRepository,
                 normalizedTransactionRepository,
                 accountingUniverseService,
-                new AssetLedgerChartService(),
-                new AssetLedgerReconciliationService(mongoOperations, cexLiveBalancePort)
+                new AssetLedgerChartService(new BlendedExposureAvcoSeriesBuilder()),
+                new AssetLedgerReconciliationService(mongoOperations, cexLiveBalancePort),
+                new LpReceiptBasisPoolService(lpReceiptBasisPoolRepository),
+                new BreakEvenCalculator(attributionService),
+                attributionService
         );
     }
 
@@ -263,7 +275,7 @@ class AssetLedgerQueryServiceTest {
         );
         wrapPoint.setAssetSymbol("WETH");
         wrapPoint.setAssetContract("0x4200000000000000000000000000000000000006");
-        wrapPoint.setAccountingAssetIdentity("0x4200000000000000000000000000000000000006");
+        wrapPoint.setAccountingAssetIdentity("NATIVE:" + NetworkId.BASE.name());
         wrapPoint.setBasisBackedQuantityAfter(BigDecimal.ZERO);
         wrapPoint.setUncoveredQuantityAfter(new BigDecimal("1"));
         wrapPoint.setHasIncompleteHistoryAfter(true);
@@ -1445,6 +1457,277 @@ class AssetLedgerQueryServiceTest {
     }
 
     @Test
+    void sessionFamilyLedgerBlendedSeriesEqualsLiquidWhenNoReallocationCorridor() {
+        // RC-E3 / ADR-061 §F.5: with no basis-conserving REALLOCATE corridor, the blended
+        // total-exposure line is byte-identical to the spot (liquid-pool) line at every event.
+        UserSession session = new UserSession();
+        session.setId("session-blended-zerolp");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("wallet-a");
+        wallet.setNetworks(List.of(NetworkId.BASE));
+        session.setWallets(List.of(wallet));
+
+        AssetLedgerPoint buy1 = point(
+                "1", "wallet-a", NetworkId.BASE, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.ACQUIRE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "1", "1849", "0", "0", "1", "1849"
+        );
+        buy1.setNormalizedType("BUY");
+        AssetLedgerPoint buy2 = point(
+                "2", "wallet-a", NetworkId.BASE, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.ACQUIRE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "1", "3715", "0", "0", "2", "5564"
+        );
+        buy2.setNormalizedType("BUY");
+        buy2.setBlockTimestamp(Instant.parse("2026-04-05T10:01:00Z"));
+
+        when(userSessionRepository.findById("session-blended-zerolp")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-blended-zerolp",
+                List.of("wallet-a"),
+                List.of("wallet-a")
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-blended-zerolp",
+                "FAMILY:ETH"
+        )).thenReturn(List.of(buy1, buy2));
+        when(normalizedTransactionRepository.findAllById(List.of("1", "2")))
+                .thenReturn(List.of(
+                        normalized("1", "Aerodrome", "ETH", "BUY", "1", "1849"),
+                        normalized("2", "Aerodrome", "ETH", "BUY", "1", "3715")
+                ));
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(
+                balance("wallet-a", NetworkId.BASE, "ETH", "2")
+        ));
+
+        AssetLedgerQueryService.SessionAssetLedgerView view = service()
+                .findSessionFamilyLedger("session-blended-zerolp", "FAMILY:ETH")
+                .orElseThrow();
+
+        assertThat(view.timeline()).hasSize(2);
+        for (AssetLedgerQueryService.TimelineEntryView entry : view.timeline()) {
+            assertThat(entry.blendedAvcoAfterUsd()).isEqualByComparingTo(entry.avcoAfterUsd());
+            assertThat(entry.blendedNetAvcoAfterUsd()).isEqualByComparingTo(entry.netAvcoAfterUsd());
+            assertThat(entry.blendedCoveredQuantityAfter()).isEqualByComparingTo(entry.coveredQuantityAfter());
+            assertThat(entry.liquidQuantityAfter()).isEqualByComparingTo(entry.quantityAfter());
+            assertThat(entry.blendedAvcoKind()).isEqualTo("PRIMARY_FLOW");
+        }
+        // Spot line byte-identical to ADR-045 Method B: (1·1849 + 1·3715) / 2 = 2782.
+        assertThat(view.timeline().get(1).avcoAfterUsd()).isEqualByComparingTo("2782");
+        assertThat(view.timeline().get(1).blendedAvcoAfterUsd()).isEqualByComparingTo("2782");
+        // Backend-owned blended before/after chaining (ADR-061 rule 4).
+        assertThat(view.timeline().get(1).blendedAvcoBeforeUsd())
+                .isEqualByComparingTo(view.timeline().get(0).blendedAvcoAfterUsd());
+    }
+
+    @Test
+    void sessionFamilyLedgerBlendedSeriesReincludesParkedEthBasisWhenLiquidDrains() {
+        // RC-E3 / ADR-061 §F.6: ETH bought, then reallocated into an LP receipt corridor
+        // (correlationId set) draining the liquid pool to 0. The spot (liquid) line breaks
+        // (UNAVAILABLE, ADR-031) but the blended line stays defined, re-including the parked basis.
+        UserSession session = new UserSession();
+        session.setId("session-blended-parked");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("wallet-a");
+        wallet.setNetworks(List.of(NetworkId.BASE));
+        session.setWallets(List.of(wallet));
+
+        AssetLedgerPoint buy = point(
+                "1", "wallet-a", NetworkId.BASE, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.ACQUIRE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "1", "2000", "0", "0", "1", "2000"
+        );
+        buy.setNormalizedType("BUY");
+
+        AssetLedgerPoint lpEntryPark = point(
+                "2", "wallet-a", NetworkId.BASE, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.REALLOCATE_OUT, AssetLedgerPoint.LifecycleKind.LP,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "-1", "-2000", "0", "0", "0", "0"
+        );
+        lpEntryPark.setAssetSymbol("WETH");
+        lpEntryPark.setNormalizedType("LP_ENTRY");
+        lpEntryPark.setCorrelationId("lp-position:base:pancakeswap:196975");
+        lpEntryPark.setNetCostBasisDeltaUsd(new BigDecimal("-2000"));
+        lpEntryPark.setBlockTimestamp(Instant.parse("2026-04-05T10:01:00Z"));
+
+        // B-ETH-06: the LP is still OPEN, so it has an open ETH-origin lp_receipt_basis_pools row
+        // (1 ETH / $2000). The generalized terminal clamp reconciles the parked slice to this holding.
+        LpReceiptBasisPool openEthPool = new LpReceiptBasisPool();
+        openEthPool.setId("ACCOUNTING_UNIVERSE:session-blended-parked:lp-position:base:pancakeswap:196975:NATIVE:BASE");
+        openEthPool.setUniverseId("ACCOUNTING_UNIVERSE:session-blended-parked");
+        openEthPool.setLpCorrelationId("lp-position:base:pancakeswap:196975");
+        openEthPool.setWalletAddress("wallet-a");
+        openEthPool.setNetworkId(NetworkId.BASE);
+        openEthPool.setAssetIdentity("NATIVE:BASE");
+        openEthPool.setAssetSymbol("WETH");
+        openEthPool.setAssetContract("NATIVE:BASE");
+        openEthPool.setQtyHeld(new BigDecimal("1"));
+        openEthPool.setUncoveredQtyHeld(BigDecimal.ZERO);
+        openEthPool.setBasisHeldUsd(new BigDecimal("2000"));
+        openEthPool.setNetBasisHeldUsd(new BigDecimal("2000"));
+
+        when(userSessionRepository.findById("session-blended-parked")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-blended-parked",
+                List.of("wallet-a"),
+                List.of("wallet-a")
+        ));
+        when(lpReceiptBasisPoolRepository.findByUniverseId("ACCOUNTING_UNIVERSE:session-blended-parked"))
+                .thenReturn(List.of(openEthPool));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-blended-parked",
+                "FAMILY:ETH"
+        )).thenReturn(List.of(buy, lpEntryPark));
+        when(normalizedTransactionRepository.findAllById(List.of("1", "2")))
+                .thenReturn(List.of(
+                        normalized("1", "Coinbase", "ETH", "BUY", "1", "2000"),
+                        normalized("2", "PancakeSwap", "WETH", "TRANSFER", "-1", null)
+                ));
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(
+                balance("wallet-a", NetworkId.BASE, "ETH", "0")
+        ));
+
+        AssetLedgerQueryService.SessionAssetLedgerView view = service()
+                .findSessionFamilyLedger("session-blended-parked", "FAMILY:ETH")
+                .orElseThrow();
+
+        assertThat(view.timeline()).hasSize(2);
+        AssetLedgerQueryService.TimelineEntryView parked = view.timeline().get(1);
+
+        // Spot (liquid) line breaks — byte-identical to pre-change ADR-045 behavior.
+        assertThat(parked.avcoAfterUsd()).isNull();
+        assertThat(parked.netAvcoAfterUsd()).isNull();
+        assertThat(parked.avcoKind()).isEqualTo("UNAVAILABLE");
+        assertThat(parked.liquidQuantityAfter()).isEqualByComparingTo("0");
+
+        // Blended line stays defined, re-including the ETH-origin parked basis.
+        assertThat(parked.blendedAvcoKind()).isEqualTo("PRIMARY_FLOW");
+        assertThat(parked.blendedAvcoAfterUsd()).isEqualByComparingTo("2000");
+        assertThat(parked.blendedNetAvcoAfterUsd()).isEqualByComparingTo("2000");
+        assertThat(parked.blendedCoveredQuantityAfter()).isEqualByComparingTo("1");
+        // Blended covers more than the (drained) liquid quantity.
+        assertThat(parked.blendedCoveredQuantityAfter()).isGreaterThan(parked.liquidQuantityAfter());
+        assertThat(parked.blendedAvcoBeforeUsd())
+                .isEqualByComparingTo(view.timeline().get(0).blendedAvcoAfterUsd());
+    }
+
+    @Test
+    void sessionFamilyLedgerBlendedParkedTerminalReconcilesToLpReceiptBasisPoolsOnCrossAssetExit() {
+        // RC-E3 / B-ETH-05 (ADR-061 amendment): a cross-asset LP exit (ETH→USDC) returns nothing to
+        // FAMILY:ETH — the receipt burn is a REALLOCATE_OUT on FAMILY:LP_RECEIPT, so the parked slice
+        // would never close (over-park) under the pre-fix REALLOCATE-only reconstruction. The receipt-
+        // burn clamp + terminal exactness clamp reconcile the parked terminal to the still-open
+        // lp_receipt_basis_pools ETH-origin holding (0.4 ETH / $800 mkt / $780 net), NOT the over-park
+        // 1 ETH / $2000.
+        UserSession session = new UserSession();
+        session.setId("session-blended-crossexit");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("wallet-a");
+        wallet.setNetworks(List.of(NetworkId.BASE));
+        session.setWallets(List.of(wallet));
+
+        AssetLedgerPoint buy = point(
+                "1", "wallet-a", NetworkId.BASE, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.ACQUIRE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "1", "2000", "0", "0", "1", "2000"
+        );
+        buy.setNormalizedType("BUY");
+
+        AssetLedgerPoint lpEntryPark = point(
+                "2", "wallet-a", NetworkId.BASE, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.REALLOCATE_OUT, AssetLedgerPoint.LifecycleKind.LP,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "-1", "-2000", "0", "0", "0", "0"
+        );
+        lpEntryPark.setAssetSymbol("WETH");
+        lpEntryPark.setNormalizedType("LP_ENTRY");
+        lpEntryPark.setCorrelationId("lp-position:base:uniswap:cross");
+        lpEntryPark.setNetCostBasisDeltaUsd(new BigDecimal("-2000"));
+        lpEntryPark.setBlockTimestamp(Instant.parse("2026-04-05T10:01:00Z"));
+
+        // Cross-asset receipt burn: 60% of the LP receipt burned (return landed on USDC, not ETH).
+        // This transaction never appears on the FAMILY:ETH timeline.
+        AssetLedgerPoint receiptBurn = new AssetLedgerPoint();
+        receiptBurn.setId("3:wallet-a:BASE");
+        receiptBurn.setWalletAddress("wallet-a");
+        receiptBurn.setNetworkId(NetworkId.BASE);
+        receiptBurn.setAccountingFamilyIdentity("FAMILY:LP_RECEIPT");
+        receiptBurn.setAccountingAssetIdentity("SYMBOL:WETH-USDC-LP");
+        receiptBurn.setAssetSymbol("WETH-USDC-LP");
+        receiptBurn.setAssetContract("0xlp");
+        receiptBurn.setNormalizedTransactionId("3");
+        receiptBurn.setTxHash("0x3");
+        receiptBurn.setCorrelationId("lp-position:base:uniswap:cross");
+        receiptBurn.setBlockTimestamp(Instant.parse("2026-04-05T10:02:00Z"));
+        receiptBurn.setTransactionIndex(0);
+        receiptBurn.setReplaySequence(3L);
+        receiptBurn.setNormalizedType("LP_EXIT_PARTIAL");
+        receiptBurn.setBasisEffect(AssetLedgerPoint.BasisEffect.REALLOCATE_OUT);
+        receiptBurn.setQuantityBefore(new BigDecimal("1"));
+        receiptBurn.setQuantityAfter(new BigDecimal("0.4"));
+        receiptBurn.setQuantityDelta(new BigDecimal("-0.6"));
+
+        LpReceiptBasisPool ethOriginPool = new LpReceiptBasisPool();
+        ethOriginPool.setId("ACCOUNTING_UNIVERSE:session-blended-crossexit:lp-position:base:uniswap:cross:NATIVE:BASE");
+        ethOriginPool.setUniverseId("ACCOUNTING_UNIVERSE:session-blended-crossexit");
+        ethOriginPool.setLpCorrelationId("lp-position:base:uniswap:cross");
+        ethOriginPool.setWalletAddress("wallet-a");
+        ethOriginPool.setNetworkId(NetworkId.BASE);
+        ethOriginPool.setAssetIdentity("NATIVE:BASE");
+        ethOriginPool.setAssetSymbol("WETH");
+        ethOriginPool.setAssetContract("NATIVE:BASE");
+        ethOriginPool.setQtyHeld(new BigDecimal("0.4"));
+        ethOriginPool.setUncoveredQtyHeld(BigDecimal.ZERO);
+        ethOriginPool.setBasisHeldUsd(new BigDecimal("800"));
+        ethOriginPool.setNetBasisHeldUsd(new BigDecimal("780"));
+
+        when(userSessionRepository.findById("session-blended-crossexit")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-blended-crossexit",
+                List.of("wallet-a"),
+                List.of("wallet-a")
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-blended-crossexit",
+                "FAMILY:ETH"
+        )).thenReturn(List.of(buy, lpEntryPark));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-blended-crossexit",
+                "FAMILY:LP_RECEIPT"
+        )).thenReturn(List.of(receiptBurn));
+        when(lpReceiptBasisPoolRepository.findByUniverseId("ACCOUNTING_UNIVERSE:session-blended-crossexit"))
+                .thenReturn(List.of(ethOriginPool));
+        when(normalizedTransactionRepository.findAllById(List.of("1", "2")))
+                .thenReturn(List.of(
+                        normalized("1", "Coinbase", "ETH", "BUY", "1", "2000"),
+                        normalized("2", "Uniswap", "WETH", "TRANSFER", "-1", null)
+                ));
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(
+                balance("wallet-a", NetworkId.BASE, "ETH", "0")
+        ));
+
+        AssetLedgerQueryService.SessionAssetLedgerView view = service()
+                .findSessionFamilyLedger("session-blended-crossexit", "FAMILY:ETH")
+                .orElseThrow();
+
+        assertThat(view.timeline()).hasSize(2);
+        AssetLedgerQueryService.TimelineEntryView terminal = view.timeline().get(1);
+
+        // Liquid line broke (pool drained). Blended re-includes ONLY the still-open ETH-origin pool
+        // holding — reconciled to lp_receipt_basis_pools, not the over-parked full 1 ETH / $2000.
+        assertThat(terminal.avcoKind()).isEqualTo("UNAVAILABLE");
+        assertThat(terminal.blendedAvcoKind()).isEqualTo("PRIMARY_FLOW");
+        assertThat(terminal.blendedCoveredQuantityAfter()).isEqualByComparingTo("0.4");
+        assertThat(terminal.blendedAvcoAfterUsd()).isEqualByComparingTo("2000");
+        assertThat(terminal.blendedNetAvcoAfterUsd()).isEqualByComparingTo("1950");
+    }
+
+    @Test
     void sessionFamilyLedgerTimelineDustGasOnlyEventDoesNotMoveSeries() {
         // AC-1a: a GAS_ONLY dust event (|qtyΔ| < 0.001) with unchanged bucket AVCO leaves the
         // covered-weighted family series essentially flat.
@@ -1582,6 +1865,126 @@ class AssetLedgerQueryServiceTest {
         assertThat(view.timeline())
                 .extracting(AssetLedgerQueryService.TimelineEntryView::avcoKind)
                 .doesNotContain("FAMILY_ROLLUP");
+    }
+
+    @Test
+    void sessionFamilyLedgerEffectiveCostSeriesTerminalReconcilesWithScalarBreakEven() {
+        // ADR-062 §3: FAMILY:ETH parent (1 ETH @ $2000 basis, no realized P&L of its own) with an
+        // attributed cmETH child (FAMILY:METH) that banked +$500 Market-lane realized profit. The
+        // scalar header credits the child's $500 to ETH → effective basis $1500 → break-even $1500/ETH.
+        // The chart series weaves the child's realized P&L chronologically, so its terminal effective
+        // cost must equal the scalar header break-even exactly.
+        UserSession session = new UserSession();
+        session.setId("session-be");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("wallet-a");
+        wallet.setNetworks(List.of(NetworkId.BASE));
+        session.setWallets(List.of(wallet));
+
+        AssetLedgerPoint ethBuy = point(
+                "1", "wallet-a", NetworkId.BASE, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.ACQUIRE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "1", "2000", "0", "0", "1", "2000"
+        );
+        ethBuy.setNormalizedType("BUY");
+        ethBuy.setBlockTimestamp(Instant.parse("2026-04-05T10:00:00Z"));
+
+        AssetLedgerPoint methSell = point(
+                "5", "wallet-a", NetworkId.BASE, "FAMILY:METH",
+                AssetLedgerPoint.BasisEffect.DISPOSE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "-2", "-5000", "500", "0", "0", "0"
+        );
+        methSell.setAssetSymbol("CMETH");
+        methSell.setFamilyDisplaySymbol("CMETH");
+        methSell.setNormalizedType("SELL");
+        methSell.setNetRealisedPnlDeltaUsd(new BigDecimal("500"));
+        methSell.setBlockTimestamp(Instant.parse("2026-04-05T10:05:00Z"));
+
+        when(userSessionRepository.findById("session-be")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-be",
+                List.of("wallet-a"),
+                List.of("wallet-a")
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-be", "FAMILY:ETH"
+        )).thenReturn(List.of(ethBuy));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-be", "FAMILY:METH"
+        )).thenReturn(List.of(methSell));
+        when(normalizedTransactionRepository.findAllById(List.of("1")))
+                .thenReturn(List.of(normalized("1", "Coinbase", "ETH", "BUY", "1", "2000")));
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(
+                balance("wallet-a", NetworkId.BASE, "ETH", "1")
+        ));
+
+        AssetLedgerQueryService.SessionAssetLedgerView view = service()
+                .findSessionFamilyLedger("session-be", "FAMILY:ETH")
+                .orElseThrow();
+
+        assertThat(view.current().breakEvenUsd()).isEqualByComparingTo("1500");
+        assertThat(view.timeline()).isNotEmpty();
+        AssetLedgerQueryService.TimelineEntryView terminal = view.timeline().get(view.timeline().size() - 1);
+        assertThat(terminal.effectiveCostAfterUsd()).isEqualByComparingTo("1500");
+        assertThat(terminal.effectiveCostAfterUsd()).isEqualByComparingTo(view.current().breakEvenUsd());
+    }
+
+    @Test
+    void sessionFamilyLedgerFamilyMemberSymbolsIncludeViewedFamilyAndAttributedChildren() {
+        // ADR-062 §3 header hint: distinct member symbols present in the ledger for FAMILY:ETH and its
+        // attributed children (viewed family's own symbols first, then children's).
+        UserSession session = new UserSession();
+        session.setId("session-members");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("wallet-a");
+        wallet.setNetworks(List.of(NetworkId.BASE));
+        session.setWallets(List.of(wallet));
+
+        AssetLedgerPoint ethBuy = point(
+                "1", "wallet-a", NetworkId.BASE, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.ACQUIRE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "1", "2000", "0", "0", "1", "2000"
+        );
+        ethBuy.setAssetSymbol("WETH");
+        ethBuy.setFamilyDisplaySymbol("ETH");
+        ethBuy.setNormalizedType("BUY");
+
+        AssetLedgerPoint methPoint = point(
+                "5", "wallet-a", NetworkId.BASE, "FAMILY:METH",
+                AssetLedgerPoint.BasisEffect.DISPOSE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "-1", "-2500", "300", "0", "0", "0"
+        );
+        methPoint.setAssetSymbol("CMETH");
+        methPoint.setFamilyDisplaySymbol("CMETH");
+        methPoint.setNetRealisedPnlDeltaUsd(new BigDecimal("300"));
+
+        when(userSessionRepository.findById("session-members")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-members",
+                List.of("wallet-a"),
+                List.of("wallet-a")
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-members", "FAMILY:ETH"
+        )).thenReturn(List.of(ethBuy));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-members", "FAMILY:METH"
+        )).thenReturn(List.of(methPoint));
+        when(normalizedTransactionRepository.findAllById(List.of("1")))
+                .thenReturn(List.of(normalized("1", "Coinbase", "WETH", "BUY", "1", "2000")));
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(
+                balance("wallet-a", NetworkId.BASE, "ETH", "1")
+        ));
+
+        AssetLedgerQueryService.SessionAssetLedgerView view = service()
+                .findSessionFamilyLedger("session-members", "FAMILY:ETH")
+                .orElseThrow();
+
+        assertThat(view.current().familyMemberSymbols()).containsExactly("WETH", "CMETH");
     }
 
     private UserSession bybitSession(String sessionId, String uid) {

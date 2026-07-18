@@ -39,6 +39,15 @@ public class SwapDerivedPriceResolver implements EventLocalPriceResolver {
         if (isLeverageCollateralLeg(context)) {
             return Optional.empty();
         }
+        // Guard: for SELL flows in a multi-asset sell swap, SWAP_DERIVED incorrectly assigns the
+        // full buy-side value to each sell flow independently (e.g. 4-asset convert → MNT gives
+        // ETH a price of $24k because it divides the entire MNT value by tiny ETH qty). When ≥2
+        // distinct non-stablecoin SELL assets exist, defer to the standard external pricing chain
+        // so each SELL gets a market price; the BUY side then correctly aggregates their values.
+        if (context.flow().getRole() == NormalizedLegRole.SELL
+                && hasMultipleDistinctNonStableSellAssets(context)) {
+            return Optional.empty();
+        }
         // Guard: bail if any counterpart-role sibling shares the same canonical symbol.
         // Handles circular / wash-trade cases (e.g. ETH BUY priced against ETH SELL).
         // Same-direction legs sharing the same canonical (e.g. two aArbWBTC BUY legs from
@@ -144,6 +153,26 @@ public class SwapDerivedPriceResolver implements EventLocalPriceResolver {
             }
         }
         return false;
+    }
+
+    /**
+     * Returns {@code true} when the transaction contains ≥2 distinct non-stablecoin SELL assets
+     * (excluding FEE flows and zero-quantity flows). In such cases each SELL flow must be priced
+     * by the external market chain; SWAP_DERIVED would otherwise attribute the full buy-side value
+     * to every SELL independently, producing wildly inflated unit prices for small-quantity legs.
+     */
+    private boolean hasMultipleDistinctNonStableSellAssets(PriceResolutionContext context) {
+        long distinctCount = context.flows().stream()
+                .filter(f -> f != null
+                        && f.getRole() == NormalizedLegRole.SELL
+                        && f.getQuantityDelta() != null
+                        && f.getQuantityDelta().signum() != 0
+                        && f.getAssetSymbol() != null
+                        && !CanonicalAssetCatalog.isUsdStablecoinBySymbol(f.getAssetSymbol()))
+                .map(f -> f.getAssetSymbol().toLowerCase(java.util.Locale.ROOT))
+                .distinct()
+                .count();
+        return distinctCount >= 2;
     }
 
     /** Sums the absolute quantities of all same-direction same-exact-symbol flows (including

@@ -1,5 +1,6 @@
 package com.walletradar.application.cex.normalization.venue.bybit;
 
+import com.walletradar.application.costbasis.support.AccountingAssetClassificationSupport;
 import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
 import com.walletradar.domain.common.Decimal128Support;
 import com.walletradar.domain.common.PriceSource;
@@ -15,14 +16,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 
 @Component
 class BybitCanonicalMappedRowSupport {
-
-    private static final Set<String> STABLECOIN_SYMBOLS = Set.of(
-            "USDT", "USDC", "USDE", "USDS", "USDD", "DAI", "FDUSD", "PYUSD", "TUSD", "USD1"
-    );
 
     record TradeLeg(NormalizedLegRole role) {
     }
@@ -227,6 +223,12 @@ class BybitCanonicalMappedRowSupport {
     }
 
     boolean sameContinuityFamily(ExternalLedgerRaw left, ExternalLedgerRaw right) {
+        if (AccountingAssetClassificationSupport.sharesLiquidStakingNormalizationCluster(
+                left == null ? null : left.getAssetSymbol(),
+                right == null ? null : right.getAssetSymbol()
+        )) {
+            return true;
+        }
         String leftFamily = AccountingAssetFamilySupport.continuityIdentity(left == null ? null : left.getAssetSymbol(), null);
         String rightFamily = AccountingAssetFamilySupport.continuityIdentity(right == null ? null : right.getAssetSymbol(), null);
         return leftFamily != null && leftFamily.startsWith("FAMILY:") && leftFamily.equals(rightFamily);
@@ -258,6 +260,40 @@ class BybitCanonicalMappedRowSupport {
         return leg.getQuantityRaw().add(fee);
     }
 
+    /**
+     * Computes the USD equivalent of the buy-side commission charged on a Bybit spot BUY leg.
+     *
+     * <p>Bybit charges the taker fee in the received (base) asset. The fee is already netted into
+     * the received quantity via {@link #netExecutionLegQuantity}. This method converts the raw fee
+     * back to USD so the replay engine can add it to Net AVCO without affecting Market AVCO.
+     *
+     * <ul>
+     *   <li>If the base asset is a USD-stablecoin, effective price = 1.0.</li>
+     *   <li>Otherwise, effective price = execution fill price (falls back to {@code executionPrice}).</li>
+     * </ul>
+     *
+     * @return non-null positive value if a fee can be computed, {@code null} otherwise
+     */
+    BigDecimal acquisitionFeeUsd(
+            ExternalLedgerRaw buyRow,
+            FlowPricing buyPricing,
+            BigDecimal executionPrice
+    ) {
+        if (buyRow == null || buyRow.getFeePaid() == null || buyRow.getFeePaid().signum() == 0) {
+            return null;
+        }
+        BigDecimal feeAbs = buyRow.getFeePaid().abs();
+        // Use the already-resolved unit price; fall back to raw execution price for non-stable pairs
+        // where buyPricing may be null/empty (SWAP_DERIVED path).
+        BigDecimal unitPrice = buyPricing != null && buyPricing.unitPriceUsd() != null
+                ? buyPricing.unitPriceUsd()
+                : (isStablecoin(buyRow.getAssetSymbol()) ? BigDecimal.ONE : executionPrice);
+        if (unitPrice == null || unitPrice.signum() <= 0) {
+            return null;
+        }
+        return feeAbs.multiply(unitPrice);
+    }
+
     BigDecimal signedQuantity(ExternalLedgerRaw row) {
         if (row == null || row.getQuantityRaw() == null) {
             return null;
@@ -279,10 +315,7 @@ class BybitCanonicalMappedRowSupport {
     }
 
     boolean isStablecoin(String assetSymbol) {
-        if (assetSymbol == null || assetSymbol.isBlank()) {
-            return false;
-        }
-        return STABLECOIN_SYMBOLS.contains(assetSymbol.trim().toUpperCase(Locale.ROOT));
+        return BybitStablecoinPegSymbols.isPegged(assetSymbol);
     }
 
     String normalize(String value) {

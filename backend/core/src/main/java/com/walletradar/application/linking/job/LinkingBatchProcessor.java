@@ -21,11 +21,16 @@ import com.walletradar.application.cex.normalization.venue.bybit.BybitStreamAuth
 import com.walletradar.application.linking.pipeline.clarification.AddressPoisoningDetector;
 import com.walletradar.application.linking.pipeline.clarification.EtherFiOftBridgeInClassifier;
 import com.walletradar.application.linking.pipeline.clarification.GmxEntryRequestLinkService;
+import com.walletradar.application.linking.pipeline.clarification.GmxExecutionFeeRefundBasisNeutralService;
 import com.walletradar.application.linking.pipeline.clarification.GmxExitSettlementLinkService;
 import com.walletradar.application.linking.pipeline.clarification.GmxV2RefundClassifier;
+import com.walletradar.application.linking.pipeline.clarification.GmxWithdrawalSettlementLinkService;
 import com.walletradar.application.linking.pipeline.clarification.KnownBridgeRouterExternalTypeCorrectionService;
+import com.walletradar.application.linking.pipeline.clarification.LendingLoopOpenClosePairLinkService;
 import com.walletradar.application.linking.pipeline.clarification.NftMintRetagger;
 import com.walletradar.application.linking.pipeline.clarification.ProtocolAttributionClassifier;
+import com.walletradar.application.linking.pipeline.clarification.AaveVariableDebtTokenTagger;
+import com.walletradar.application.linking.pipeline.clarification.EulerEvkDebtTokenTagger;
 import com.walletradar.application.linking.pipeline.clarification.ScamDisperseClonePhishingTagger;
 import com.walletradar.application.linking.pipeline.clarification.SpoofTokenDetector;
 import com.walletradar.application.linking.pipeline.clarification.TurtleVaultBurnRepairService;
@@ -87,14 +92,19 @@ class LinkingBatchProcessor {
     private final MultiCounterpartyCorrectionService multiCounterpartyCorrectionService;
     private final CrossNetworkBridgePairFallbackService crossNetworkBridgePairFallbackService;
     private final TurtleVaultBurnRepairService turtleVaultBurnRepairService;
+    private final LendingLoopOpenClosePairLinkService lendingLoopOpenClosePairLinkService;
 
     private final ProtocolAttributionClassifier protocolAttributionClassifier;
     private final AddressPoisoningDetector addressPoisoningDetector;
     private final SpoofTokenDetector spoofTokenDetector;
     private final ScamDisperseClonePhishingTagger scamDisperseClonePhishingTagger;
+    private final AaveVariableDebtTokenTagger aaveVariableDebtTokenTagger;
+    private final EulerEvkDebtTokenTagger eulerEvkDebtTokenTagger;
     private final GmxExitSettlementLinkService gmxExitSettlementLinkService;
     private final GmxEntryRequestLinkService gmxEntryRequestLinkService;
     private final GmxV2RefundClassifier gmxV2RefundClassifier;
+    private final GmxWithdrawalSettlementLinkService gmxWithdrawalSettlementLinkService;
+    private final GmxExecutionFeeRefundBasisNeutralService gmxExecutionFeeRefundBasisNeutralService;
     private final EtherFiOftBridgeInClassifier etherFiOftBridgeInClassifier;
     private final NftMintRetagger nftMintRetagger;
 
@@ -218,9 +228,35 @@ class LinkingBatchProcessor {
                 () -> scamDisperseClonePhishingTagger.tagPhishingOutbounds(batchSize));
         progressHeartbeat.run();
 
+        // BLOCKER-9 / ADR-057: exclude Euler Finance v2 EVK internal debt-token inflows
+        processed += timedPass("eulerEvkDebtTokenTagger",
+                () -> eulerEvkDebtTokenTagger.tagDebtTokenInflows(batchSize));
+        progressHeartbeat.run();
+
+        // RC-3: exclude Aave V3 internal variable-debt token flows on AVALANCHE
+        processed += timedPass("aaveVariableDebtTokenTagger",
+                () -> aaveVariableDebtTokenTagger.tagDebtTokenFlows(batchSize));
+        progressHeartbeat.run();
+
         // R11 Fix 7: stamp GMX V2 execution-fee refunds
         processed += timedPass("gmxV2RefundClassifier",
                 () -> gmxV2RefundClassifier.classifyGmxRefunds(batchSize));
+        progressHeartbeat.run();
+
+        // NEW-09: pair two-step GMX GLV/GM withdrawal settlements (fee-refund-stamped native
+        // inflows) to their open LP_EXIT_REQUEST so the async carry drains instead of fabricating
+        // a market ACQUIRE. Runs immediately after gmxV2RefundClassifier so candidates are stamped.
+        processed += timedPass("gmxWithdrawalSettlementLink",
+                () -> gmxWithdrawalSettlementLinkService.linkOutstandingWithdrawalSettlements(batchSize));
+        progressHeartbeat.run();
+
+        // NEW-13: demote residual GMX execution-fee refunds (no matching open LP_EXIT_REQUEST) to a
+        // basis-neutral SPONSORED_GAS_IN. MUST run strictly after gmxWithdrawalSettlementLink so
+        // genuine GLV/GM settlements are already LP_EXIT_SETTLEMENT (and thus excluded here),
+        // preserving the NEW-09 guardrail while stopping return-of-capital gas dust from booking a
+        // phantom market ACQUIRE.
+        processed += timedPass("gmxExecutionFeeRefundBasisNeutral",
+                () -> gmxExecutionFeeRefundBasisNeutralService.reclassifyResidualRefunds(batchSize));
         progressHeartbeat.run();
 
         // R11 Fix 8: reclassify EtherFi weETH OFT cross-chain mint IN as BRIDGE_IN
@@ -256,6 +292,13 @@ class LinkingBatchProcessor {
         // B-VAULT-WITHDRAW: synthesize missing vault-token burn leg on Turtle Finance
         processed += timedPass("turtleVaultBurnRepair",
                 () -> turtleVaultBurnRepairService.repairMissingVaultTokenBurn(batchSize));
+        progressHeartbeat.run();
+
+        // B-ETH-02: link LENDING_LOOP_OPEN → its DECREASE/CLOSE legs (shared lending-loop: corrId)
+        // so replay parks the collateral basis on open and restores it on close instead of
+        // re-pricing the returned collateral at market. Converges to zero like GMX.
+        processed += timedPass("lendingLoopOpenClosePairLink",
+                () -> lendingLoopOpenClosePairLinkService.reconcileOutstandingLoops(batchSize));
         progressHeartbeat.run();
 
         return processed;
@@ -299,6 +342,13 @@ class LinkingBatchProcessor {
         // B-EARN-DEPOSIT-MISSING: synthesise missing EARN counterpart
         processed += timedPass("bybitOnChainEarnOrphanRepair",
                 bybitOnChainEarnOrphanRepairService::repairOrphans);
+        progressHeartbeat.run();
+
+        // B-EARN-CORRIDOR-DEDUP: retroactively re-link corridor-funded FUND drains that were
+        // incorrectly synthesised on a prior run, eliminating the phantom double-credit and the
+        // resulting umbrella shortfall.
+        processed += timedPass("bybitEarnCorridorDuplicateRepair",
+                bybitOnChainEarnOrphanRepairService::repairCorridorEarnDuplicates);
         progressHeartbeat.run();
 
         // Cycle/12: demote Bybit INTERNAL_TRANSFER singletons

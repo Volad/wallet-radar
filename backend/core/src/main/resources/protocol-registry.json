@@ -45,7 +45,8 @@
     "BRIDGE_IN",
     "PROTOCOL_CUSTODY_DEPOSIT",
     "PROTOCOL_CUSTODY_WITHDRAW",
-    "REWARD_CLAIM"
+    "REWARD_CLAIM",
+    "LENDING_LOOP_REBALANCE"
   ],
   "contracts": {
     "\u2500\u2500 DEX: Uniswap \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500": {},
@@ -293,18 +294,36 @@
       "notes": "Official LFJ Joe Aggregator router on Arbitrum and Avalanche per LFJ deployment docs."
     },
     "0x18556da13313f3532c54711497a8fedac273220e": {
-      "name": "LFJ LBRouter",
+      "name": "LFJ LBRouter V2.2 (Avalanche/Arbitrum)",
       "protocol": "LFJ",
       "version": "V2.2",
       "family": "DEX",
       "role": "ROUTER",
       "event_type": null,
+      "specialHandler": "LFJ_LB_ROUTER",
       "networks": [
         "ARBITRUM",
         "AVALANCHE"
       ],
       "confidence": "HIGH",
-      "notes": "Official LFJ Liquidity Book router on Arbitrum and Avalanche per LFJ deployment docs."
+      "notes": "C1 (R7): LFJ Liquidity Book router — addLiquidity (0xa3c7271a) and removeLiquidity (0xc22159b6) selectors are decoded to resolve tokenX/tokenY/binStep → pair address via lfjPairIndex built at startup. All other selectors fall through to HEURISTIC."
+    },
+    "0x8573f98175d816d520248b5facf40d309b1c9cee": {
+      "name": "LFJ Liquidity Book AUSD/USDC (Avalanche)",
+      "protocol": "LFJ",
+      "version": "V2.2",
+      "family": "DEX",
+      "role": "POSITION_MANAGER",
+      "event_type": null,
+      "networks": [
+        "AVALANCHE"
+      ],
+      "specialHandler": "LFJ_LB_PAIR",
+      "tokenX": "0x00000000efe302beaa2b3e6e1b18d08d69a9012a",
+      "tokenY": "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e",
+      "binStep": 1,
+      "confidence": "HIGH",
+      "notes": "R7/C1: LFJ Liquidity Book ERC-1155 pair AUSD/USDC. Correlation: lp-position:<net>:lfj:<thisAddress>. tokenX=AUSD, tokenY=USDC, binStep=1 (stable pair, 0.01% fee). Direct pair interactions go here; router interactions go via LFJ_LB_ROUTER (0x18556da1...) which resolves to this pair via lfjPairIndex."
     },
     "\u2500\u2500 DEX: Curve Finance \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500": {},
     "0x99a58482bd75cbab83b27ec03ca68ff489b5788f": {
@@ -954,31 +973,78 @@
       "notes": "zkSync Era Aave V3 pool. Supply=LENDING_DEPOSIT, Withdraw=LENDING_WITHDRAW, Borrow=BORROW, Repay=REPAY"
     },
     "\u2500\u2500 LP: Aave stable pools \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500": {},
-    "0xfcec3c8d86329defb548202fe1b86ff2188603a8": {
-      "name": "Aave GHO/USDT/USDC stable pool",
-      "protocol": "Aave",
+    "\u2500\u2500 DEX: Balancer V3 (Avalanche) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500": {},
+    "0xba1333333333a1ba1108e8412f11850a5c319ba9": {
+      "name": "Balancer V3 Vault",
+      "protocol": "Balancer",
       "version": "V3",
-      "family": "LP",
+      "family": "DEX",
+      "role": "VAULT",
+      "event_type": null,
+      "networks": [
+        "AVALANCHE"
+      ],
+      "decomposeByLegs": true,
+      "specialHandler": "BALANCER_V3_VAULT",
+      "confidence": "HIGH",
+      "notes": "R6a: Balancer V3 singleton Vault. JOIN (addLiquidity) / BURN (removeLiquidity) classified by LpRegistryClassifier via BALANCER_V3_VAULT handler. Pool BPT presence in movement legs determines ENTRY vs EXIT. Correlation: lp-position:<net>:balancerv3:<bptPoolAddress>."
+    },
+    "0x0c8f71d19f87c0bd1b9bad2484ecc3388d5dbb98": {
+      "name": "Balancer V3 Composite Liquidity Router",
+      "protocol": "Balancer",
+      "version": "V3",
+      "family": "DEX",
+      "role": "VAULT",
+      "event_type": null,
+      "networks": [
+        "AVALANCHE"
+      ],
+      "decomposeByLegs": true,
+      "specialHandler": "BALANCER_V3_VAULT",
+      "confidence": "HIGH",
+      "notes": "R6b: Balancer V3 CompositeLiquidityRouter — entry point for ERC4626 pool operations (addLiquidityUnbalancedToERC4626Pool, removeLiquidityProportionalFromERC4626Pool). Internally calls the Vault. Same BALANCER_V3_VAULT handler: BPT presence in movement legs determines ENTRY vs EXIT. Method 0x19c6989f observed on Avalanche."
+    },
+    "0xa084c11cb55e67c9becf9607f1dbb20ec4d5e7b2": {
+      "name": "Balancer Relayer (Avalanche)",
+      "protocol": "Balancer",
+      "version": "Relayer",
+      "family": "DEX",
+      "role": "VAULT",
+      "event_type": null,
+      "networks": [
+        "AVALANCHE"
+      ],
+      "decomposeByLegs": true,
+      "specialHandler": "BALANCER_V3_VAULT",
+      "confidence": "HIGH",
+      "notes": "R6b: Balancer multicall Relayer on Avalanche — used for gauge deposit/withdraw batched calls (LP_POSITION_STAKE/UNSTAKE). BALANCER_V3_VAULT handler detects gauge + BPT movement legs to determine STAKE vs UNSTAKE direction."
+    },
+    "0xfcec3c8d86329defb548202fe1b86ff2188603a8": {
+      "name": "Balancer V3 GHO/USDT/USDC boosted stable pool (BPT)",
+      "protocol": "Balancer",
+      "version": "V3",
+      "family": "DEX",
       "role": "POOL",
-      "event_type": "LP_MINT",
+      "event_type": null,
       "networks": [
         "AVALANCHE"
       ],
       "confidence": "HIGH",
-      "notes": "Cycle/9 S3: multi-asset stable LP pool. Deposits classified as LP_ENTRY with composite-bucket basis carry."
+      "notes": "R6a: Balancer V3 ERC-20 BPT for GHO/USDT/USDC boosted pool. Pool address = BPT address. Detected from movement legs on V3 Vault txs to derive lp-position:<net>:balancerv3:<thisAddress> correlation. Previously mis-labelled as Aave LP."
     },
     "0x8e8c3d4313fd5c5051a02b9e580415691a0f7951": {
-      "name": "Aave GHO/USDT/USDC-gauge",
-      "protocol": "Curve",
+      "name": "Balancer V3 GHO/USDT/USDC gauge",
+      "protocol": "Balancer",
       "version": "Gauge",
-      "family": "LP",
+      "family": "DEX",
       "role": "STAKE_CONTRACT",
-      "event_type": "LENDING_DEPOSIT",
+      "event_type": null,
+      "underlyingPositionManager": "0xfcec3c8d86329defb548202fe1b86ff2188603a8",
       "networks": [
         "AVALANCHE"
       ],
       "confidence": "HIGH",
-      "notes": "Cycle/15 R3: Curve gauge for Aave GHO/USDT/USDC LP on Avalanche. Wrapper basis carry via wrapper: composite bucket."
+      "notes": "R6a: Balancer V3 gauge for GHO/USDT/USDC pool. deposit()/withdraw() → LP_POSITION_STAKE/UNSTAKE. underlyingPositionManager = BPT pool address. Previously mis-labelled as Curve gauge / LENDING_DEPOSIT."
     },
     "0x98ef32edd24e2c92525e59afc4475c1242a30184": {
       "name": "Aura BoosterLite",
@@ -990,19 +1056,21 @@
         "AVALANCHE"
       ],
       "confidence": "HIGH",
-      "notes": "Aura Finance BoosterLite on Avalanche. Main staking and reward distribution contract. Sends LP tokens back during withdrawAndUnwrap. Source: docs.aura.finance/developers/deployed-addresses/sidechain-deployment-addresses"
+      "notes": "Aura Finance BoosterLite on Avalanche. Orchestrates staking/unstaking to reward pools. Not the direct LP staking target."
     },
     "0x7037358a6f2c1d9e5cc9b4a29e7415a7060dadcc": {
-      "name": "auraAave GHO/USDT/USDC-vault",
+      "name": "auraAave GHO/USDT/USDC-vault (Aura BaseRewardPool)",
       "protocol": "Aura",
       "version": "Vault",
-      "family": "YIELD",
-      "role": "VAULT",
+      "family": "DEX",
+      "role": "STAKE_CONTRACT",
+      "event_type": null,
+      "underlyingPositionManager": "0xfcec3c8d86329defb548202fe1b86ff2188603a8",
       "networks": [
         "AVALANCHE"
       ],
       "confidence": "HIGH",
-      "notes": "Aura boosted vault for Aave GHO/USDT/USDC LP on Avalanche. withdrawAndUnwrap classified as REWARD_CLAIM by AuraProtocolSemanticClassifier."
+      "notes": "R6a: Aura BaseRewardPool for Balancer V3 GHO/USDT/USDC BPT on Avalanche. deposit() → LP_POSITION_STAKE; withdrawAndUnwrap() → LP_POSITION_UNSTAKE (BPT basis-neutral; BAL/AURA/WAVAX rewards zero-cost). underlyingPositionManager = BPT pool. Previously mis-labelled YIELD/VAULT → REWARD_CLAIM."
     },
     "\u2500\u2500 LENDING: Aave V2 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500": {},
     "0x7d2768de32b0b80b7a3454c06bdac94a69ddc7a9": {
@@ -1711,6 +1779,24 @@
       "confidence": "HIGH"
     },
     "\u2500\u2500 AGGREGATORS: Relay Gas Top-Up \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500": {},
+    "0x76dd65529dc6c073c1e0af2a5ecc78434bdbf7d9": {
+      "name": "Rabby Gas Fee Payer",
+      "protocol": "Rabby",
+      "version": "GasAccount",
+      "family": "AGGREGATOR",
+      "role": "GAS_PAYER",
+      "networks": [
+        "ETHEREUM",
+        "ARBITRUM",
+        "OPTIMISM",
+        "BASE",
+        "BSC",
+        "AVALANCHE",
+        "LINEA"
+      ],
+      "confidence": "HIGH",
+      "notes": "Rabby wallet gas-account payer (etherscan/basescan/bscscan label 'Rabby: Gas Fee Payer'). Plain native top-ups (input=0x, 21000 gas) classify as SPONSORED_GAS_IN/GAS_ONLY (basis-neutral). Verified single occurrence 0x39dca64e... BASE."
+    },
     "0xf70da97812cb96acdf810712aa562db8dfa3dbef": {
       "name": "Relay Solver Payout",
       "protocol": "Relay",
@@ -1763,9 +1849,22 @@
         "LINEA",
         "UNICHAIN",
         "KATANA",
-        "PLASMA"
+        "PLASMA",
+        "ZKSYNC"
       ],
       "confidence": "HIGH"
+    },
+    "0x1619de6b6b20ed217a58d00f37b9d47c7663feca": {
+      "name": "Relay Solver Payout",
+      "protocol": "Relay",
+      "version": "Solver",
+      "family": "AGGREGATOR",
+      "role": "GAS_PAYER",
+      "networks": [
+        "ARBITRUM"
+      ],
+      "confidence": "HIGH",
+      "notes": "relay() 0xcdd1b25d settlement receiver; delivers destination-chain funds (WETH unwrap -> native ETH). Inbound receipts classify as BRIDGE_IN; no tracked source leg => market ACQUIRE fallback (AVCO-neutral)."
     },
     "0xcad97616f91872c02ba3553db315db4015cbe850": {
       "name": "Relay Solver Payout",
@@ -2351,8 +2450,8 @@
       "notes": "Legacy reward router; superseded by V2 above"
     },
     "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae": {
-      "name": "Angle Protocol: Distributor",
-      "protocol": "Angle",
+      "name": "Merkl Distributor",
+      "protocol": "Merkl",
       "version": "V1",
       "family": "YIELD",
       "role": "REWARD_ROUTER",
@@ -2364,10 +2463,24 @@
         "AVALANCHE",
         "KATANA",
         "PLASMA",
-        "UNICHAIN"
+        "UNICHAIN",
+        "MANTLE"
       ],
       "confidence": "HIGH",
-      "notes": "Morpho / Angle reward-distribution contract. claim(...) is reward claim, not plain inbound."
+      "notes": "Merkl (Angle Labs) reward Distributor, deployed at the same address on every EVM chain. claim(0x71ee95c0)/claimWithRecipient(0x9fb67b58) is a reward claim, not plain inbound. Reward legs can arrive as a wrapped receipt token that is minted then burned to 0x0 within the claim tx (reward-receipt unwrap); RewardRouteClassifier nets that self-canceling wrapper pair out so it must NOT be treated as an LP receipt burn / LP_EXIT."
+    },
+    "0xdef1fa4cefe67365ba046a7c630d6b885298e210": {
+      "name": "Merkl Distributor (core)",
+      "protocol": "Merkl",
+      "version": "V2",
+      "family": "YIELD",
+      "role": "REWARD_ROUTER",
+      "event_type": "REWARD_CLAIM",
+      "networks": [
+        "MANTLE"
+      ],
+      "confidence": "HIGH",
+      "notes": "Merkl core distributor that funds reward legs inside a claim(...) tx routed through the Merkl Distributor (0x3ef3d8ba...). Registered so the reward inflow it sources is recognized as REWARD_CLAIM income, not an inbound transfer or LP flow."
     },
     "0x94312a608246cecfce6811db84b3ef4b2619054e": {
       "name": "FLUID Rewards Distributor",
@@ -2986,6 +3099,19 @@
       ],
       "confidence": "HIGH",
       "notes": "WS-1: LI.FI Permit2Proxy on Unichain."
+    },
+    "0x1bcd304fdad1d1d66529159b1bc8d13c9158d586": {
+      "name": "LI.FI Permit2Proxy (Unichain executor)",
+      "protocol": "LI.FI",
+      "version": "Permit2Proxy",
+      "family": "BRIDGE",
+      "role": "BRIDGE_ENTRY",
+      "event_type": "BRIDGE_OUT",
+      "networks": [
+        "UNICHAIN"
+      ],
+      "confidence": "HIGH",
+      "notes": "NEW-08: Unichain LI.FI Permit2Proxy for callDiamondWithEIP2612Signature (0xd7a08473) / callDiamondWithPermit2 (0x0193b9fc) bridge-out. Provenance: LI.FI /v1/chains permit2Proxy field for Unichain (chainId 130); raw tx 0xda7d556e...558de7 carries jumper.exchange + gasZipBridge route tags and GasZip proxy 0x864b314d...9232, USDC out to this address. Address-anchored (BridgeStartClassifier.knownLiFiDiamondEntry); route tag required, not amount-heuristic."
     },
     "0x3c6b2e0b7421254846c53c118e24c65d59eae75e": {
       "name": "LI.FI Permit2Proxy",

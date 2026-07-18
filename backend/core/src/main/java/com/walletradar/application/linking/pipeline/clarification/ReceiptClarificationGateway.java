@@ -361,22 +361,38 @@ public class ReceiptClarificationGateway {
         }
 
         return switch (sourceFamily) {
-            case ETHERSCAN -> fetchFromExplorer(
-                    etherscanProvider,
-                    rawTransaction,
-                    view,
-                    includeTransferEvidence,
-                    deriveTokenTransfersFromReceipt,
-                    sourceFamily
-            );
-            case BLOCKSCOUT -> fetchFromExplorer(
-                    blockScoutProvider,
-                    rawTransaction,
-                    view,
-                    includeTransferEvidence,
-                    deriveTokenTransfersFromReceipt,
-                    sourceFamily
-            );
+            case ETHERSCAN -> {
+                Optional<ClarificationReceiptEnrichment> result = fetchFromExplorer(
+                        etherscanProvider, rawTransaction, view, includeTransferEvidence,
+                        deriveTokenTransfersFromReceipt, sourceFamily);
+                // Fallback: BlockScout when Etherscan fails
+                if (result.isEmpty() && blockScoutProvider.supports(networkId)) {
+                    result = fetchFromExplorer(blockScoutProvider, rawTransaction, view,
+                            includeTransferEvidence, deriveTokenTransfersFromReceipt, RawSyncMethod.BLOCKSCOUT);
+                }
+                // Final fallback: RPC
+                if (result.isEmpty()) {
+                    result = fetchFromRpc(rawTransaction, view, includeTransferEvidence,
+                            deriveTokenTransfersFromReceipt, sourceFamily);
+                }
+                yield result;
+            }
+            case BLOCKSCOUT -> {
+                Optional<ClarificationReceiptEnrichment> result = fetchFromExplorer(
+                        blockScoutProvider, rawTransaction, view, includeTransferEvidence,
+                        deriveTokenTransfersFromReceipt, sourceFamily);
+                // Fallback: Etherscan/Basescan when BlockScout fails
+                if (result.isEmpty() && etherscanProvider.supports(networkId)) {
+                    result = fetchFromExplorer(etherscanProvider, rawTransaction, view,
+                            includeTransferEvidence, deriveTokenTransfersFromReceipt, RawSyncMethod.ETHERSCAN);
+                }
+                // Final fallback: RPC
+                if (result.isEmpty()) {
+                    result = fetchFromRpc(rawTransaction, view, includeTransferEvidence,
+                            deriveTokenTransfersFromReceipt, sourceFamily);
+                }
+                yield result;
+            }
             case RPC -> fetchFromRpc(
                     rawTransaction,
                     view,
@@ -753,6 +769,12 @@ public class ReceiptClarificationGateway {
                 if (knownDecimals != null) {
                     transfer.put("tokenDecimal", Integer.toString(knownDecimals));
                 }
+            }
+            // RC-2: apply authoritative decimal override last, always replacing the explorer-provided
+            // decimal when the explorer is known to report an incorrect value for this contract.
+            Integer decimalOverride = TokenSymbolFallbackSupport.resolveDecimalOverride(contractAddress);
+            if (decimalOverride != null) {
+                transfer.put("tokenDecimal", Integer.toString(decimalOverride));
             }
             transfers.add(transfer);
         }

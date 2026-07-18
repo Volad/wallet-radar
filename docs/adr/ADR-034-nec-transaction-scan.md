@@ -73,7 +73,7 @@ For each `EXT_IN` whose counterparty matches the counterparty of a same-wallet `
 5. **RC-dapp-reward** — `EXT_IN` with no counterparty address but a non-blank `protocolName` is a protocol reward or PnL settlement; skip.
 6. **RC-evm-ext-asset** — for `EXT_IN` with a known symbol: only stablecoin or ETH-family passes. Excludes airdropped reward tokens, LP receipt tokens, and arbitrary ERC-20s. `BRIDGE_IN` is exempt (bridges may carry any asset as real capital).
 7. **MULTI guard** — `BRIDGE_IN` whose flow-level counterparty is `"MULTI"` is ambiguous (multi-sender router); skip.
-8. **RC-fake-native** — ETH/WETH-family flow with a non-null `assetContract` not in `KNOWN_WETH_CONTRACTS` is a scam/airdrop fake token; skip. Applies to both inbound and outbound to keep NEC balanced.
+8. **RC-fake-native** — ETH/WETH-family flow with a non-null `assetContract` not in the ETH-family allowlist (`NetworkRegistry.ethFamilyEquivalentContracts()`, config-derived — see W11 amendment) is a scam/airdrop fake token; skip. Applies to both inbound and outbound to keep NEC balanced.
 9. **RC3b** — inbound flow whose flow-level counterparty is in `KNOWN_LP_POOL_ADDRESSES` is an LP exit receipt; skip.
 10. **isNonUniverseCounterparty** — flow whose resolved counterparty is a universe member is an internal transfer; skip.
 11. **RC-evm-dust** — inbound USD value < $2 is excluded (bridge gas refunds, fractional payouts). Outflows are not filtered.
@@ -96,7 +96,7 @@ If no source yields a non-zero USD value, the flow is not counted.
 | `KNOWN_BRIDGE_PAYOUT_ADDRESSES` | `Set<String>` | RC-direct + Pattern 1 inbound guard. Known Relay/LiFi solvers, Across SpokePool, etc. |
 | `RELAY_SOURCE_ADDRESSES` | `Set<String>` | Pattern 1 outbound hint (legacy; now all EXT_OUT / BRIDGE_OUT are eligible outbound candidates). |
 | `KNOWN_LP_POOL_ADDRESSES` | `Set<String>` | RC3b. Katana LP pool + vault contracts paying back LP exits. |
-| `KNOWN_WETH_CONTRACTS` | `Set<String>` | RC-fake-native. Canonical WETH ERC-20 contracts per chain + native ETH chain proxies (zkSync Era `0x000...800a`). |
+| ETH-family allowlist (`NetworkRegistry.ethFamilyEquivalentContracts()`) | `Set<String>` | RC-fake-native. Canonical WETH ERC-20 contracts per chain + native ETH chain proxies (zkSync Era `0x000...800a`). **Config-derived from `network-descriptors.yml` (W11)** — no longer a hardcoded constant. |
 | `STABLECOIN_SYMBOLS` | `Set<String>` | RC1, RC-evm-ext-asset. Canonical stable denominations after `normalizeStablecoinSymbol`. |
 | `ETH_FAMILY_SYMBOLS` | `Set<String>` | RC-fake-native, RC-evm-ext-asset. ETH and liquid-staking derivatives. |
 | `MIN_FUND_FLOW_USD` | `$5` | RC-fund-dust. |
@@ -117,7 +117,7 @@ If no source yields a non-zero USD value, the flow is not counted.
 
 ### Negative
 
-- Guard constants (`KNOWN_BRIDGE_PAYOUT_ADDRESSES`, `KNOWN_LP_POOL_ADDRESSES`, `KNOWN_WETH_CONTRACTS`) require manual maintenance as new protocols are encountered.
+- Guard constants (`KNOWN_BRIDGE_PAYOUT_ADDRESSES`, `KNOWN_LP_POOL_ADDRESSES`) require manual maintenance as new protocols are encountered. The ETH-family allowlist was later externalized to config (W11): it is derived from `network-descriptors.yml` via `NetworkRegistry.ethFamilyEquivalentContracts()`, so it cannot drift from the per-network descriptors.
 - The scan is O(N) over EVM capital-flow transactions. For sessions with thousands of bridge transactions this may add measurable latency. Mitigated by field projection (only the required fields are loaded) and by the fact that dashboard reads are already relatively heavyweight.
 - A new type of bridge corridor (e.g. a cross-chain protocol that uses a pattern not covered by Pattern 1 or 2) may temporarily inflate NEC until a guard is added.
 
@@ -128,6 +128,29 @@ ADR-014 §D2 pool-delta formula is replaced in `PortfolioConservationGate.evalua
 - Breach diagnostic logging (`topNonMemberPoolsByNetCapitalDelta`, `topMemberPoolsByQtyHeld`).
 
 No schema migration required. No re-replay required.
+
+---
+
+## Amendment — W11: ETH-family allowlist externalized to config (2026-07-17)
+
+**Status:** Accepted (implemented)
+
+The RC-fake-native guard's `KNOWN_WETH_CONTRACTS` static constant was replaced by a config-derived
+set, `NetworkRegistry.ethFamilyEquivalentContracts()`, sourced from `network-descriptors.yml`
+(consolidation Wave W11):
+
+- For each network whose `native-symbol == ETH`: its `wrapped-native` contract + `native-alias-contracts`.
+- Plus, for any network, a new optional `eth-family-contracts` field holding bridged WETH on non-ETH
+  chains (Mantle precompile `0xdead…1111`, Avalanche WETH.e `0x49d5…`).
+- Non-ETH-native wrapped-natives (WBNB/WMATIC/WAVAX/WMNT/WXPL) are never included, so a fake
+  "WETH"/"ETH" flow reusing a non-ETH wrapper contract still fails the guard.
+
+This closed a latent drift: Katana WETH (`0xee7d8bcf…`) was present in the descriptors but missing
+from the hardcoded list, and a dead Cronos zkEVM entry (`0x2def…`, unsupported network) was dropped.
+`PortfolioConservationGate` injects `NetworkRegistry` and builds the allowlist at construction; the
+RC-fake-native logic is otherwise unchanged. Verified NEC/AVCO-invariant on the live dataset
+(`asset_ledger_points=11312`, ETH/BTC terminal AVCO unchanged, NEC delta $0). See the
+[consolidation inventory §4j](../tasks/hardcoded-registry-consolidation-proposal.md#4j-w11--implemented-this-change).
 
 ---
 

@@ -13,6 +13,7 @@ import java.util.concurrent.Executor;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest(classes = {
+        PlatformExecutorConfiguration.class,
         AsyncConfig.class,
         SchedulerConfig.class
 })

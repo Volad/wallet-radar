@@ -248,6 +248,111 @@ class LpReceiptEntryReplayHandlerTest {
         assertThat(LpReceiptEntryReplayHandler.hasOnlyOutboundPrincipalFlows(tx)).isTrue();
     }
 
+    @Test
+    void t8_singleTokenZapInWithDustSiblingRefundIsReceiptPoolEntry() {
+        // KATANA SushiSwap V3 zap-in: native ETH deposit, router refunds dust of both pool tokens.
+        // Family netting collapses vbETH into FAMILY:ETH (still net outbound); vbUSDC dust is
+        // immaterial in USD → clean single-side deposit routed to the receipt pool.
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setType(NormalizedTransactionType.LP_ENTRY);
+        tx.setCorrelationId("lp-position:katana:0x2659c6085d26144117d904c46b48b6d180393d27:36201");
+        tx.setWalletAddress("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+        tx.setNetworkId(NetworkId.KATANA);
+        tx.setBlockTimestamp(Instant.now());
+        tx.setFlows(List.of(
+                pricedFlow("ETH", "-0.45", "4715"),
+                pricedFlow("vbETH", "6.57E-16", "4715"),
+                pricedFlow("vbUSDC", "0.000002", "1"),
+                lpReceiptMarker()
+        ));
+        assertThat(LpReceiptEntryReplayHandler.hasOnlyOutboundPrincipalFlows(tx)).isTrue();
+        assertThat(handler.isLpReceiptEntry(tx)).isTrue();
+    }
+
+    @Test
+    void t9_allOutboundMultiTokenEntryRemainsReceiptPoolEntry() {
+        // WETH + USDC both net outbound, LP-RECEIPT marker excluded — no regression.
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setType(NormalizedTransactionType.LP_ENTRY);
+        tx.setCorrelationId("lp-position:base:pancakeswap:99");
+        tx.setWalletAddress("0x1");
+        tx.setNetworkId(NetworkId.BASE);
+        tx.setBlockTimestamp(Instant.now());
+        tx.setFlows(List.of(
+                pricedFlow("WETH", "-0.5", "3600"),
+                pricedFlow("USDC", "-731.03", "1"),
+                lpReceiptMarker()
+        ));
+        assertThat(LpReceiptEntryReplayHandler.hasOnlyOutboundPrincipalFlows(tx)).isTrue();
+        assertThat(handler.isLpReceiptEntry(tx)).isTrue();
+    }
+
+    @Test
+    void t10_materialDifferentAssetReturnIsRejected() {
+        // Curve/Balancer mixed receipt: deposit 1000 USDC, receive 0.3 WETH (~$1080) back → reject.
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setType(NormalizedTransactionType.LP_ENTRY);
+        tx.setCorrelationId("lp-position:base:pancakeswap:99");
+        tx.setWalletAddress("0x1");
+        tx.setNetworkId(NetworkId.BASE);
+        tx.setBlockTimestamp(Instant.now());
+        tx.setFlows(List.of(
+                pricedFlow("USDC", "-1000", "1"),
+                pricedFlow("WETH", "0.3", "3600")
+        ));
+        assertThat(LpReceiptEntryReplayHandler.hasOnlyOutboundPrincipalFlows(tx)).isFalse();
+        assertThat(handler.isLpReceiptEntry(tx)).isFalse();
+    }
+
+    @Test
+    void t11_sameAssetRefundStayingNetOutboundIsReceiptPoolEntry() {
+        // Router refunds 0.05 WETH of a 1.0 WETH deposit → FAMILY:ETH stays net outbound → admit.
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setType(NormalizedTransactionType.LP_ENTRY);
+        tx.setCorrelationId("lp-position:base:pancakeswap:99");
+        tx.setWalletAddress("0x1");
+        tx.setNetworkId(NetworkId.BASE);
+        tx.setBlockTimestamp(Instant.now());
+        tx.setFlows(List.of(
+                pricedFlow("WETH", "-1.0", "3600"),
+                pricedFlow("WETH", "0.05", "3600")
+        ));
+        assertThat(LpReceiptEntryReplayHandler.hasOnlyOutboundPrincipalFlows(tx)).isTrue();
+    }
+
+    @Test
+    void t12_pureDustWithNoMaterialOutboundIsRejected() {
+        // Only dust in/out, no real deposit → no material outbound family → reject.
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setType(NormalizedTransactionType.LP_ENTRY);
+        tx.setCorrelationId("lp-position:base:pancakeswap:99");
+        tx.setWalletAddress("0x1");
+        tx.setNetworkId(NetworkId.BASE);
+        tx.setBlockTimestamp(Instant.now());
+        tx.setFlows(List.of(
+                pricedFlow("ETH", "-6.85E-16", "4715"),
+                pricedFlow("USDC", "0.0000005", "1")
+        ));
+        assertThat(LpReceiptEntryReplayHandler.hasOnlyOutboundPrincipalFlows(tx)).isFalse();
+    }
+
+    private static NormalizedTransaction.Flow pricedFlow(String symbol, String qty, String unitPriceUsd) {
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.TRANSFER);
+        flow.setAssetSymbol(symbol);
+        flow.setQuantityDelta(new BigDecimal(qty));
+        flow.setUnitPriceUsd(new BigDecimal(unitPriceUsd));
+        return flow;
+    }
+
+    private static NormalizedTransaction.Flow lpReceiptMarker() {
+        NormalizedTransaction.Flow receipt = new NormalizedTransaction.Flow();
+        receipt.setRole(NormalizedLegRole.TRANSFER);
+        receipt.setAssetSymbol("LP-RECEIPT:KATANA:SUSHISWAP:36201");
+        receipt.setQuantityDelta(BigDecimal.ONE);
+        return receipt;
+    }
+
     private static NormalizedTransaction lpEntryWithRefund(
             String wallet,
             String ethOut,

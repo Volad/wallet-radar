@@ -92,6 +92,7 @@ class ReplayDispatcherBybitEarnPrincipalMultiSourceTest {
                 transferClassifier,
                 keyFactory,
                 replayRouteHandlerRegistry,
+                mock(com.walletradar.application.costbasis.support.AcquisitionFeeCapitalizationPolicy.class),
                 transferReplayHandler,
                 bybitVenueInternalReplayHandler,
                 mock(LiquidStakingReplayHandler.class),
@@ -104,7 +105,8 @@ class ReplayDispatcherBybitEarnPrincipalMultiSourceTest {
                 mock(CounterpartyBasisPoolReplayHook.class),
                 mock(com.walletradar.application.costbasis.application.replay.support.LeverageBorrowReplayHook.class),
                 mock(BorrowReplayHandler.class),
-                mock(RepayReplayHandler.class)
+                mock(RepayReplayHandler.class),
+                marketAuthority
         );
 
         List<AssetLedgerPoint> ledgerPoints = new ArrayList<>();

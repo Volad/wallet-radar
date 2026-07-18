@@ -51,6 +51,7 @@ import {
   SessionTransactionItemResponse,
   SUPPORTED_EVM_NETWORKS,
 } from '../../core/models/wallet-api.models';
+import { isCexAddress, isOnChainAddress, parseSubAccount, parseVenueId } from '../../core/utils/wallet-ref.util';
 import { WalletApiService } from '../../core/services/wallet-api.service';
 import { SessionStorageService } from '../../core/services/session-storage.service';
 import {
@@ -64,6 +65,8 @@ import { AssetLedgerPageComponent } from '../asset-ledger/asset-ledger-page.comp
 import { LendingPageComponent } from '../lending/lending-page.component';
 import { LpPageComponent } from '../lp/lp-page.component';
 import { SettingsPageComponent } from '../settings/settings-page.component';
+import { SmartAmountComponent } from '../../core/components/smart-amount/smart-amount.component';
+import { AllocationBreakdownComponent } from './components/allocation-breakdown/allocation-breakdown.component';
 
 type LpTab = 'all' | 'open' | 'closed';
 type SessionTransactionsLoadPhase = 'idle' | 'intermediate' | 'final';
@@ -76,6 +79,8 @@ type WalletFormGroup = FormGroup<{
 type WalletDialogFormGroup = FormGroup<{
   wallets: FormArray<WalletFormGroup>;
 }>;
+
+type SortColumn = 'asset' | 'qty' | 'net' | 'avgCost' | 'price';
 
 interface TokenFamilyRow {
   readonly familyIdentity: string;
@@ -94,6 +99,11 @@ interface TokenFamilyRow {
   readonly unrealizedPnlPct: number;
   readonly unrealizedPnlUsd: number;
   readonly realizedPnlUsd: number;
+  // ADR-062 break-even (effective-cost) metric — family-level (identical across a family's positions).
+  readonly breakEvenUsd: number | null;
+  readonly lockedSurplusUsd: number;
+  readonly incomeReceivedUsd: number;
+  readonly attributionTargetFamily: string | null;
   readonly issue: IssueCode;
   readonly networkIds: ReadonlyArray<NetworkId>;
   readonly walletIds: ReadonlyArray<WalletId>;
@@ -129,6 +139,7 @@ const TRANSACTION_TYPES_BY_ID = new Set<TransactionType>([
   'EXTERNAL_INBOUND',
   'EXTERNAL_TRANSFER_IN',
   'EXTERNAL_TRANSFER_OUT',
+  'FIAT_EXIT',
   'LP_ENTRY',
   'LP_ENTRY_REQUEST',
   'LP_ENTRY_SETTLEMENT',
@@ -148,6 +159,7 @@ const TRANSACTION_TYPES_BY_ID = new Set<TransactionType>([
   'LENDING_LOOP_REBALANCE',
   'LENDING_LOOP_DECREASE',
   'LENDING_LOOP_CLOSE',
+  'EARN_FLEXIBLE_SAVING',
   'BORROW',
   'REPAY',
   'VAULT_DEPOSIT',
@@ -163,6 +175,9 @@ const TRANSACTION_TYPES_BY_ID = new Set<TransactionType>([
   'DERIVATIVE_POSITION_DECREASE',
   'PROTOCOL_CUSTODY_DEPOSIT',
   'PROTOCOL_CUSTODY_WITHDRAW',
+  'CEX_DERIVATIVE_SETTLEMENT',
+  'FEE',
+  'NFT_MINT',
   'REWARD_CLAIM',
   'STAKE_DEPOSIT',
   'STAKE_WITHDRAWAL',
@@ -215,6 +230,8 @@ const BRIDGE_STATUSES = new Set<SessionBridgeStatus>(['BRIDGE_OUT', 'BRIDGE_IN',
     LendingPageComponent,
     LpPageComponent,
     SettingsPageComponent,
+    SmartAmountComponent,
+    AllocationBreakdownComponent,
   ],
   templateUrl: './dashboard.component.html',
   styleUrl: './dashboard.component.scss',
@@ -259,26 +276,19 @@ export class DashboardComponent {
   readonly transactionPage = signal(0);
   readonly transactionPageSize = 50;
   readonly canOpenAssetLedger = computed(() => this.currentSessionId() !== null);
-  readonly selectedAssetFamilyIdentity = signal<string | null>(null);
-  readonly routeAssetLedgerSelection = toSignal(
-    this.route.paramMap.pipe(
-      map((params) => ({
-        sessionId: params.get('sessionId')?.trim() ?? null,
-        familyIdentity: params.get('familyIdentity')?.trim() ?? null,
-      }))
-    ),
-    {
-      initialValue: {
-        sessionId: null,
-        familyIdentity: null,
-      },
-    }
+  readonly isMoveBasisMode = toSignal(
+    this.route.data.pipe(map((data) => data['mode'] === 'move-basis')),
+    { initialValue: this.route.snapshot.data['mode'] === 'move-basis' }
   );
-  readonly assetLedgerFamilyIdentity = computed(
-    () => this.selectedAssetFamilyIdentity() ?? this.routeAssetLedgerSelection().familyIdentity
+  readonly moveBasisFamilyIdentity = toSignal(
+    this.route.paramMap.pipe(map((params) => params.get('familyIdentity')?.trim() ?? null)),
+    { initialValue: this.route.snapshot.paramMap.get('familyIdentity')?.trim() ?? null }
   );
-  readonly assetLedgerSessionId = computed(() => this.routeAssetLedgerSelection().sessionId ?? this.currentSessionId());
-  readonly isAssetLedgerMode = computed(() => this.assetLedgerFamilyIdentity() !== null);
+  readonly assetLedgerFamilyIdentity = computed(() => this.moveBasisFamilyIdentity());
+  readonly assetLedgerSessionId = computed(() => this.currentSessionId());
+  readonly isAssetLedgerMode = computed(
+    () => this.isMoveBasisMode() && this.moveBasisFamilyIdentity() !== null
+  );
   readonly isSettingsMode = toSignal(
     this.route.data.pipe(map((data) => data['mode'] === 'settings')),
     { initialValue: this.route.snapshot.data['mode'] === 'settings' }
@@ -321,8 +331,14 @@ export class DashboardComponent {
   readonly selectedNetworkIds = signal<ReadonlySet<NetworkId>>(new Set<NetworkId>());
   readonly sessionIntegrations = signal<ReadonlyArray<IntegrationInfo>>([]);
   readonly hideDustAssets = signal(true);
+  private static readonly DUST_THRESHOLD_USD = 0.01;
   readonly showReconciliationWarnings = signal(true);
-  readonly isFiltersCollapsed = signal(false);
+  readonly isFiltersCollapsed = signal(
+    typeof window !== 'undefined' && window.innerWidth <= 900
+  );
+  readonly sortColumn = signal<SortColumn>('net');
+  readonly sortDir = signal<'asc' | 'desc'>('desc');
+  readonly NETWORK_VISIBLE_LIMIT = 3;
   readonly networksAllocationExpanded = signal(false);
   readonly walletsAllocationExpanded = signal(false);
   readonly lpTab = signal<LpTab>('all');
@@ -351,6 +367,14 @@ export class DashboardComponent {
       return `Backfill ${this.backfillProgressPct()}%`;
     }
     const phase = status.phaseProgress?.phase ?? status.pipelineStage ?? 'BACKFILL';
+    // Inter-stage gap: last stage COMPLETE but not the final one — next stage starting
+    if (
+      status.pipelineStatus === 'COMPLETE' &&
+      status.pipelineStage &&
+      status.pipelineStage !== 'PORTFOLIO_SNAPSHOT_REFRESH'
+    ) {
+      return `${this.phaseDisplayLabel(phase)}: preparing next stage…`;
+    }
     return `${this.phaseDisplayLabel(phase)}: ${this.backfillProgressPct()}% done`;
   });
 
@@ -358,6 +382,14 @@ export class DashboardComponent {
     const status = this.sessionBackfillStatus();
     if (status === null) {
       return this.data().backfill.networksLabel;
+    }
+    // Inter-stage gap label
+    if (
+      status.pipelineStatus === 'COMPLETE' &&
+      status.pipelineStage &&
+      status.pipelineStage !== 'PORTFOLIO_SNAPSHOT_REFRESH'
+    ) {
+      return 'Starting next pipeline stage…';
     }
     const phaseProgress = status.phaseProgress;
     if (phaseProgress !== null && phaseProgress !== undefined) {
@@ -416,7 +448,7 @@ export class DashboardComponent {
   });
 
   readonly onChainWallets = computed<ReadonlyArray<WalletInfo>>(() =>
-    this.data().wallets.filter((w) => w.address.startsWith('0x'))
+    this.data().wallets.filter((w) => isOnChainAddress(w.address))
   );
   readonly availableWalletIds = computed<ReadonlyArray<WalletId>>(() => this.data().wallets.map((wallet) => wallet.id));
   readonly availableIntegrationRefs = computed<ReadonlyArray<string>>(() =>
@@ -425,9 +457,9 @@ export class DashboardComponent {
   readonly availableNetworkIds = computed<ReadonlyArray<NetworkId>>(() => this.filterNetworks().map((network) => network.id));
 
   readonly activeFilterCount = computed(() => {
-    // Count only on-chain (0x) wallets shown as chips — bybit virtual wallets are integration-managed
+    // Count only on-chain wallets shown as chips — CEX virtual wallets are integration-managed
     const onChainCount = this.onChainWallets().length;
-    const selectedOnChainCount = [...this.selectedWalletIds()].filter((id) => id.startsWith('0x')).length;
+    const selectedOnChainCount = [...this.selectedWalletIds()].filter((id) => isOnChainAddress(id)).length;
     const hiddenWallets = this.walletFilterMode() === 'all'
       ? 0
       : Math.max(0, onChainCount - selectedOnChainCount);
@@ -540,20 +572,20 @@ export class DashboardComponent {
       }
     }
     let merged = [...byId.values()];
-    if (
-      this.sessionIntegrations().length > 0 &&
-      !merged.some((network) => network.id === 'BYBIT')
-    ) {
-      const presentation = INTEGRATION_PRESENTATION_BY_PROVIDER.get('BYBIT');
-      merged = [
-        ...merged,
-        {
-          id: 'BYBIT',
-          icon: presentation?.icon ?? '◈',
-          label: presentation?.label ?? 'Bybit',
-          color: presentation?.color ?? COLORS.textSubtle,
-        },
-      ];
+    for (const integration of this.sessionIntegrations()) {
+      const venueId = integration.provider.toUpperCase();
+      if (!merged.some((network) => network.id === venueId)) {
+        const presentation = INTEGRATION_PRESENTATION_BY_PROVIDER.get(venueId);
+        merged = [
+          ...merged,
+          {
+            id: venueId,
+            icon: presentation?.icon ?? '◈',
+            label: presentation?.label ?? integration.label,
+            color: presentation?.color ?? COLORS.textSubtle,
+          },
+        ];
+      }
     }
     return merged;
   });
@@ -588,11 +620,8 @@ export class DashboardComponent {
     const hideDust = this.hideDustAssets();
 
     return this.data().tokenPositions.filter((asset) => {
-      if (hideDust && Math.abs(asset.marketValueUsd ?? 0) < 0.5) {
-        return false;
-      }
-      const isOnChain = asset.walletId.startsWith('0x');
-      // Wallet chip filter applies only to on-chain (0x) wallets
+      const isOnChain = asset.domain !== 'CEX';
+      // Wallet chip filter applies only to on-chain wallets
       if (isOnChain && selectedWallets.size > 0 && !selectedWallets.has(asset.walletId)) {
         return false;
       }
@@ -616,6 +645,7 @@ export class DashboardComponent {
   });
 
   readonly filteredTokenFamilies = computed<ReadonlyArray<TokenFamilyRow>>(() => {
+    const hideDust = this.hideDustAssets();
     const grouped = new Map<string, {
       familyIdentity: string;
       symbol: string;
@@ -627,6 +657,10 @@ export class DashboardComponent {
       totalNetCostBasisUsd: number;
       unrealizedPnlUsd: number;
       realizedPnlUsd: number;
+      breakEvenUsd: number | null;
+      lockedSurplusUsd: number;
+      incomeReceivedUsd: number;
+      attributionTargetFamily: string | null;
       priceSource: PriceSource | null;
       pricedAt: string | null;
       stalenessSeconds: number | null;
@@ -657,6 +691,10 @@ export class DashboardComponent {
           totalNetCostBasisUsd,
           unrealizedPnlUsd: position.unrealizedPnlUsd,
           realizedPnlUsd: position.realizedPnlUsd,
+          breakEvenUsd: position.breakEvenUsd,
+          lockedSurplusUsd: position.lockedSurplusUsd,
+          incomeReceivedUsd: position.incomeReceivedUsd,
+          attributionTargetFamily: position.attributionTargetFamily,
           priceSource: position.priceSource,
           pricedAt: position.pricedAt,
           stalenessSeconds: position.stalenessSeconds,
@@ -679,6 +717,12 @@ export class DashboardComponent {
       existing.totalNetCostBasisUsd += totalNetCostBasisUsd;
       existing.unrealizedPnlUsd += position.unrealizedPnlUsd;
       existing.realizedPnlUsd += position.realizedPnlUsd;
+      // ADR-062 metrics are family-level (identical across a family's positions); keep the first
+      // non-null value so a wallet/network split does not drop the break-even attribution.
+      existing.breakEvenUsd = existing.breakEvenUsd ?? position.breakEvenUsd;
+      existing.attributionTargetFamily = existing.attributionTargetFamily ?? position.attributionTargetFamily;
+      existing.lockedSurplusUsd = existing.lockedSurplusUsd || position.lockedSurplusUsd;
+      existing.incomeReceivedUsd = existing.incomeReceivedUsd || position.incomeReceivedUsd;
       existing.priceSource = this.pickPriceSource(existing, position);
       existing.pricedAt = this.pickLatestPricedAt(existing.pricedAt, position.pricedAt);
       existing.stalenessSeconds = this.pickSmallestStaleness(existing.stalenessSeconds, position.stalenessSeconds);
@@ -717,6 +761,10 @@ export class DashboardComponent {
           unrealizedPnlPct,
           unrealizedPnlUsd: group.unrealizedPnlUsd,
           realizedPnlUsd: group.realizedPnlUsd,
+          breakEvenUsd: group.breakEvenUsd,
+          lockedSurplusUsd: group.lockedSurplusUsd,
+          incomeReceivedUsd: group.incomeReceivedUsd,
+          attributionTargetFamily: group.attributionTargetFamily,
           issue: group.issue,
           networkIds: [...group.networkIds],
           walletIds: [...group.walletIds],
@@ -727,7 +775,38 @@ export class DashboardComponent {
           unsupportedValuationReason: group.unsupportedValuationReason,
         };
       })
-      .sort((left, right) => right.currentValueUsd - left.currentValueUsd);
+      .filter((family) => {
+        // Dust filter: hide families whose NET market value is below $0.01.
+        // Applied at family level (aggregated across all wallets/networks for the same symbol).
+        if (hideDust && Math.abs(family.currentValueUsd) < DashboardComponent.DUST_THRESHOLD_USD) {
+          return false;
+        }
+        return true;
+      })
+      .sort((left, right) => {
+        const column = this.sortColumn();
+        const direction = this.sortDir();
+        const multiplier = direction === 'desc' ? -1 : 1;
+        let comparison = 0;
+        switch (column) {
+          case 'asset':
+            comparison = left.symbol.localeCompare(right.symbol);
+            break;
+          case 'qty':
+            comparison = left.quantity - right.quantity;
+            break;
+          case 'net':
+            comparison = left.currentValueUsd - right.currentValueUsd;
+            break;
+          case 'avgCost':
+            comparison = left.netAvcoUsd - right.netAvcoUsd;
+            break;
+          case 'price':
+            comparison = left.priceUsd - right.priceUsd;
+            break;
+        }
+        return comparison * multiplier;
+      });
   });
 
   readonly filteredLpPositions = computed(() => {
@@ -833,15 +912,23 @@ export class DashboardComponent {
   });
 
   readonly onChainVsCexSplit = computed(() => {
-    const rows = this.tokenUsdByNetwork();
-    const total = rows.reduce((sum, row) => sum + row.valueUsd, 0);
-    const cex = rows
-      .filter((row) => row.id === 'BYBIT')
-      .reduce((sum, row) => sum + row.valueUsd, 0);
-    const onChain = total - cex;
+    const positions = this.filteredTokenPositions();
+    let totalUsd = 0;
+    let cexUsd = 0;
+    for (const position of positions) {
+      const valueUsd = position.marketValueUsd ?? 0;
+      if (!Number.isFinite(valueUsd) || valueUsd <= 0) {
+        continue;
+      }
+      totalUsd += valueUsd;
+      if (position.domain === 'CEX') {
+        cexUsd += valueUsd;
+      }
+    }
+    const onChainUsd = totalUsd - cexUsd;
     return {
-      onChainPct: total > 0 ? (onChain / total) * 100 : 0,
-      cexPct: total > 0 ? (cex / total) * 100 : 0,
+      onChainPct: totalUsd > 0 ? (onChainUsd / totalUsd) * 100 : 0,
+      cexPct: totalUsd > 0 ? (cexUsd / totalUsd) * 100 : 0,
     };
   });
 
@@ -949,25 +1036,6 @@ export class DashboardComponent {
       }
       void this.router.navigate(['/settings']);
     });
-    effect(() => {
-      const routeSessionId = this.routeAssetLedgerSelection().sessionId;
-      if (routeSessionId === null || routeSessionId.length === 0 || routeSessionId === this.currentSessionId()) {
-        return;
-      }
-      this.sessionStorageService.setSessionId(routeSessionId);
-      this.currentSessionId.set(routeSessionId);
-      this.loadSessionBackfillStatus(routeSessionId);
-    });
-    effect(() => {
-      const routeFamilyIdentity = this.routeAssetLedgerSelection().familyIdentity;
-      if (routeFamilyIdentity === null || routeFamilyIdentity.length === 0) {
-        return;
-      }
-      if (this.selectedAssetFamilyIdentity() === routeFamilyIdentity) {
-        return;
-      }
-      this.selectedAssetFamilyIdentity.set(routeFamilyIdentity);
-    });
   }
 
   get addWalletsForm(): WalletDialogFormGroup {
@@ -992,7 +1060,6 @@ export class DashboardComponent {
     }
     if (sectionId === 'lending') {
       this.section.set(sectionId);
-      this.selectedAssetFamilyIdentity.set(null);
       if (!this.isLendingMode()) {
         void this.router.navigate(['/lending']);
       }
@@ -1000,7 +1067,6 @@ export class DashboardComponent {
     }
     if (sectionId === 'lp') {
       this.section.set(sectionId);
-      this.selectedAssetFamilyIdentity.set(null);
       if (!this.isLpMode()) {
         void this.router.navigate(['/lp']);
       }
@@ -1033,7 +1099,6 @@ export class DashboardComponent {
     if (this.isSettingsMode()) {
       return;
     }
-    this.selectedAssetFamilyIdentity.set(null);
     void this.router.navigate(['/settings']);
   }
 
@@ -1084,6 +1149,30 @@ export class DashboardComponent {
     this.isFiltersCollapsed.update((collapsed) => !collapsed);
   }
 
+  setSort(column: SortColumn): void {
+    if (this.sortColumn() === column) {
+      this.sortDir.update((direction) => (direction === 'desc' ? 'asc' : 'desc'));
+      return;
+    }
+    this.sortColumn.set(column);
+    this.sortDir.set('desc');
+  }
+
+  visibleNetworks(networkIds: ReadonlyArray<NetworkId>): ReadonlyArray<NetworkId> {
+    return networkIds.slice(0, this.NETWORK_VISIBLE_LIMIT);
+  }
+
+  hiddenNetworkCount(networkIds: ReadonlyArray<NetworkId>): number {
+    return Math.max(0, networkIds.length - this.NETWORK_VISIBLE_LIMIT);
+  }
+
+  hiddenNetworkTooltip(networkIds: ReadonlyArray<NetworkId>): string {
+    return networkIds
+      .slice(this.NETWORK_VISIBLE_LIMIT)
+      .map((networkId) => this.networkLabel(networkId))
+      .join(', ');
+  }
+
   setLpTab(tab: LpTab): void {
     this.lpTab.set(tab);
   }
@@ -1114,14 +1203,11 @@ export class DashboardComponent {
     if (this.currentSessionId() === null) {
       return;
     }
-    this.selectedAssetFamilyIdentity.set(asset.familyIdentity);
+    void this.router.navigate(['/move-basis', asset.familyIdentity]);
   }
 
   closeAssetLedger(): void {
-    this.selectedAssetFamilyIdentity.set(null);
-    if (this.routeAssetLedgerSelection().familyIdentity !== null) {
-      void this.router.navigate(['/']);
-    }
+    void this.router.navigate(['/']);
   }
 
   openAddWalletDialog(): void {
@@ -1361,6 +1447,15 @@ export class DashboardComponent {
     return `Net AVCO: ${this.formatUsdFull(asset.netAvcoUsd)}. Market AVCO: ${this.formatUsdFull(asset.avcoUsd)}.`;
   }
 
+  // ADR-062: strip the `FAMILY:` prefix for display (e.g. `FAMILY:ETH` → `ETH`).
+  attributionParentLabel(target: string | null): string {
+    if (target === null) {
+      return '';
+    }
+    const trimmed = target.trim();
+    return trimmed.startsWith('FAMILY:') ? trimmed.slice('FAMILY:'.length) : trimmed;
+  }
+
   private formatDuration(seconds: number): string {
     if (seconds < 60) {
       return `${seconds}s`;
@@ -1594,7 +1689,7 @@ export class DashboardComponent {
       networkIds:
         this.networkFilterMode() === 'all'
           ? undefined
-          : (Array.from(this.selectedNetworkIds()).filter((id) => id !== 'BYBIT') as ReadonlyArray<EvmNetworkId>),
+          : Array.from(this.selectedNetworkIds()).filter((id) => !INTEGRATION_PRESENTATION_BY_PROVIDER.has(id)),
     };
   }
 
@@ -1737,7 +1832,19 @@ export class DashboardComponent {
   }
 
   private isPipelineRunning(status: SessionBackfillStatusResponse): boolean {
-    return status.pipelineStatus === 'RUNNING';
+    if (status.pipelineStatus === 'RUNNING') return true;
+    // Handle inter-stage gaps: pipelineStatus briefly shows COMPLETE between stages while
+    // the next stage has not yet marked itself RUNNING. Treat any non-final COMPLETE stage
+    // as "running" so the poller keeps active and the user sees continuous progress.
+    // The final completed state is PORTFOLIO_SNAPSHOT_REFRESH/COMPLETE.
+    if (
+      status.pipelineStatus === 'COMPLETE' &&
+      status.pipelineStage &&
+      status.pipelineStage !== 'PORTFOLIO_SNAPSHOT_REFRESH'
+    ) {
+      return true;
+    }
+    return false;
   }
 
   private acquisitionStatus(status: SessionBackfillStatusResponse): SessionBackfillAggregateStatus {
@@ -1781,8 +1888,9 @@ export class DashboardComponent {
     if (integration !== null) {
       return integration.color;
     }
-    if (walletId.toLowerCase().startsWith('bybit:')) {
-      return INTEGRATION_PRESENTATION_BY_PROVIDER.get('BYBIT')?.color ?? COLORS.textSubtle;
+    if (isCexAddress(walletId)) {
+      const venueId = parseVenueId(walletId);
+      return (venueId ? INTEGRATION_PRESENTATION_BY_PROVIDER.get(venueId)?.color : undefined) ?? COLORS.textSubtle;
     }
     return COLORS.textSubtle;
   }
@@ -1790,13 +1898,9 @@ export class DashboardComponent {
   walletLabel(walletId: WalletId): string {
     const wallet = this.getWalletById(walletId);
     if (wallet !== null) {
-      const normalizedId = walletId.toLowerCase();
-      if (normalizedId.startsWith('bybit:')) {
-        const parts = normalizedId.split(':');
-        const suffix = parts.length >= 3 ? parts[2].toUpperCase() : null;
-        if (suffix === 'UTA' || suffix === 'FUND' || suffix === 'EARN') {
-          return `${wallet.label} · ${suffix}`;
-        }
+      const sub = parseSubAccount(walletId);
+      if (sub !== null) {
+        return `${wallet.label} · ${sub}`;
       }
       return wallet.label;
     }

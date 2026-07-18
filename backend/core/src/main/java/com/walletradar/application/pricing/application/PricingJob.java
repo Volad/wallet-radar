@@ -31,7 +31,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class PricingJob {
 
     private static final String STAGE_NAME = "pricing";
-    private static final Duration HEARTBEAT_INTERVAL = Duration.ofSeconds(30);
 
     private final AtomicBoolean running = new AtomicBoolean(false);
 

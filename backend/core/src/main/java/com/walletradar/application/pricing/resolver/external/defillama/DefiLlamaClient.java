@@ -114,7 +114,10 @@ public class DefiLlamaClient {
             case AVALANCHE -> "avax";
             case MANTLE -> "mantle";
             case LINEA -> "linea";
+            case KATANA -> "katana";
+            case UNICHAIN -> "unichain";
             case ZKSYNC -> "era";
+            case PLASMA -> "plasma";
             default -> null;
         };
         return Optional.ofNullable(slug);

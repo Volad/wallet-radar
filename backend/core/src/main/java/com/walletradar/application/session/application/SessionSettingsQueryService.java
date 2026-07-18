@@ -5,7 +5,6 @@ import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.domain.sync.BackfillSegment;
 import com.walletradar.domain.sync.BackfillSegmentRepository;
 import com.walletradar.application.cex.acquisition.venue.bybit.BybitIntegrationStreamSyncQueryService;
-import com.walletradar.application.cex.acquisition.venue.bybit.BybitStreamSyncSnapshot;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -74,8 +73,10 @@ public class SessionSettingsQueryService {
                 BackfillSegment.SegmentStatus.FAILED
         );
         int progressPct = totalSegments == 0 ? 0 : (int) Math.round((double) completedSegments * 100.0 / totalSegments);
-        List<BybitStreamSyncSnapshot> streamSync = integration.getProvider() == UserSession.IntegrationProvider.BYBIT
-                ? bybitIntegrationStreamSyncQueryService.summarize(integration.getIntegrationId())
+        List<StreamSyncSnapshot> streamSync = integration.getProvider() == UserSession.IntegrationProvider.BYBIT
+                ? bybitIntegrationStreamSyncQueryService.summarize(integration.getIntegrationId()).stream()
+                        .map(s -> new StreamSyncSnapshot(s.stream(), s.lastSegmentCompletedAt(), s.newestStoredEventAt()))
+                        .toList()
                 : List.of();
         return new IntegrationView(
                 integration.getIntegrationId(),
@@ -141,7 +142,18 @@ public class SessionSettingsQueryService {
             int completedSegments,
             int failedSegments,
             int progressPct,
-            List<BybitStreamSyncSnapshot> streamSync
+            List<StreamSyncSnapshot> streamSync
+    ) {
+    }
+
+    /**
+     * Venue-neutral per-stream ingestion progress for the settings UI.
+     * Populated from Bybit stream sync snapshots and extensible to any venue.
+     */
+    public record StreamSyncSnapshot(
+            String stream,
+            java.time.Instant lastSegmentCompletedAt,
+            java.time.Instant newestStoredEventAt
     ) {
     }
 }

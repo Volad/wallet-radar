@@ -91,7 +91,7 @@ For each `EXT_IN` whose counterparty also appears as the counterparty of a same-
 | DApp reward / PnL settlement | RC-dapp-reward | EXT_IN | no counterparty address + `protocolName` non-blank → skip |
 | Asset class filter | RC-evm-ext-asset | EXT_IN only | for non-null symbol: only stablecoin or ETH-family passes; BRIDGE_IN exempt |
 | MULTI counterparty | — | BRIDGE_IN | `counterparty = "MULTI"` → skip (multi-sender router, ambiguous) |
-| Fake native token | RC-fake-native | all ETH/WETH-family flows | flow has non-null `assetContract` not in `KNOWN_WETH_CONTRACTS` → skip |
+| Fake native token | RC-fake-native | all ETH/WETH-family flows | flow has non-null `assetContract` not in the ETH-family allowlist (`NetworkRegistry.ethFamilyEquivalentContracts()`) → skip |
 | LP exit receipt | RC3b | inbound | flow-level `counterparty ∈ KNOWN_LP_POOL_ADDRESSES` → skip |
 | Non-universe counterparty | — | all | `isNonUniverseCounterparty` must be true |
 | Dust threshold | RC-evm-dust | inbound | USD value < $2 → skip |
@@ -110,11 +110,13 @@ Relay Protocol solvers, LiFi relayer, Hyperlane/LiFi bridge payout, EtherFi prot
 
 LP pools and vault contracts whose inbound flows are LP exit receipts (the user's own previously-deployed assets). Currently: Katana vbETH-vbUSDC LP pool and Katana vault/bridge contracts.
 
-### `KNOWN_WETH_CONTRACTS`
+### ETH-family contract allowlist (`NetworkRegistry.ethFamilyEquivalentContracts()`)
 
 Canonical WETH ERC-20 contract addresses per chain, plus chain-specific native ETH proxies (e.g. `0x000...800a` for zkSync Era). An ETH/WETH-family flow with a non-null `assetContract` outside this set is a scam/airdrop fake token.
 
-Chains covered: Ethereum mainnet, Base / Optimism / Linea / Unichain, Arbitrum One, zkSync Era, Mantle, Linea, Cronos zkEVM, Avalanche C-Chain.
+Derived from `network-descriptors.yml` (W11), not hardcoded: for each network whose `native-symbol` is `ETH`, its `wrapped-native` contract + `native-alias-contracts`; plus, for any network, its explicit `eth-family-contracts` (bridged WETH on non-ETH chains — Mantle precompile, Avalanche WETH.e). Non-ETH-native chains contribute only their explicit `eth-family-contracts`, never their wrapped-native (WBNB/WMATIC/WAVAX/WMNT/WXPL).
+
+Chains covered: Ethereum, Arbitrum, Base / Optimism / Unichain (OP-stack), zkSync Era (+ native proxy), Linea, Katana, and bridged WETH on Mantle + Avalanche.
 
 ---
 

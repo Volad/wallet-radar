@@ -354,11 +354,12 @@ class GenericFlowReplayEngineTest {
     }
 
     @Test
-    void peggedNativeSpotFallbackPromotesUncovBasisForCmeth() {
-        // Cycle/15 R5 F3 — Bybit FUND CMETH receiver via collapsed-v1 corridor with empty
-        // UTA pool. Flow has spot price (via canonical ETH alias). Engine promotes the unbacked
-        // qty into basis at spot.
-        PositionState position = new PositionState(new AssetKey("BYBIT:33625378:FUND", null, "cmeth", "CMETH", "CMETH:cmeth"));
+    void peggedNativeSpotFallbackPromotesUncovBasisForBbsol() {
+        // Cycle/15 R5 F3 — Bybit FUND BBSOL receiver via collapsed-v1 corridor with empty UTA
+        // pool. Flow has spot price. Engine promotes the unbacked qty into basis at spot.
+        // NOTE (ADR-054 §6 / plan §7c): the ETH-derivatives (e.g. CMETH) were removed from
+        // PEGGED_NATIVE_SYMBOLS, so BBSOL is used here as the still-pegged-native probe.
+        PositionState position = new PositionState(new AssetKey("BYBIT:33625378:FUND", null, "bbsol", "BBSOL", "BBSOL:bbsol"));
         position.setQuantity(new BigDecimal("0.144"));
         position.setUncoveredQuantity(new BigDecimal("0.144"));
         position.setTotalCostBasisUsd(BigDecimal.ZERO);
@@ -369,7 +370,7 @@ class GenericFlowReplayEngineTest {
 
         NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
         flow.setRole(NormalizedLegRole.TRANSFER);
-        flow.setAssetSymbol("CMETH");
+        flow.setAssetSymbol("BBSOL");
         flow.setQuantityDelta(new BigDecimal("0.144"));
         flow.setUnitPriceUsd(new BigDecimal("2175.66"));
         flow.setPriceSource(PriceSource.PEGGED_NATIVE);
@@ -384,7 +385,7 @@ class GenericFlowReplayEngineTest {
     @Test
     void peggedNativeSpotFallbackSkipsWhenNoUncovDelta() {
         // Carry path succeeded — fallback must not double-count.
-        PositionState position = new PositionState(new AssetKey("BYBIT:33625378:FUND", null, "cmeth", "CMETH", "CMETH:cmeth"));
+        PositionState position = new PositionState(new AssetKey("BYBIT:33625378:FUND", null, "bbsol", "BBSOL", "BBSOL:bbsol"));
         position.setQuantity(new BigDecimal("0.144"));
         position.setUncoveredQuantity(BigDecimal.ZERO);
         position.setTotalCostBasisUsd(new BigDecimal("313.0"));
@@ -395,7 +396,7 @@ class GenericFlowReplayEngineTest {
 
         NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
         flow.setRole(NormalizedLegRole.TRANSFER);
-        flow.setAssetSymbol("CMETH");
+        flow.setAssetSymbol("BBSOL");
         flow.setQuantityDelta(new BigDecimal("0.144"));
         flow.setUnitPriceUsd(new BigDecimal("2175.66"));
         flow.setPriceSource(PriceSource.PEGGED_NATIVE);
@@ -914,6 +915,164 @@ class GenericFlowReplayEngineTest {
                 .isEqualByComparingTo("1750.00");
         // Invariant: net AVCO <= tax AVCO
         assertThat(dest.perWalletNetAvco()).isLessThanOrEqualTo(dest.perWalletAvco());
+    }
+
+    // ─── ADR-051: capitalizeFeeIntoNetLane ───────────────────────────────────────
+
+    @Test
+    void capitalizeFeeIntoNetLane_raisesNetCostOnly_marketCostUnchanged() {
+        // A simple BUY of 1 TSLA at 371.528 is followed by a 0.186 USD commission capitalized
+        // into Net only. Market AVCO must stay 371.528; Net AVCO must be 371.714.
+        PositionState position = new PositionState(
+                new AssetKey("DZENGI:123", null, "SYMBOL:TSLA", "TSLA", "SYMBOL:TSLA"));
+
+        NormalizedTransaction.Flow buyFlow = new NormalizedTransaction.Flow();
+        buyFlow.setRole(NormalizedLegRole.BUY);
+        buyFlow.setAssetSymbol("TSLA");
+        buyFlow.setQuantityDelta(new BigDecimal("1.0"));
+        buyFlow.setUnitPriceUsd(new BigDecimal("371.528"));
+        buyFlow.setPriceSource(com.walletradar.domain.common.PriceSource.SWAP_DERIVED);
+
+        engine.applyBuyWithAcquisitionCost(buyFlow, position, new BigDecimal("371.528"));
+
+        // Verify Market AVCO set correctly
+        assertThat(position.perWalletAvco()).isEqualByComparingTo("371.528");
+        assertThat(position.perWalletNetAvco()).isEqualByComparingTo("371.528");
+
+        // ADR-051: capitalize fee into Net lane only
+        engine.capitalizeFeeIntoNetLane(new BigDecimal("0.186"), position);
+
+        assertThat(position.totalCostBasisUsd())
+                .as("Market cost basis must be unchanged")
+                .isEqualByComparingTo("371.528");
+        assertThat(position.netTotalCostBasisUsd())
+                .as("Net cost basis must include the fee")
+                .isEqualByComparingTo("371.714");
+        assertThat(position.perWalletAvco())
+                .as("Market AVCO must be unchanged")
+                .isEqualByComparingTo("371.528");
+        assertThat(position.perWalletNetAvco())
+                .as("Net AVCO must be fee-inclusive")
+                .isEqualByComparingTo("371.714");
+        assertThat(position.totalGasPaidUsd())
+                .as("Gas paid must include the capitalized fee")
+                .isEqualByComparingTo("0.186");
+    }
+
+    @Test
+    void capitalizeFeeIntoNetLane_nullOrZeroFee_positionUnchanged() {
+        PositionState position = new PositionState(
+                new AssetKey("BYBIT:1", null, "SYMBOL:BTC", "BTC", "SYMBOL:BTC"));
+
+        NormalizedTransaction.Flow buyFlow = new NormalizedTransaction.Flow();
+        buyFlow.setRole(NormalizedLegRole.BUY);
+        buyFlow.setAssetSymbol("BTC");
+        buyFlow.setQuantityDelta(new BigDecimal("0.5"));
+        buyFlow.setUnitPriceUsd(new BigDecimal("60000"));
+        buyFlow.setPriceSource(com.walletradar.domain.common.PriceSource.EXECUTION);
+        engine.applyBuyWithAcquisitionCost(buyFlow, position, new BigDecimal("30000"));
+
+        BigDecimal marketBefore = position.totalCostBasisUsd();
+        BigDecimal netBefore = position.netTotalCostBasisUsd();
+        BigDecimal gasBefore = position.totalGasPaidUsd();
+
+        engine.capitalizeFeeIntoNetLane(null, position);
+        engine.capitalizeFeeIntoNetLane(BigDecimal.ZERO, position);
+        engine.capitalizeFeeIntoNetLane(new BigDecimal("-1"), position);
+
+        assertThat(position.totalCostBasisUsd()).isEqualByComparingTo(marketBefore);
+        assertThat(position.netTotalCostBasisUsd()).isEqualByComparingTo(netBefore);
+        assertThat(position.totalGasPaidUsd()).isEqualByComparingTo(gasBefore);
+    }
+
+    // ─── BLOCKER-5B: clearResolvedPositionFlags zeroes quantityShortfall ───────────
+
+    @Test
+    void clearResolvedPositionFlags_zeroesQuantityShortfall_whenPositionFullyCovered() {
+        // A position that carried a stale shortfall (e.g. from a prior REWARD_CLAIM stamp)
+        // must have that shortfall cleared to zero once quantity > 0 and uncoveredQuantity == 0.
+        PositionState position = new PositionState(
+                new AssetKey("0xwallet", NetworkId.ARBITRUM, "0xusdt", "USDT", "FAMILY:USDT"));
+
+        // Simulate a fully-covered position with a stale shortfall value
+        position.setQuantityShortfall(new BigDecimal("5.0"));
+        // Set quantity and uncoveredQuantity to satisfy the guard (qty > 0, uncov == 0)
+        engine.restoreToPosition(
+                new BigDecimal("10.0"),
+                position,
+                new BigDecimal("10.0"),
+                BigDecimal.ZERO,
+                new BigDecimal("1.0")
+        );
+
+        engine.clearResolvedPositionFlags(position);
+
+        assertThat(position.quantityShortfall())
+                .as("clearResolvedPositionFlags must zero stale quantityShortfall on fully covered position")
+                .isEqualByComparingTo(BigDecimal.ZERO);
+    }
+
+    @Test
+    void clearResolvedPositionFlags_clearsFlags_whenPositionFullySoldOutWithNoGaps() {
+        // Fix 2: a USDT position fully sold out (qty=0, uncov=0, shortfall=0) must still have
+        // hasIncompleteHistory cleared. Without the secondary path the qty<=0 early return
+        // permanently blocks flag clearing on zero-balance positions.
+        PositionState position = new PositionState(
+                new AssetKey("BYBIT:33625378", null, "USDT", "USDT", "FAMILY:USDT"));
+        position.setHasIncompleteHistory(true);
+        position.setHasUnresolvedFlags(true);
+        position.setUnresolvedFlagCount(2);
+        // quantity=0, uncoveredQuantity=0, shortfall=0 (all zero — fully settled)
+
+        engine.clearResolvedPositionFlags(position);
+
+        assertThat(position.hasIncompleteHistory())
+                .as("clearResolvedPositionFlags must clear hasIncompleteHistory for fully sold-out zero-gap position")
+                .isFalse();
+        assertThat(position.hasUnresolvedFlags())
+                .as("clearResolvedPositionFlags must clear hasUnresolvedFlags for fully sold-out zero-gap position")
+                .isFalse();
+        assertThat(position.unresolvedFlagCount())
+                .as("clearResolvedPositionFlags must zero unresolvedFlagCount for fully sold-out zero-gap position")
+                .isZero();
+    }
+
+    @Test
+    void clearResolvedPositionFlags_doesNotClearFlags_whenZeroQtyButShortfallRemains() {
+        // Guard: qty=0 with a non-zero shortfall must NOT clear flags (gaps remain).
+        PositionState position = new PositionState(
+                new AssetKey("BYBIT:33625378", null, "USDT", "USDT", "FAMILY:USDT"));
+        position.setHasIncompleteHistory(true);
+        position.setQuantityShortfall(new BigDecimal("5.0"));
+        // uncoveredQuantity=0 but shortfall>0
+
+        engine.clearResolvedPositionFlags(position);
+
+        assertThat(position.hasIncompleteHistory())
+                .as("clearResolvedPositionFlags must not clear flags when shortfall > 0")
+                .isTrue();
+    }
+
+    @Test
+    void clearResolvedPositionFlags_doesNotClearShortfall_whenUncoveredQuantityRemains() {
+        // Guard check: when uncoveredQuantity > 0 the method must be a no-op.
+        PositionState position = new PositionState(
+                new AssetKey("0xwallet", NetworkId.ARBITRUM, "0xusdt", "USDT", "FAMILY:USDT"));
+
+        engine.restoreToPosition(
+                new BigDecimal("10.0"),
+                position,
+                new BigDecimal("5.0"),
+                new BigDecimal("3.0"),
+                null
+        );
+        position.setQuantityShortfall(new BigDecimal("7.0"));
+
+        engine.clearResolvedPositionFlags(position);
+
+        assertThat(position.quantityShortfall())
+                .as("clearResolvedPositionFlags must not touch shortfall when position is still uncovered")
+                .isEqualByComparingTo("7.0");
     }
 
     @Test

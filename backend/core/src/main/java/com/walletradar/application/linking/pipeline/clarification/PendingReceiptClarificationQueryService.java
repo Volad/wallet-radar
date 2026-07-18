@@ -351,6 +351,23 @@ public class PendingReceiptClarificationQueryService {
                 Criteria.where("missingDataReasons")
                         .in(ClassificationReasonCode.LP_POSITION_CORRELATION_REQUIRED.code())
         );
+        // LP_ENTRY mint() calls that were classified but never got a correlationId because the
+        // NonfungiblePositionManager's ERC-721 mint event is absent from Blockscout's ERC-20
+        // transfer API.  These transactions are CONFIRMED (not PENDING_CLARIFICATION) so the
+        // lpPositionCorrelationRecoveryCriteria above never selects them.  Re-admit them for a
+        // full-receipt attempt while there is still budget (< 3 attempts).
+        Criteria lpEntryMissingCorrelationCriteria = new Criteria().andOperator(
+                Criteria.where("source").is(NormalizedTransactionSource.ON_CHAIN),
+                Criteria.where("status").in(
+                        NormalizedTransactionStatus.CONFIRMED,
+                        NormalizedTransactionStatus.PENDING_PRICE
+                ),
+                Criteria.where("type").is(NormalizedTransactionType.LP_ENTRY),
+                new Criteria().orOperator(
+                        Criteria.where("correlationId").exists(false),
+                        Criteria.where("correlationId").is(null)
+                )
+        );
         // Multicall (0xac9650d8) + ETH-value transactions classified as EXTERNAL_TRANSFER_OUT
         // when BlockScout hasn't indexed the sub-call token transfers yet.
         // The eligibility gate filters by methodId and rawValue via the raw_transaction view,
@@ -378,6 +395,7 @@ public class PendingReceiptClarificationQueryService {
                         eulerPendingClarificationCriteria,
                         nativeSettlementTransferRecoveryCriteria,
                         lpPositionCorrelationRecoveryCriteria,
+                        lpEntryMissingCorrelationCriteria,
                         multicallMissingTransferCriteria
                 )
         ));

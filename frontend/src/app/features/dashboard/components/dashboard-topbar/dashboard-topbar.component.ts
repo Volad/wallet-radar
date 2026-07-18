@@ -7,13 +7,15 @@ import {
   Input,
   Output,
 } from '@angular/core';
+import { RouterLink } from '@angular/router';
 
 import { IntegrationInfo, PortfolioMetric, WalletInfo } from '../../../../core/models/dashboard.models';
+import { isOnChainAddress } from '../../../../core/utils/wallet-ref.util';
 
 @Component({
   selector: 'wr-dashboard-topbar',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, RouterLink],
   templateUrl: './dashboard-topbar.component.html',
   styleUrl: './dashboard-topbar.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -39,11 +41,11 @@ export class DashboardTopbarComponent {
   universeOpen = false;
 
   get onChainWallets(): ReadonlyArray<WalletInfo> {
-    return this.wallets.filter((w) => w.address.startsWith('0x'));
+    return this.wallets.filter((w) => isOnChainAddress(w.address));
   }
 
   get cexWallets(): ReadonlyArray<WalletInfo> {
-    return this.wallets.filter((w) => !w.address.startsWith('0x'));
+    return this.wallets.filter((w) => !isOnChainAddress(w.address));
   }
 
   get universeCount(): number {

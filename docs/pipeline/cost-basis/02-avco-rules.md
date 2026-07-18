@@ -1,17 +1,17 @@
 # Cost Basis — AVCO Rules
 
-> **Last updated:** 2026-06-30  
+> **Last updated:** 2026-07-16  
 > **Pipeline stage:** `ACCOUNTING_REPLAY`
 
 Core AVCO mechanics live in `GenericFlowReplayEngine` and are invoked by `ReplayDispatcher` / `TransferReplayHandler` for generic flows. All math uses `MathContext.DECIMAL128`.
 
-## Dual lanes: Net AVCO and Tax AVCO
+## Dual lanes: Net AVCO and Market AVCO
 
-Since ADR-040, replay maintains **two parallel cost numerators** on the same quantity pool:
+Since ADR-040 (amended 2026-07-13), replay maintains **two parallel cost numerators** on the same quantity pool:
 
 | Lane | API field | Acquisition cost for rewards / LP fee claims |
 |---|---|---|
-| **Tax AVCO** | `avcoUsd`, `totalCostBasisUsd` | FMV at receipt (existing behavior) |
+| **Market AVCO** | `avcoUsd`, `totalCostBasisUsd` | FMV at receipt (existing behavior) |
 | **Net AVCO** | `netAvcoUsd`, `netTotalCostBasisUsd` | $0 when `ZeroCostAcquisitionSupport.isZeroCostAcquisition(type)` |
 
 - Disposals relieve covered basis from both numerators using each lane's AVCO at time of sale.
@@ -231,6 +231,24 @@ arrives only as Bybit's real daily `REWARD_CLAIM` (`FUNDING_HISTORY`) legs; the 
 `INTEREST_BAND_FRACTION` synthesis double-counted income and stole principal, so earn-principal pairing
 is now equal-principal only.
 
+#### Multi-asset bot compartment basis (ADR-058)
+
+A single-asset `BOT_LEDGER` lot (`netConsumed / returnedQty`, above) generalises to multi-asset
+Trading-Bot sessions under [ADR-058](../../adr/ADR-058-bybit-bot-compartment-cost-basis.md). Basis is
+resolved **at normalization** by `BybitBotTransferCostBasisService` (before replay), so replay only
+consumes the stamped `BOT_LEDGER` prices:
+
+- **Total** session basis = net stablecoin consumed (`netConsumed`), never FMV.
+- **Per-asset split:** each returned crypto asset is valued at `returnedQty × own avgExecPrice` from its
+  own `EXECUTION_SPOT` fills inside the session window — **never** at a sibling's cost.
+- **Per-asset cap (NEW-12-R):** `Σ assetBasis` is capped down to `netConsumed` (scaled down only if it
+  exceeds it); a shortfall is left as an unallocated compartment residual and is **never** pushed onto a
+  priced sibling. No returned asset's AVCO may exceed its own execution unit price.
+- **Unpriced returns → bounded `EVIDENCE_MISSING`** (ADR-031), never FMV and never sibling-funded.
+- The bot is materialised only as the `:BOT` compartment suffix (`BYBIT:<uid>:BOT`), which collapses to
+  the `BYBIT:<uid>` umbrella and adds no replay position; `BOT_TRANSFER` legs stay off guarded continuity
+  queues. `BybitBotExecutionAttributionService` does observability-only `:BOT` tagging of the executions.
+
 ### On SELL (DISPOSE)
 
 ```text
@@ -363,8 +381,8 @@ AVCO math application per type:
 | `LP_ENTRY_REQUEST` / `LP_EXIT_REQUEST` | Escrow REALLOCATE; no PnL |
 | `BORROW` | Reserve BUY + liability record |
 | `REPAY` | Reserve SELL + liability match (zero-PnL roundtrip when matched) |
-| `STAKING_DEPOSIT` | Carry principal → derivative; no conversion PnL |
-| `STAKING_WITHDRAW` | Carry derivative → principal |
+| `STAKING_DEPOSIT` | **C1↔C1 same canonical identity:** REALLOCATE, no P&amp;L. **C1↔C2 or C2↔C2 identity change:** generic DISPOSE+ACQUIRE at market, realize P&amp;L (ADR-054) |
+| `STAKING_WITHDRAW` | Symmetric to `STAKING_DEPOSIT` (ADR-054) |
 | `LENDING_LOOP_OPEN` | ACQUIRE share at event-local price |
 | `LENDING_LOOP_REBALANCE` | CARRY between share assets |
 | `LENDING_LOOP_DECREASE` / `CLOSE` | DISPOSE share; ACQUIRE returned asset |

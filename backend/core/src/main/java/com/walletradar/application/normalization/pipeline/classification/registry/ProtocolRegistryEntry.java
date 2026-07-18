@@ -20,12 +20,17 @@ public record ProtocolRegistryEntry(
         String protocolVersion,
         boolean decomposeByLegs,
         ProtocolRegistrySpecialHandlerType specialHandler,
-        String underlyingPositionManager
+        String underlyingPositionManager,
+        // C1 (R7 LFJ): LFJ Liquidity Book pair-specific token addresses and binStep.
+        // Non-null only for LFJ_LB_PAIR entries; null for all other handler types.
+        String tokenX,
+        String tokenY,
+        Integer binStep
 ) {
     /**
-     * Backward-compatible constructor (pre RC-5): no {@code underlyingPositionManager}. Retained so
-     * existing direct constructions (tests + a few classifiers) keep compiling without a wrapper
-     * mapping.
+     * Backward-compatible constructor (pre RC-5 / pre C1): no {@code underlyingPositionManager},
+     * {@code tokenX}, {@code tokenY}, or {@code binStep}. Retained so existing direct constructions
+     * (tests + a few classifiers) keep compiling without a wrapper mapping.
      */
     public ProtocolRegistryEntry(
             String contractAddress,
@@ -40,7 +45,29 @@ public record ProtocolRegistryEntry(
             ProtocolRegistrySpecialHandlerType specialHandler
     ) {
         this(contractAddress, networks, family, role, eventType, confidence, protocolName,
-                protocolVersion, decomposeByLegs, specialHandler, null);
+                protocolVersion, decomposeByLegs, specialHandler, null, null, null, null);
+    }
+
+    /**
+     * Backward-compatible constructor (pre C1): no {@code tokenX}, {@code tokenY}, or
+     * {@code binStep}. Retained for constructions that already supply {@code underlyingPositionManager}.
+     */
+    public ProtocolRegistryEntry(
+            String contractAddress,
+            Set<NetworkId> networks,
+            ProtocolRegistryFamily family,
+            ProtocolRegistryRole role,
+            ProtocolRegistryEventType eventType,
+            ConfidenceLevel confidence,
+            String protocolName,
+            String protocolVersion,
+            boolean decomposeByLegs,
+            ProtocolRegistrySpecialHandlerType specialHandler,
+            String underlyingPositionManager
+    ) {
+        this(contractAddress, networks, family, role, eventType, confidence, protocolName,
+                protocolVersion, decomposeByLegs, specialHandler, underlyingPositionManager,
+                null, null, null);
     }
 
     public boolean supports(NetworkId networkId) {

@@ -214,14 +214,16 @@ class ReplayPendingTransferKeyFactoryTest {
     }
 
     @Test
-    @DisplayName("Uncorrelated same-UID Bybit INTERNAL_TRANSFER uses bybit-earn-carry key")
+    @DisplayName("Uncorrelated same-UID Bybit INTERNAL_TRANSFER with continuity candidate uses bybit-earn-carry key")
     void bybitUncorrelatedSameUidUsesEarnCarryKey() {
         NormalizedTransaction outbound = bybitInternalTransfer(
                 "BYBIT:33625378:FUND", "BYBIT:33625378:EARN", null, "LDO", "-68.665"
         );
+        outbound.setContinuityCandidate(true);
         NormalizedTransaction inbound = bybitInternalTransfer(
                 "BYBIT:33625378:EARN", "BYBIT:33625378:FUND", null, "LDO", "68.665"
         );
+        inbound.setContinuityCandidate(true);
 
         var outKey = factory.transferKey(outbound, outbound.getFlows().get(0));
         var inKey = factory.transferKey(inbound, inbound.getFlows().get(0));
@@ -233,16 +235,13 @@ class ReplayPendingTransferKeyFactoryTest {
     }
 
     @Test
-    @DisplayName("Same-UID Bybit INTERNAL_TRANSFER with null counterparty still uses earn-carry key")
+    @DisplayName("Same-UID Bybit INTERNAL_TRANSFER with null counterparty does not use earn-carry key (RC-B)")
     void bybitNullCounterpartySameUidFallback() {
         NormalizedTransaction tx = bybitInternalTransfer(
                 "BYBIT:33625378:FUND", null, null, "DOGE", "150"
         );
 
-        var key = factory.transferKey(tx, tx.getFlows().get(0));
-
-        assertThat(key).isNotNull();
-        assertThat(key.value()).startsWith("bybit-earn-carry:33625378:");
+        assertThat(factory.transferKey(tx, tx.getFlows().get(0))).isNull();
     }
 
     @Test
@@ -519,6 +518,40 @@ class ReplayPendingTransferKeyFactoryTest {
         var key = factory.bridgeSettlementKey(bridgeIn, usdtFlow);
         assertThat(key).isNotNull();
         assertThat(key.value()).isEqualTo("bridge-settlement:bridge:lifi:0x8b471042fca");
+    }
+
+    @Test
+    @DisplayName("NEW-08: shaped USDC BRIDGE_OUT and ETH BRIDGE_IN both emit the same bridge-settlement key")
+    void crossAssetUsdcOutEthInEmitMatchingSettlementKeys() {
+        String correlationId = "bridge:lifi:0xda7d556e558de7";
+
+        NormalizedTransaction source = baseTransaction(NormalizedTransactionType.BRIDGE_OUT);
+        source.setNetworkId(NetworkId.UNICHAIN);
+        source.setCorrelationId(correlationId);
+        source.setMatchedCounterparty("0xc0aaf96b5712c");
+        source.setContinuityCandidate(false);
+        NormalizedTransaction.Flow usdcOut = transferFlow("USDC", "0x078d782b760474a361dda0af3839290b0ef57ad6", "-2050.040045");
+        source.setFlows(new java.util.ArrayList<>(List.of(usdcOut)));
+
+        NormalizedTransaction destination = baseTransaction(NormalizedTransactionType.BRIDGE_IN);
+        destination.setNetworkId(NetworkId.KATANA);
+        destination.setCorrelationId(correlationId);
+        destination.setMatchedCounterparty("0xda7d556e558de7");
+        destination.setContinuityCandidate(false);
+        NormalizedTransaction.Flow ethIn = transferFlow("ETH", null, "0.452894");
+        destination.setFlows(new java.util.ArrayList<>(List.of(ethIn)));
+
+        var outKey = factory.bridgeSettlementKey(source, usdcOut);
+        var inKey = factory.bridgeSettlementKey(destination, ethIn);
+
+        assertThat(outKey).isNotNull();
+        assertThat(inKey).isNotNull();
+        assertThat(outKey.value()).isEqualTo("bridge-settlement:" + correlationId);
+        assertThat(inKey.value()).isEqualTo("bridge-settlement:" + correlationId);
+        assertThat(outKey).isEqualTo(inKey);
+        // Same-asset (cc=true) never emits a settlement key — it uses bridgeTransferKey ("bridge:").
+        source.setContinuityCandidate(true);
+        assertThat(factory.bridgeSettlementKey(source, usdcOut)).isNull();
     }
 
     @Test

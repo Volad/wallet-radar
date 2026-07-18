@@ -1,5 +1,6 @@
 package com.walletradar.application.costbasis.application.replay.query;
 
+import com.walletradar.canonical.correlation.CorrelationContract;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
@@ -62,11 +63,16 @@ public class ConfirmedReplayQueryService {
             return true;
         }
         return tx.getType() == NormalizedTransactionType.EXTERNAL_TRANSFER_OUT
+                || tx.getType() == NormalizedTransactionType.FIAT_EXIT
                 || tx.getType() == NormalizedTransactionType.DEX_ORDER_SETTLEMENT;
     }
 
-    // B-2 / B-SPIKE-03: order bybit-collapsed-v1 and corridor rows outbound-first so FUND
-    // CARRY_OUT lands before umbrella CARRY_IN at the same timestamp.
+    // B-2 / B-SPIKE-03: order bybit-collapsed-v1 outbound-first so FUND CARRY_OUT lands before
+    // umbrella CARRY_IN at the same timestamp. For Bybit-sourced BYBIT-CORRIDOR rows (source=BYBIT,
+    // e.g. FUNDING_HISTORY corridor events) the ordering is inverted: CARRY_IN (deposit) must
+    // arrive before CARRY_OUT (drain) so the pending-transfer queue is populated before it is
+    // consumed on the receiving wallet. BLOCKER-5A: the guard is isBybit (not !isBybit) because
+    // BYBIT-CORRIDOR FUND events have source=BYBIT.
     private static int corridorContinuityFlowSign(NormalizedTransaction tx) {
         if (tx == null || tx.getFlows() == null) {
             return 0;
@@ -75,16 +81,28 @@ public class ConfirmedReplayQueryService {
         String correlationId = tx.getCorrelationId();
         boolean isBybitCollapsed = isBybit
                 && correlationId != null
-                && correlationId.startsWith("bybit-collapsed-v1:");
-        boolean isOnChainCorridor = !isBybit
+                && correlationId.startsWith(CorrelationContract.BYBIT_COLLAPSED_V1_PREFIX);
+        boolean isBybitCorridor = isBybit
                 && tx.getType() == NormalizedTransactionType.INTERNAL_TRANSFER
                 && correlationId != null
-                && correlationId.startsWith("BYBIT-CORRIDOR:");
-        if (!isBybit && !isOnChainCorridor && !isBybitCollapsed) {
+                && correlationId.startsWith(CorrelationContract.BYBIT_CORRIDOR_PREFIX);
+        if (!isBybit && !isBybitCorridor && !isBybitCollapsed) {
             return 0;
         }
         if (isBybitCollapsed) {
             return bybitPrincipalFlowSign(tx);
+        }
+        if (isBybitCorridor) {
+            int principalSign = bybitPrincipalFlowSign(tx);
+            if (principalSign > 0) {
+                // CARRY_IN (deposit from on-chain): score -2 so it sorts BEFORE any collapsed
+                // CARRY_OUTs (-1) at the same timestamp. BLOCKER-5A: same-second drain funded by
+                // a corridor deposit must process the deposit first, even when the collapsed drain's
+                // id sorts lexicographically before the BYBIT-CORRIDOR id.
+                return -2;
+            }
+            // CARRY_OUT (withdrawal to on-chain): +1 — processes after both deposits and drains.
+            return -principalSign;
         }
         return switch (tx.getType()) {
             case INTERNAL_TRANSFER, LENDING_DEPOSIT, LENDING_WITHDRAW, EARN_FLEXIBLE_SAVING -> bybitPrincipalFlowSign(tx);

@@ -54,7 +54,12 @@ public class AssetLedgerBffMapper {
                                         source.protocolName(),
                                         source.quantityShortfall()
                                 ))
-                                .toList()
+                                .toList(),
+                        view.current().breakEvenUsd(),
+                        view.current().lockedSurplusUsd(),
+                        view.current().incomeReceivedUsd(),
+                        view.current().attributionTargetFamily(),
+                        view.current().familyMemberSymbols()
                 ),
                 new SessionAssetLedgerResponse.FullSessionCurrent(
                         view.fullSessionCurrent().quantity(),
@@ -92,7 +97,15 @@ public class AssetLedgerBffMapper {
                                 entry.avcoKind(),
                                 entry.fromAddress(),
                                 entry.toAddress(),
-                                entry.memberNormalizedTransactionIds()
+                                entry.memberNormalizedTransactionIds(),
+                                entry.blendedAvcoBeforeUsd(),
+                                entry.blendedAvcoAfterUsd(),
+                                entry.blendedNetAvcoBeforeUsd(),
+                                entry.blendedNetAvcoAfterUsd(),
+                                entry.blendedCoveredQuantityAfter(),
+                                entry.liquidQuantityAfter(),
+                                entry.blendedAvcoKind(),
+                                entry.effectiveCostAfterUsd()
                         ))
                         .toList(),
                 view.events().stream()

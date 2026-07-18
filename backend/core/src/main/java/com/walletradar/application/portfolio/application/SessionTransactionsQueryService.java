@@ -6,6 +6,8 @@ import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.domain.wallet.WalletDomainKind;
+import com.walletradar.domain.wallet.WalletRef;
 import com.walletradar.application.portfolio.application.port.SessionTransactionsReadPort;
 import com.walletradar.application.session.application.AccountingUniverseService;
 import lombok.RequiredArgsConstructor;
@@ -30,6 +32,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 /**
  * Read-through session transaction view over canonical normalized transactions.
@@ -356,11 +359,21 @@ public class SessionTransactionsQueryService implements SessionTransactionsReadP
         }
         String pattern = Pattern.quote(search);
         return new Criteria().orOperator(
+                Criteria.where("_id").regex(pattern, "i"),
                 Criteria.where("txHash").regex(pattern, "i"),
                 Criteria.where("flows.assetSymbol").regex(pattern, "i")
         );
     }
 
+    /**
+     * Resolves requested wallet refs against the scoped member refs, using {@link WalletRef} to
+     * handle CEX umbrella expansion transparently.
+     *
+     * <p>A CEX umbrella ref (e.g. {@code BYBIT:uid} — no sub-account) is expanded to all
+     * sub-account refs present in the scope (e.g. {@code BYBIT:uid:FUND}, {@code BYBIT:uid:UTA},
+     * {@code BYBIT:uid:EARN}). This lets the frontend filter by the integration's canonical ref
+     * without knowing which sub-accounts exist for a given venue.</p>
+     */
     private List<String> resolveWalletRefs(Collection<String> scopedMemberRefs, Collection<String> requestedWalletRefs) {
         if (scopedMemberRefs == null || scopedMemberRefs.isEmpty()) {
             return List.of();
@@ -379,8 +392,23 @@ public class SessionTransactionsQueryService implements SessionTransactionsReadP
         return requestedWalletRefs.stream()
                 .filter(Objects::nonNull)
                 .map(value -> value.trim().toLowerCase(Locale.ROOT))
-                .map(scopedByNormalizedRef::get)
-                .filter(Objects::nonNull)
+                .flatMap(normalizedRequest -> {
+                    String direct = scopedByNormalizedRef.get(normalizedRequest);
+                    if (direct != null) {
+                        return Stream.of(direct);
+                    }
+                    // CEX umbrella expansion: a ref without a sub-account (e.g. BYBIT:uid) should
+                    // resolve all sub-account refs in scope (BYBIT:uid:FUND, BYBIT:uid:UTA, …).
+                    WalletRef ref = WalletRef.parse(normalizedRequest);
+                    if (ref.domain() == WalletDomainKind.CEX && ref.subAccount() == null
+                            && !ref.uid().isBlank()) {
+                        String umbrellaPrefix = normalizedRequest + ":";
+                        return scopedByNormalizedRef.entrySet().stream()
+                                .filter(e -> e.getKey().startsWith(umbrellaPrefix))
+                                .map(Map.Entry::getValue);
+                    }
+                    return Stream.empty();
+                })
                 .distinct()
                 .toList();
     }
@@ -445,6 +473,9 @@ public class SessionTransactionsQueryService implements SessionTransactionsReadP
     private String mapSourceType(NormalizedTransaction transaction) {
         if (transaction.getType() == NormalizedTransactionType.MANUAL_COMPENSATING) {
             return "MANUAL";
+        }
+        if (WalletRef.parse(transaction.getWalletAddress()).domain() == WalletDomainKind.CEX) {
+            return "CEX";
         }
         return "CHAIN";
     }

@@ -12,6 +12,8 @@ import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.domain.wallet.WalletDomainKind;
+import com.walletradar.domain.wallet.WalletRef;
 import com.walletradar.application.pricing.domain.CanonicalAssetCatalog;
 import org.springframework.stereotype.Component;
 
@@ -221,25 +223,23 @@ public class ReplayAssetSupport {
         if (walletAddress == null || walletAddress.isBlank()) {
             return null;
         }
-        String normalized = walletAddress.trim();
-        if (!normalized.toUpperCase(Locale.ROOT).startsWith("BYBIT:")) {
+        WalletRef ref = WalletRef.parse(walletAddress.trim());
+        if (ref.domain() != WalletDomainKind.CEX || ref.uid().isBlank()) {
             return null;
         }
-        String[] parts = normalized.split(":", -1);
-        if (parts.length < 2) {
-            return null;
-        }
-        return parts[0] + ":" + parts[1];
+        return ref.umbrellaKey();
     }
 
     private static boolean sameBybitUmbrella(String walletAddress, String umbrellaRoot) {
         if (walletAddress == null || umbrellaRoot == null) {
             return false;
         }
-        if (walletAddress.equalsIgnoreCase(umbrellaRoot)) {
-            return true;
+        WalletRef ref = WalletRef.parse(walletAddress);
+        WalletRef rootRef = WalletRef.parse(umbrellaRoot);
+        if (ref.domain() != WalletDomainKind.CEX || rootRef.domain() != WalletDomainKind.CEX) {
+            return false;
         }
-        return walletAddress.toUpperCase(Locale.ROOT).startsWith(umbrellaRoot.toUpperCase(Locale.ROOT) + ":");
+        return ref.umbrellaKey().equalsIgnoreCase(rootRef.umbrellaKey());
     }
 
     private static BigDecimal zeroIfNull(BigDecimal value) {

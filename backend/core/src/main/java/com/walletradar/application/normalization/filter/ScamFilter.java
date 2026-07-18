@@ -2,6 +2,7 @@ package com.walletradar.application.normalization.filter;
 
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.application.normalization.config.ScamFilterProperties;
+import com.walletradar.application.normalization.pipeline.classification.support.RewardClaimSelectors;
 import com.walletradar.application.normalization.support.PromoSpamTextSupport;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -41,17 +42,10 @@ public class ScamFilter {
             "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
     private static final String ERC20_APPROVAL_TOPIC0 =
             "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925";
-    private static final Set<String> KNOWN_LEGIT_BRIDGE_OR_REWARD_SELECTORS = Set.of(
-            "0xe2de2a03", // redeemWithFee
-            "0x9fb67b58", // claimWithRecipient
-            "0x71ee95c0", // Merkl / Angle claim
-            "0xb7034f7e", // Compound claim
-            "0xbe5013dc", // FLUID claim
-            "0x5eac6239", // Pendle claim
-            "0x8b681820", // BSC claim-by-proof
-            "0x379607f5", // stream claim
-            "0x2f52ebb7"  // merkle claim
-    );
+    // Shared reward-claim core (RewardClaimSelectors) plus the bridge redeemWithFee selector, which
+    // is a legit non-scam call here but is not a reward-claim signal for inbound classification.
+    private static final Set<String> KNOWN_LEGIT_BRIDGE_OR_REWARD_SELECTORS =
+            RewardClaimSelectors.withExtra("0xe2de2a03");
     private static final Set<BigInteger> SUSPICIOUS_TINY_AIRDROP_VALUES = Set.of(
             BigInteger.ONE,
             BigInteger.valueOf(5),

@@ -7,6 +7,7 @@ import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
 import com.walletradar.domain.sync.BackfillSegmentRepository;
 import com.walletradar.application.cex.acquisition.venue.bybit.BybitApiClient;
+import com.walletradar.application.cex.acquisition.venue.dzengi.DzengiApiClient;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -15,6 +16,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 
@@ -29,6 +31,7 @@ public class SessionIntegrationCommandService {
     private final BackfillSegmentRepository backfillSegmentRepository;
     private final SessionSecretCryptoService sessionSecretCryptoService;
     private final BybitApiClient bybitApiClient;
+    private final DzengiApiClient dzengiApiClient;
     private final IntegrationSyncStatusService integrationSyncStatusService;
     private final AccountUniverseSyncPlanScheduler accountUniverseSyncPlanScheduler;
     private final ObjectMapper objectMapper;
@@ -41,6 +44,48 @@ public class SessionIntegrationCommandService {
     ) {
         return userSessionRepository.findById(sessionId.trim())
                 .map(session -> saveBybit(session, displayName, apiKey, apiSecret));
+    }
+
+    public Optional<IntegrationCommandResult> upsertDzengi(
+            String sessionId,
+            String displayName,
+            String apiKey,
+            String apiSecret
+    ) {
+        return userSessionRepository.findById(sessionId.trim())
+                .map(session -> saveDzengi(session, displayName, apiKey, apiSecret));
+    }
+
+    public Optional<IntegrationTestResult> testIntegration(
+            String provider,
+            String apiKey,
+            String apiSecret
+    ) {
+        String normalizedProvider = provider == null ? "" : provider.trim().toUpperCase(Locale.ROOT);
+        if (apiKey == null || apiKey.isBlank() || apiSecret == null || apiSecret.isBlank()) {
+            throw new IllegalArgumentException("API key and secret are required");
+        }
+        return switch (normalizedProvider) {
+            case "BYBIT" -> {
+                BybitApiClient.CredentialInfo info = bybitApiClient.validateCredentials(apiKey, apiSecret);
+                yield Optional.of(new IntegrationTestResult(
+                        "BYBIT",
+                        info.userId(),
+                        info.readOnly(),
+                        "Bybit credentials validated"
+                ));
+            }
+            case "DZENGI" -> {
+                DzengiApiClient.CredentialInfo info = dzengiApiClient.validateCredentials(apiKey, apiSecret);
+                yield Optional.of(new IntegrationTestResult(
+                        "DZENGI",
+                        info.userId(),
+                        info.readOnly(),
+                        "Dzengi credentials validated"
+                ));
+            }
+            default -> throw new IllegalArgumentException("Unsupported integration provider: " + provider);
+        };
     }
 
     public Optional<IntegrationRemovalResult> removeIntegration(String sessionId, String integrationId) {
@@ -138,6 +183,82 @@ public class SessionIntegrationCommandService {
         );
     }
 
+    private IntegrationCommandResult saveDzengi(
+            UserSession session,
+            String displayName,
+            String apiKey,
+            String apiSecret
+    ) {
+        Instant now = Instant.now();
+        Set<String> previousUniverseKeys = sourceKeys(session.getWallets(), session.getIntegrations());
+        DzengiApiClient.CredentialInfo credentialInfo;
+        try {
+            credentialInfo = dzengiApiClient.validateCredentials(apiKey, apiSecret);
+        } catch (IllegalStateException exception) {
+            throw new IllegalArgumentException("Dzengi credential validation failed: " + exception.getMessage(), exception);
+        }
+        if (credentialInfo.userId() == null || credentialInfo.userId().isBlank()) {
+            throw new IllegalStateException("Dzengi credential validation did not return userId");
+        }
+
+        String normalizedDisplayName = displayName == null || displayName.isBlank()
+                ? "Dzengi"
+                : displayName.trim();
+        String accountRef = "DZENGI:" + credentialInfo.userId().trim();
+        String integrationId = "DZENGI-" + credentialInfo.userId().trim();
+        String maskedKey = maskApiKey(apiKey);
+
+        if (session.getIntegrations() == null) {
+            session.setIntegrations(new ArrayList<>());
+        }
+        UserSession.SessionIntegration integration = session.getIntegrations().stream()
+                .filter(candidate -> integrationId.equals(candidate.getIntegrationId()))
+                .findFirst()
+                .orElseGet(() -> {
+                    UserSession.SessionIntegration created = new UserSession.SessionIntegration();
+                    created.setIntegrationId(integrationId);
+                    created.setCreatedAt(now);
+                    session.getIntegrations().add(created);
+                    return created;
+                });
+
+        integration.setProvider(UserSession.IntegrationProvider.DZENGI);
+        integration.setStatus(UserSession.IntegrationStatus.CONNECTED);
+        integration.setDisplayName(normalizedDisplayName);
+        integration.setAccountRef(accountRef);
+        integration.setReadOnly(credentialInfo.readOnly());
+        integration.setEncryptedCredentials(sessionSecretCryptoService.encrypt(
+                credentialsJson(apiKey, apiSecret),
+                maskedKey
+        ));
+        integration.setCapabilities(List.of(
+                credentialInfo.canDeposit() ? "DEPOSIT" : null,
+                credentialInfo.canTrade() ? "TRADE" : null,
+                credentialInfo.canWithdraw() ? "WITHDRAW" : null
+        ).stream().filter(Objects::nonNull).toList());
+        integration.setLastValidatedAt(now);
+        integration.setUpdatedAt(now);
+        integration.setLastError(null);
+        integration.setSyncState(new UserSession.IntegrationSyncState());
+
+        session.setUpdatedAt(now);
+        session.setLastSeenAt(now);
+        userSessionRepository.save(session);
+        if (!previousUniverseKeys.equals(sourceKeys(session.getWallets(), session.getIntegrations()))) {
+            accountUniverseSyncPlanScheduler.schedule(session.getId(), now);
+        }
+
+        return new IntegrationCommandResult(
+                integration.getIntegrationId(),
+                integration.getProvider().name(),
+                integration.getStatus().name(),
+                integration.getDisplayName(),
+                integration.getAccountRef(),
+                maskedKey,
+                "Dzengi integration saved, universe sync scheduled"
+        );
+    }
+
     private String credentialsJson(String apiKey, String apiSecret) {
         try {
             return objectMapper.writeValueAsString(new BybitCredentials(apiKey, apiSecret));
@@ -219,6 +340,14 @@ public class SessionIntegrationCommandService {
 
     public record IntegrationRemovalResult(
             String integrationId,
+            String message
+    ) {
+    }
+
+    public record IntegrationTestResult(
+            String provider,
+            String userId,
+            boolean readOnly,
             String message
     ) {
     }

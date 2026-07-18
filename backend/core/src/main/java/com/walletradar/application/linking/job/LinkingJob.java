@@ -2,6 +2,7 @@ package com.walletradar.application.linking.job;
 
 import com.walletradar.platform.common.config.AsyncConfig;
 import com.walletradar.domain.event.BybitNormalizationCompletedEvent;
+import com.walletradar.domain.event.DzengiNormalizationCompletedEvent;
 import com.walletradar.domain.event.LinkingCompletedEvent;
 import com.walletradar.domain.event.LinkingRequestedEvent;
 import com.walletradar.domain.event.OnChainReclassificationCompletedEvent;
@@ -68,6 +69,15 @@ public class LinkingJob {
 
     @EventListener
     @Async(AsyncConfig.PIPELINE_STAGE_EXECUTOR)
+    public void onDzengiNormalizationCompleted(DzengiNormalizationCompletedEvent event) {
+        if (!properties.isEnabled() || event == null) {
+            return;
+        }
+        runLinking("dzengi-normalization-completed", event.sessionId(), true);
+    }
+
+    @EventListener
+    @Async(AsyncConfig.PIPELINE_STAGE_EXECUTOR)
     public void onLinkingRequested(LinkingRequestedEvent event) {
         if (!properties.isEnabled() || event == null) {
             return;
@@ -89,12 +99,12 @@ public class LinkingJob {
                 LinkingDataGateService.LinkingGateSnapshot gateSnapshot = linkingDataGateService.snapshot(sessionId);
                 if (!gateSnapshot.ready()) {
                     log.debug(
-                            "LinkingJob gate blocked: sessionId={}, pendingOnChainClassification={}, pendingClarification={}, pendingReclassification={}, pendingBybitClassification={}, classificationStillRunning={}, trigger={}",
+                            "LinkingJob gate blocked: sessionId={}, pendingOnChainClassification={}, pendingClarification={}, pendingReclassification={}, pendingCexClassification={}, classificationStillRunning={}, trigger={}",
                             sessionId,
                             gateSnapshot.pendingOnChainClassificationCount(),
                             gateSnapshot.pendingClarificationCount(),
                             gateSnapshot.pendingReclassificationCount(),
-                            gateSnapshot.pendingBybitClassificationCount(),
+                            gateSnapshot.pendingCexClassificationByProvider(),
                             gateSnapshot.classificationStillRunning(),
                             trigger
                     );

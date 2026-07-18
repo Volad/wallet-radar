@@ -1,0 +1,428 @@
+{
+  "version": "1.0.0",
+  "last_updated": "2026-07-16",
+  "description": "Network-aware behavioral counterparty hints: bridge routers, reward distributors, bridge payout/solver addresses, relay sources, LP pools, and network-scoped protocol counterparty attributions. Owns the address sets migrated out of KnownBridgeRouterRegistry, KnownProtocolCounterpartyRegistry, and PortfolioConservationGate (ADR-059 Wave W2). protocol-registry.json is untouched.",
+  "categories": [
+    "BRIDGE_ROUTER",
+    "REWARD_DISTRIBUTOR",
+    "BRIDGE_PAYOUT",
+    "RELAY_SOURCE",
+    "LP_POOL",
+    "PROTOCOL_COUNTERPARTY"
+  ],
+  "entries": [
+    {
+      "address": "0x943e6e07a7e8e791dafc44083e54041d743c46e9",
+      "category": "BRIDGE_ROUTER",
+      "networks": ["*"],
+      "protocol": "Across",
+      "note": "Across V3 SpokePool (UNICHAIN and other networks)"
+    },
+    {
+      "address": "0x40f480f247f3ad2ff4c1463e84f03be3a9a03e15",
+      "category": "BRIDGE_ROUTER",
+      "networks": ["*"],
+      "protocol": "Squid",
+      "note": "Squid / SushiXSwap router (ARBITRUM)"
+    },
+    {
+      "address": "0x0a2854fbbd9b3ef66f17d47284e7f899b9509330",
+      "category": "BRIDGE_ROUTER",
+      "networks": ["*"],
+      "protocol": "Relay",
+      "note": "Relay bridge routers (OPTIMISM / BASE)"
+    },
+    {
+      "address": "0x303016b893a40134b9b82e6ae1804c61e96a9395",
+      "category": "BRIDGE_ROUTER",
+      "networks": ["*"],
+      "protocol": "Relay",
+      "note": "Relay bridge router"
+    },
+    {
+      "address": "0x6a7049ec66245b94833cb1de38bdf58578fc0fa8",
+      "category": "BRIDGE_ROUTER",
+      "networks": ["*"],
+      "protocol": "Relay",
+      "note": "Relay bridge router"
+    },
+    {
+      "address": "0x9dc9ff2fd5d9c39abe402641f310a44f67568dde",
+      "category": "BRIDGE_ROUTER",
+      "networks": ["*"],
+      "protocol": "Relay",
+      "note": "Relay bridge router"
+    },
+    {
+      "address": "0x6131b5fae19ea4f9d964eac0408e4408b66337b5",
+      "category": "BRIDGE_ROUTER",
+      "networks": ["*"],
+      "protocol": "Relay",
+      "note": "Relay bridge router"
+    },
+    {
+      "address": "0x8e8c3d4313fd5c5051a02b9e580415691a0f7951",
+      "category": "BRIDGE_ROUTER",
+      "networks": ["*"],
+      "protocol": "Relay",
+      "note": "Relay bridge router"
+    },
+    {
+      "address": "0x85a80afee867adf27b50bdb7b76da70f1e853062",
+      "category": "BRIDGE_ROUTER",
+      "networks": ["*"],
+      "protocol": "Relay",
+      "note": "Relay bridge router"
+    },
+    {
+      "address": "0x2ea8cb6f614a3c579d1d09474573387d3c16ac6d",
+      "category": "BRIDGE_ROUTER",
+      "networks": ["*"],
+      "protocol": "Relay",
+      "note": "Relay bridge router"
+    },
+    {
+      "address": "0xf5042e6ffac5a625d4e7848e0b01373d8eb9e222",
+      "category": "BRIDGE_ROUTER",
+      "networks": ["*"],
+      "protocol": "Relay",
+      "note": "Relay bridge router"
+    },
+    {
+      "address": "0x16ac3457ce84e6c5f80b394c59ccb2fd17049a62",
+      "category": "BRIDGE_ROUTER",
+      "networks": ["*"],
+      "protocol": "Relay",
+      "note": "Relay bridge router"
+    },
+    {
+      "address": "0x00a55649e597d463fd212fbe48a3b40f0e227d06",
+      "category": "BRIDGE_ROUTER",
+      "networks": ["*"],
+      "protocol": "Relay",
+      "note": "Relay bridge router (also a BRIDGE_PAYOUT solver — dual-purpose)"
+    },
+    {
+      "address": "0x2659c6085d26144117d904c46b48b6d180393d27",
+      "category": "BRIDGE_ROUTER",
+      "networks": ["*"],
+      "protocol": "Relay",
+      "note": "Relay bridge router (also a Katana LP_POOL vault — dual-purpose)"
+    },
+    {
+      "address": "0x2a2c512beaa8eb15495726c235472d82effb7a6b",
+      "category": "BRIDGE_ROUTER",
+      "networks": ["*"],
+      "protocol": "Relay",
+      "note": "Relay bridge router (also a Katana LP_POOL — dual-purpose)"
+    },
+    {
+      "address": "0xba9dd716ba2a4b9fa7818802beb631f10bd28073",
+      "category": "BRIDGE_ROUTER",
+      "networks": ["*"],
+      "protocol": "Relay",
+      "note": "Relay bridge router (also a Katana LP_POOL weETH vault — dual-purpose)"
+    },
+    {
+      "address": "0x223ec22d67716fca620aee72b25ffe4ece436f25",
+      "category": "BRIDGE_ROUTER",
+      "networks": ["*"],
+      "protocol": "Relay",
+      "note": "Relay bridge router (also a Katana LP_POOL weETH vault — dual-purpose)"
+    },
+    {
+      "address": "0xcd74f91e4d2a49903462d58d6951136a527a5dea",
+      "category": "BRIDGE_ROUTER",
+      "networks": ["*"],
+      "protocol": "LI.FI",
+      "note": "LiFi Diamond (BASE / ETH / many EVM networks)"
+    },
+    {
+      "address": "0x00000000aa467eba42a3d604b3d74d63b2b6c6cb",
+      "category": "BRIDGE_ROUTER",
+      "networks": ["*"],
+      "protocol": "LI.FI",
+      "note": "LiFi / LayerZero executor (LINEA)"
+    },
+    {
+      "address": "0x6ea77f83ec8693666866ece250411c974ab962a8",
+      "category": "BRIDGE_ROUTER",
+      "networks": ["*"],
+      "protocol": "Relay",
+      "note": "Relay depository / bridge entry (BASE)"
+    },
+    {
+      "address": "0x4446adc0b8136ffc55ddb7a488ba5509ace2a5ef",
+      "category": "BRIDGE_ROUTER",
+      "networks": ["*"],
+      "note": "Base transfer proxy bridge router"
+    },
+    {
+      "address": "0x026f252016a7c47cdef1f05a3fc9e20c92a49c37",
+      "category": "BRIDGE_ROUTER",
+      "networks": ["*"],
+      "note": "Plasma bridge router"
+    },
+    {
+      "address": "0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae",
+      "category": "BRIDGE_ROUTER",
+      "networks": ["*"],
+      "protocol": "LI.FI",
+      "note": "WS-1: LI.FI Diamond — main multi-network entry (ETHEREUM/ARBITRUM/BASE/BSC/etc.)"
+    },
+    {
+      "address": "0x89c6340b1a1f4b25d36cd8b063d49045caf3f818",
+      "category": "BRIDGE_ROUTER",
+      "networks": ["*"],
+      "protocol": "LI.FI",
+      "note": "WS-1: LI.FI Permit2Proxy — ARBITRUM/BASE/AVALANCHE/ETHEREUM"
+    },
+    {
+      "address": "0xe5a89411c7ef1502123d84ec1f9da9d8574f4293",
+      "category": "BRIDGE_ROUTER",
+      "networks": ["*"],
+      "protocol": "LI.FI",
+      "note": "WS-1: LI.FI Permit2Proxy — LINEA"
+    },
+    {
+      "address": "0x628d684d57c73a5d8ca77f455fdf2cc8bd503c16",
+      "category": "BRIDGE_ROUTER",
+      "networks": ["*"],
+      "protocol": "LI.FI",
+      "note": "WS-1: LI.FI Permit2Proxy — KATANA"
+    },
+    {
+      "address": "0xa3681352316c030b06a83b04394a860a49b47706",
+      "category": "BRIDGE_ROUTER",
+      "networks": ["*"],
+      "protocol": "LI.FI",
+      "note": "WS-1: LI.FI Permit2Proxy — UNICHAIN"
+    },
+    {
+      "address": "0x3c6b2e0b7421254846c53c118e24c65d59eae75e",
+      "category": "BRIDGE_ROUTER",
+      "networks": ["*"],
+      "protocol": "LI.FI",
+      "note": "WS-1: LI.FI Permit2Proxy — PLASMA"
+    },
+    {
+      "address": "0x6307119078556fc8ad77781dfc67df20d75fb4f9",
+      "category": "BRIDGE_ROUTER",
+      "networks": ["*"],
+      "protocol": "LI.FI",
+      "note": "WS-1: LI.FI Permit2Proxy — OPTIMISM/BASE"
+    },
+    {
+      "address": "0x2270a09bfc9925e3aa083db3e19051fff8ada053",
+      "category": "BRIDGE_ROUTER",
+      "networks": ["*"],
+      "protocol": "LI.FI",
+      "note": "WS-1: LI.FI Permit2Proxy — OPTIMISM"
+    },
+    {
+      "address": "0x864b314d4c5a0399368609581d3e8933a63b9232",
+      "category": "BRIDGE_ROUTER",
+      "networks": ["*"],
+      "protocol": "LI.FI",
+      "note": "WS-1: LI.FI GasZip proxy — UNICHAIN (underlying bridge = GasZip)"
+    },
+
+    {
+      "address": "0xbc6043a5e50ba0c0213d2f7430a73e4590af97ad",
+      "category": "REWARD_DISTRIBUTOR",
+      "networks": ["*"],
+      "note": "Velodrome / Aerodrome-style reward distributors (OPTIMISM)"
+    },
+    {
+      "address": "0x07ffde14ceaade84164fd8fea876aebdcb079362",
+      "category": "REWARD_DISTRIBUTOR",
+      "networks": ["*"],
+      "note": "Velodrome / Aerodrome-style reward distributor (OPTIMISM)"
+    },
+    {
+      "address": "0x68051f9847ead8cf9c9d6bf918946f56d7827e7d",
+      "category": "REWARD_DISTRIBUTOR",
+      "networks": ["*"],
+      "note": "Velodrome / Aerodrome-style reward distributor (OPTIMISM)"
+    },
+    {
+      "address": "0x0f5212f63ba8eab0fabd94fc2071d461d9d6ddb2",
+      "category": "REWARD_DISTRIBUTOR",
+      "networks": ["*"],
+      "note": "Velodrome / Aerodrome-style reward distributor (OPTIMISM)"
+    },
+    {
+      "address": "0xfaf8fd17d9840595845582fcb047df13f006787d",
+      "category": "REWARD_DISTRIBUTOR",
+      "networks": ["*"],
+      "note": "Velodrome / Aerodrome-style reward distributor (OPTIMISM)"
+    },
+
+    {
+      "address": "0xcad97616f91872c02ba3553db315db4015cbe850",
+      "category": "BRIDGE_PAYOUT",
+      "networks": ["*"],
+      "protocol": "Relay",
+      "note": "Relay Protocol solver"
+    },
+    {
+      "address": "0x7ff8bbf9c8ab106db589e7863fb100525f61cce5",
+      "category": "BRIDGE_PAYOUT",
+      "networks": ["*"],
+      "protocol": "Relay",
+      "note": "Relay Protocol solver"
+    },
+    {
+      "address": "0xf70da97812cb96acdf810712aa562db8dfa3dbef",
+      "category": "BRIDGE_PAYOUT",
+      "networks": ["*"],
+      "protocol": "Relay",
+      "note": "Relay Protocol solver (also PROTOCOL_COUNTERPARTY on BASE — dual-purpose)"
+    },
+    {
+      "address": "0x91604f590d66ace8975eed6bd16cf55647d1c499",
+      "category": "BRIDGE_PAYOUT",
+      "networks": ["*"],
+      "protocol": "Relay",
+      "note": "Relay Protocol solver (also PROTOCOL_COUNTERPARTY ZkSync Paymaster on ZKSYNC — dual-purpose)"
+    },
+    {
+      "address": "0x8c826f795466e39acbff1bb4eeeb759609377ba1",
+      "category": "BRIDGE_PAYOUT",
+      "networks": ["*"],
+      "protocol": "LI.FI",
+      "note": "LiFi relayer / agent (also PROTOCOL_COUNTERPARTY on BASE — dual-purpose)"
+    },
+    {
+      "address": "0xf5f93d26229482adca3e42f84d08d549cf131658",
+      "category": "BRIDGE_PAYOUT",
+      "networks": ["*"],
+      "note": "Hyperlane / LiFi bridge payout — BRIDGE_OUT 2829.12 USDC -> EXT_IN 2828.31 USDC 19 min later (2026-01-12)"
+    },
+    {
+      "address": "0xc38e4e6a15593f908255214653d3d947ca1c2338",
+      "category": "BRIDGE_PAYOUT",
+      "networks": ["*"],
+      "note": "Relay/LiFi bridge payout — BRIDGE_IN $500.38/$29.86 USDC paired with EXT_OUT $500.66/$30.00 (2025-07-31)"
+    },
+    {
+      "address": "0xeeeeee9ec4769a09a76a83c7bc42b185872860ee",
+      "category": "BRIDGE_PAYOUT",
+      "networks": ["*"],
+      "protocol": "EtherFi",
+      "note": "EtherFi protocol address — inbound weETH and stablecoin flows are staking yield distributions (rebasing), not external capital deposits."
+    },
+    {
+      "address": "0x00a55649e597d463fd212fbe48a3b40f0e227d06",
+      "category": "BRIDGE_PAYOUT",
+      "networks": ["*"],
+      "protocol": "LI.FI",
+      "note": "LiFi solver on Mantle — delivers USDC to destination wallet; originating BRIDGE_OUT not linked to BRIDGE_IN due to a LiFi destination-discovery gap. Pattern 1 matches against BRIDGE_OUT $100. (also BRIDGE_ROUTER — dual-purpose)"
+    },
+    {
+      "address": "0x4c1d3fc3fc3c177c3b633427c2f769276c547463",
+      "category": "BRIDGE_PAYOUT",
+      "networks": ["*"],
+      "protocol": "Across",
+      "note": "Across Protocol SpokePool (zkSync/L2) — relayer that delivers bridge payouts. BRIDGE_IN corrId=null because LiFi routed through Across without destination linking."
+    },
+    {
+      "address": "0x113a327221d2c4660684449bfc39bc14ad1aaf38",
+      "category": "BRIDGE_PAYOUT",
+      "networks": ["*"],
+      "note": "Sep-29-2025 USDe EXT_IN source EOA — $16.96 USDe received as part of a vbUSDC->USDe swap/bridge (BRIDGE_OUT vbUSDC $17.03 same day); Pattern 1 pairs them (0.4% diff)."
+    },
+    {
+      "address": "0x875d6d37ec55c8cf220b9e5080717549d8aa8eca",
+      "category": "BRIDGE_PAYOUT",
+      "networks": ["*"],
+      "note": "Bridge solver delivering USDC on inbound legs — Jul-01-2025 $895.05 USDC (corrId=null) and multiple Jul-11-2025 corrId-linked receipts. Paired with BRIDGE_OUT USDT0 $895.04 (same day, <0.01% diff) via Pattern 1; symmetric exclusion keeps NEC stable."
+    },
+    {
+      "address": "0x27a16dc786820b16e5c9028b75b99f6f604b5d26",
+      "category": "BRIDGE_PAYOUT",
+      "networks": ["*"],
+      "note": "Bridge solver delivering USDC on Jul-11-2025 $895.98 (corrId=null). Corresponding BRIDGE_OUT USDC $896.03 same day (corrId=null); Pattern 1 pairs them."
+    },
+    {
+      "address": "0x09aea4b2242abc8bb4bb78d537a67a245a7bec64",
+      "category": "BRIDGE_PAYOUT",
+      "networks": ["*"],
+      "note": "Bridge-related ETH transfer (fee refund / tip) on Jul-11-2025 $3.88 (corrId=null). Corresponding BRIDGE_OUT WETH $3.88 same day (corrId=null); Pattern 1 pairs them."
+    },
+
+    {
+      "address": "0x2ec2c4c3dc212c990d1bc2b48b0392a3951d926e",
+      "category": "RELAY_SOURCE",
+      "networks": ["*"],
+      "protocol": "Relay",
+      "note": "Known Relay Protocol source / depositor address. EXT_OUT flows to this address are bridge-start transactions paired with BRIDGE_IN from Relay solvers."
+    },
+
+    {
+      "address": "0x2a2c512beaa8eb15495726c235472d82effb7a6b",
+      "category": "LP_POOL",
+      "networks": ["*"],
+      "protocol": "Katana",
+      "note": "Katana vbETH-vbUSDC LP pool (also BRIDGE_ROUTER — dual-purpose)"
+    },
+    {
+      "address": "0x2659c6085d26144117d904c46b48b6d180393d27",
+      "category": "LP_POOL",
+      "networks": ["*"],
+      "protocol": "Katana",
+      "note": "Katana vault/bridge contract (Nov-1-2025): delivers vbUSDC + ETH on Katana exit. BRIDGE_IN from this address is always an LP position withdrawal, not new capital. Deposit to Katana was Oct-22-2025, outside the 72-h Pattern-1 window. (also BRIDGE_ROUTER — dual-purpose)"
+    },
+    {
+      "address": "0x223ec22d67716fca620aee72b25ffe4ece436f25",
+      "category": "LP_POOL",
+      "networks": ["*"],
+      "protocol": "Katana",
+      "note": "Katana weETH vault (Nov-21-2025): ETH leg of weETH+ETH LP exit, flow-level cp. Paired with weETH vault 0xba9dd716... in the same BRIDGE_IN transaction. (also BRIDGE_ROUTER — dual-purpose)"
+    },
+    {
+      "address": "0xba9dd716ba2a4b9fa7818802beb631f10bd28073",
+      "category": "LP_POOL",
+      "networks": ["*"],
+      "protocol": "Katana",
+      "note": "Katana weETH LP source vault (Nov-21-2025): weETH leg of the same LP exit. (also BRIDGE_ROUTER — dual-purpose)"
+    },
+
+    {
+      "address": "0x8c826f795466e39acbff1bb4eeeb759609377ba1",
+      "category": "PROTOCOL_COUNTERPARTY",
+      "networks": ["BASE"],
+      "protocol": "LI.FI",
+      "counterpartyType": "BRIDGE",
+      "asBridge": false,
+      "note": "LI.FI Permit2 Proxy on BASE"
+    },
+    {
+      "address": "0xf70da97812cb96acdf810712aa562db8dfa3dbef",
+      "category": "PROTOCOL_COUNTERPARTY",
+      "networks": ["BASE"],
+      "protocol": "Relay",
+      "counterpartyType": "BRIDGE",
+      "asBridge": false,
+      "note": "Relay solver on BASE"
+    },
+    {
+      "address": "0x1fa66e2b38d0cc496ec51f81c3e05e6a6708986f",
+      "category": "PROTOCOL_COUNTERPARTY",
+      "networks": ["ZKSYNC"],
+      "protocol": "rhino.fi",
+      "counterpartyType": "BRIDGE",
+      "asBridge": true,
+      "note": "rhino.fi on ZKSYNC"
+    },
+    {
+      "address": "0x91604f590d66ace8975eed6bd16cf55647d1c499",
+      "category": "PROTOCOL_COUNTERPARTY",
+      "networks": ["ZKSYNC"],
+      "protocol": "ZkSync Paymaster",
+      "counterpartyType": "PROTOCOL",
+      "asBridge": false,
+      "note": "ZkSync Paymaster on ZKSYNC"
+    }
+  ]
+}

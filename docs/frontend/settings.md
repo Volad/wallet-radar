@@ -30,7 +30,9 @@ sequenceDiagram
   participant Settings
   participant API as WalletApiService
 
-  User->>Settings: Edit wallets / Bybit
+  User->>Settings: Edit wallets / integration (Bybit or Dzengi)
+  User->>Settings: Test connection (optional)
+  Settings->>API: POST /sessions/{id}/integrations/test
   Settings->>API: PUT /sessions/{id}/settings
   User->>Settings: Confirm review drawer
   Settings->>API: PUT /sessions/{id}/settings
@@ -38,12 +40,36 @@ sequenceDiagram
   Note over Settings: Triggers full pipeline re-run
 ```
 
+## Integrations UI
+
+`IntegrationsSettingsSectionComponent` is **provider-agnostic**:
+
+| Provider | Status in UI |
+|----------|----------------|
+| `BYBIT` | Enabled (`soon: false`) |
+| `DZENGI` | Enabled (`soon: false`) |
+| `BINANCE`, `OKX` | Shown as "soon" (disabled) |
+
+### Connect / edit flows
+
+- Shared `integrationForm` (display name, API key, secret).
+- Provider picker sets active provider; parent loads masked key for existing integrations.
+- **Test connection** validates credentials without save (`POST .../integrations/test`).
+- **Connect** / **Update** emits provider id to `SettingsPageComponent.saveIntegration(provider)`.
+
+### Multi-integration save
+
+`PUT /sessions/{id}/settings` preserves all connected integrations. Only the active provider receives new credentials when both key and secret are filled.
+
 ## API
 
 | Method | Path |
 |--------|------|
 | GET | `/api/v1/sessions/{id}/settings` |
 | PUT | `/api/v1/sessions/{id}/settings` |
+| POST | `/api/v1/sessions/{id}/integrations/test` |
+| PUT | `/api/v1/sessions/{id}/integrations/bybit` — dedicated Bybit upsert (optional; settings overwrite also works) |
+| PUT | `/api/v1/sessions/{id}/integrations/dzengi` — dedicated Dzengi upsert (optional; settings overwrite also works) |
 | POST | `/api/v1/sessions` — create session |
 | POST | `/api/v1/sessions/{id}/refresh` — after confirm |
 
@@ -52,8 +78,9 @@ sequenceDiagram
 - EVM address: `0x` + 40 hex
 - Max 10 wallets
 - Duplicate addresses blocked
-- Bybit connect: both key + secret required
-- Bybit update: new key + secret (not masked placeholder alone)
+- Integration connect: both key + secret required
+- Integration update: new key + secret (not masked placeholder alone)
+- Test connection: both key + secret required (uses form values, not stored secrets)
 - Save wallets: all networks from `EVM_NETWORKS_PRESENTATION` on each wallet
 - Review drawer heuristic: `4–12 min per wallet` reindex estimate
 
@@ -74,4 +101,5 @@ Auth state is resolved at app startup by `AuthService.checkAuth()` → `GET /api
 ## Related
 
 - [Backfill planning](../pipeline/backfill/02-planning.md)
+- [Add an integration](../reference/extensibility/add-an-integration.md)
 - [Product context](../overview/01-product-context.md)

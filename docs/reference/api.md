@@ -1,7 +1,7 @@
 # WalletRadar — API Contract
 
 > **Version:** v3 current backend surface
-> **Last updated:** 2026-06-27
+> **Last updated:** 2026-07-08
 > **Status:** Active contract for the currently implemented REST endpoints
 
 ---
@@ -327,6 +327,13 @@ Request:
       "displayName": "Bybit main",
       "apiKey": "",
       "apiSecret": ""
+    },
+    {
+      "provider": "DZENGI",
+      "displayName": "Dzengi main",
+      "apiKey": "new-key",
+      "apiSecret": "new-secret",
+      "color": "#22d3ee"
     }
   ],
   "hideSmallAssets": true,
@@ -347,6 +354,10 @@ Errors:
 
 Creates or updates a session-owned Bybit integration and starts initial
 backfill planning for the last two years.
+
+> **Note:** Dzengi can also be connected via session settings overwrite
+> (`PUT /sessions/{id}/settings` with `provider: "DZENGI"`) or the dedicated
+> endpoint below. Both paths persist credentials and schedule backfill.
 
 Backfill is multi-stream and performs provider-side enrichment during
 acquisition. Bybit normalization later consumes the extracted staging produced
@@ -379,6 +390,75 @@ Response: `202 Accepted`
 Errors:
 
 - `400 INVALID_REQUEST`
+- `404 SESSION_NOT_FOUND`
+
+### `PUT /api/v1/sessions/{sessionId}/integrations/dzengi`
+
+Creates or updates a session-owned Dzengi integration and starts initial
+backfill planning for the last two years.
+
+Request:
+
+```json
+{
+  "displayName": "Dzengi main",
+  "apiKey": "example-api-key",
+  "apiSecret": "example-api-secret"
+}
+```
+
+Response: `202 Accepted`
+
+```json
+{
+  "integrationId": "dzengi-main",
+  "provider": "DZENGI",
+  "status": "BACKFILLING",
+  "displayName": "Dzengi main",
+  "accountRef": "DZENGI:12345678",
+  "maskedKey": "zQ1n...A9K2",
+  "message": "Dzengi integration saved, backfill planned"
+}
+```
+
+Errors:
+
+- `400 INVALID_REQUEST`
+- `404 SESSION_NOT_FOUND`
+
+### `POST /api/v1/sessions/{sessionId}/integrations/test`
+
+Validates API credentials for a supported integration provider **without**
+persisting secrets or scheduling backfill. Used by the Settings UI **Test
+connection** button before connect/save.
+
+Request:
+
+```json
+{
+  "provider": "DZENGI",
+  "apiKey": "example-api-key",
+  "apiSecret": "example-api-secret"
+}
+```
+
+Supported `provider` values: `BYBIT`, `DZENGI` (others return `400`).
+
+Response: `200 OK`
+
+```json
+{
+  "provider": "DZENGI",
+  "accountRef": "DZENGI:12345678",
+  "maskedKey": "zQ1n...A9K2",
+  "readOnly": true,
+  "message": "Dzengi credentials validated"
+}
+```
+
+Errors:
+
+- `400 INVALID_REQUEST` — missing credentials, unsupported provider, or venue validation failure
 - `404 SESSION_NOT_FOUND`
 
 ### `DELETE /api/v1/sessions/{sessionId}/integrations/{integrationId}`

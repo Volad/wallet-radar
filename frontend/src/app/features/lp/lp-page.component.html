@@ -144,7 +144,7 @@
                 </button>
               }
               <span class="toolbar-label">Total fees:</span>
-              <span class="mono pos toolbar-value">{{ formatUsd(summary.feesEarnedUsd) }}</span>
+              <span class="mono pos toolbar-value"><wr-smart-amount [value]="summary.feesEarnedUsd" /></span>
             </div>
           </div>
 
@@ -158,18 +158,17 @@
             }
           </div>
 
-          <!-- Column headers -->
-          <div class="lp-col-headers">
-            <span class="col-label">Position</span>
-            <span class="col-label">TVL</span>
-            <span class="col-label">Fees <span class="col-label-sub">/ IL</span></span>
-            <span class="col-label">Net P&amp;L</span>
-            <span class="col-label">APR</span>
-            <span class="col-label"></span>
-          </div>
-
           <!-- Scrollable position list -->
           <div class="position-list">
+            <div class="lp-col-headers">
+              <span class="col-label">Position</span>
+              <span class="col-label">TVL</span>
+              <span class="col-label">Fees <span class="col-label-sub">/ IL</span></span>
+              <span class="col-label">Net P&amp;L</span>
+              <span class="col-label">APR</span>
+              <span class="col-label"></span>
+            </div>
+
             @if (filteredPositions().length === 0) {
               <div class="lp-empty">
                 <h3>{{ positionScope() === 'active' ? 'No active positions' : 'No positions match filters' }}</h3>
@@ -259,7 +258,7 @@
 
                   <!-- Net P&L column -->
                   <span class="row-pnl mono" [ngClass]="pnlClass(net)">
-                    {{ formatSignedUsd(net) }}
+                    <wr-smart-amount [value]="net" mode="usd-signed" />
                   </span>
 
                   <!-- APR + chevron -->
@@ -297,7 +296,7 @@
                       </div>
                       <div class="stat-card">
                         <span class="stat-label">Net P&amp;L</span>
-                        <strong class="stat-value mono" [ngClass]="pnlClass(net)">{{ formatSignedUsd(net) }}</strong>
+                        <strong class="stat-value mono" [ngClass]="pnlClass(net)"><wr-smart-amount [value]="net" mode="usd-signed" /></strong>
                       </div>
                       <div class="stat-card">
                         <span class="stat-label">Fees earned</span>
@@ -339,7 +338,7 @@
                         </svg>
                         <p class="chart-footnote">
                           <span>Avg per day</span>
-                          <span class="mono">{{ formatUsd(earningsValues.length > 0 ? earningsTotal(position) / earningsValues.length : 0) }}</span>
+                          <span class="mono"><wr-smart-amount [value]="earningsValues.length > 0 ? earningsTotal(position) / earningsValues.length : 0" /></span>
                         </p>
                         </div>
                       </div>
@@ -468,11 +467,11 @@
                           @if (closed) {
                             <div class="pnl-line">
                               <span class="pnl-lbl">Deposited</span>
-                              <span class="mono">{{ formatUsd(position.costBasisUsd ?? 0) }}</span>
+                              <span class="mono"><wr-smart-amount [value]="position.costBasisUsd ?? 0" /></span>
                             </div>
                             <div class="pnl-line">
                               <span class="pnl-lbl">Withdrawn</span>
-                              <span class="mono pos">{{ formatUsd(position.withdrawnUsd ?? 0) }}</span>
+                              <span class="mono pos"><wr-smart-amount [value]="position.withdrawnUsd ?? 0" /></span>
                             </div>
                             <div class="pnl-line">
                               <span class="pnl-lbl">Fees earned</span>
@@ -481,7 +480,7 @@
                             <div class="pnl-divider"></div>
                             <div class="pnl-line bold">
                               <span class="pnl-lbl">Net realized</span>
-                              <span class="mono" [ngClass]="pnlClass(net)">{{ formatSignedUsd(net) }}</span>
+                              <span class="mono" [ngClass]="pnlClass(net)"><wr-smart-amount [value]="net" mode="usd-signed" /></span>
                             </div>
                           } @else {
                             <div class="pnl-line">
@@ -506,13 +505,13 @@
                                 <span class="pnl-lbl">Price appreciation</span>
                                 <small class="pnl-sub">underlying change</small>
                               </span>
-                              <span class="mono" [ngClass]="pnlClass(position.priceAppreciationUsd)">{{ formatSignedUsd(position.priceAppreciationUsd) }}</span>
+                              <span class="mono" [ngClass]="pnlClass(position.priceAppreciationUsd)"><wr-smart-amount [value]="position.priceAppreciationUsd" mode="usd-signed" /></span>
                             </div>
                             }
                             <div class="pnl-divider pnl-divider-strong"></div>
                             <div class="pnl-line bold">
                               <span class="pnl-lbl">Net P&amp;L</span>
-                              <span class="mono" [ngClass]="pnlClass(net)">{{ formatSignedUsd(net) }}</span>
+                              <span class="mono" [ngClass]="pnlClass(net)"><wr-smart-amount [value]="net" mode="usd-signed" /></span>
                             </div>
                           }
                         </div>
@@ -537,13 +536,13 @@
                                 <div class="reward-body">
                                   <div class="reward-qty mono">
                                     @if (token.qtyUnclaimed !== null && token.qtyUnclaimed !== 0) {
-                                      {{ formatQuantity(token.qtyUnclaimed) }}
+                                      <wr-smart-amount [value]="token.qtyUnclaimed" mode="qty" />
                                     }
                                   </div>
                                   <div class="reward-sym-sm">{{ token.symbol }}</div>
                                 </div>
                                 <span class="mono pos">
-                                  @if (token.usdUnclaimed !== null) { +{{ formatUsd(token.usdUnclaimed) }} }
+                                  @if (token.usdUnclaimed !== null) { +<wr-smart-amount [value]="token.usdUnclaimed" /> }
                                 </span>
                               </div>
                             }
@@ -606,7 +605,7 @@
                                   <span class="txn-leg-sm mono">
                                     <b [class]="txnLegClass(leg.quantity)">{{ formatTxnLeg(leg.quantity, leg.symbol) }}</b>
                                     @if (leg.valueUsd !== null) {
-                                      <small class="txn-leg-usd">/ {{ formatUsd(leg.valueUsd) }}</small>
+                                      <small class="txn-leg-usd">/ <wr-smart-amount [value]="leg.valueUsd" /></small>
                                     }
                                   </span>
                                 }
@@ -614,7 +613,7 @@
                               <!-- Total -->
                               <span class="txn-total-col">
                                 @if (txn.totalValueUsd !== null) {
-                                  <span class="mono">{{ formatUsd(txn.totalValueUsd) }}</span>
+                                  <span class="mono"><wr-smart-amount [value]="txn.totalValueUsd" /></span>
                                 }
                               </span>
                               <!-- Tx hash -->

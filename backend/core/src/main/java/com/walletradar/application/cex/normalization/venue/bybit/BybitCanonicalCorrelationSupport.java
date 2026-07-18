@@ -1,5 +1,6 @@
 package com.walletradar.application.cex.normalization.venue.bybit;
 
+import com.walletradar.application.costbasis.support.AccountingAssetClassificationSupport;
 import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRaw;
 
@@ -95,9 +96,11 @@ final class BybitCanonicalCorrelationSupport {
         if (uid.isBlank()) {
             return null;
         }
+        String cluster = AccountingAssetClassificationSupport.liquidStakingNormalizationCluster(
+                left.getAssetSymbol(), right.getAssetSymbol());
         String leftFamily = AccountingAssetFamilySupport.continuityIdentity(left.getAssetSymbol(), null);
         String rightFamily = AccountingAssetFamilySupport.continuityIdentity(right.getAssetSymbol(), null);
-        String family = leftFamily != null ? leftFamily : rightFamily;
+        String family = cluster != null ? cluster : (leftFamily != null ? leftFamily : rightFamily);
         if (family == null || family.isBlank()) {
             return null;
         }

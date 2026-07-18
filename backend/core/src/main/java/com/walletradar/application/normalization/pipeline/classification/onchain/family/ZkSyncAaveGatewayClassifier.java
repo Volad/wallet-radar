@@ -61,12 +61,19 @@ public class ZkSyncAaveGatewayClassifier implements OnChainFamilyClassifier {
         if (repayWithATokens.isPresent()) {
             return repayWithATokens;
         }
-        return switch (context.view().methodId()) {
+        Optional<ClassificationDecision> selectorBased = switch (context.view().methodId()) {
             case WITHDRAW_ETH_SELECTOR -> classifyWithdrawEth(context);
             case SUPPLY_WITH_PERMIT_SELECTOR -> classifySupplyWithPermit(context);
             case DEPOSIT_ETH_SELECTOR -> classifyDepositEth(context);
             default -> Optional.empty();
         };
+        if (selectorBased.isPresent()) {
+            return selectorBased;
+        }
+        // R6b: ERC-20 Aave supply/withdraw on zkSync that bypasses the registered pool address
+        // (e.g. via a router or smart-wallet contract) falls to heuristics (REWARD_CLAIM / LP_EXIT).
+        // Intercept based on aToken symbol shape (prefix "aZks" for zkSync aTokens).
+        return classifyZkSyncAaveErc20Lending(context);
     }
 
     private Optional<ClassificationDecision> classifyBorrowEth(OnChainClassificationContext context) {
@@ -197,5 +204,68 @@ public class ZkSyncAaveGatewayClassifier implements OnChainFamilyClassifier {
     private boolean isAaveReceipt(RawLeg leg) {
         String symbol = leg.assetSymbol() == null ? "" : leg.assetSymbol().trim().toUpperCase(Locale.ROOT);
         return symbol.startsWith("A") && !isAaveDebtMarker(leg);
+    }
+
+    /**
+     * R6b: Detects Aave ERC-20 supply / withdraw on zkSync when the tx routes through an
+     * unregistered contract (router, smart-wallet) and falls to heuristic classification.
+     *
+     * <p>Detection is based on the zkSync-specific aToken symbol prefix {@code aZks…} (uppercased:
+     * {@code AZKS…}). This prefix is exclusive to Aave V3 on zkSync Era and unlikely to collide
+     * with other DeFi protocols.
+     *
+     * <ul>
+     *   <li>Inbound aToken + outbound non-aToken → {@code LENDING_DEPOSIT} (supply)</li>
+     *   <li>Outbound aToken + inbound non-aToken → {@code LENDING_WITHDRAW} (withdraw)</li>
+     * </ul>
+     */
+    private Optional<ClassificationDecision> classifyZkSyncAaveErc20Lending(OnChainClassificationContext context) {
+        if (context.view().networkId() != NetworkId.ZKSYNC) {
+            return Optional.empty();
+        }
+        List<RawLeg> legs = context.movementLegs();
+        if (legs == null || legs.isEmpty()) {
+            return Optional.empty();
+        }
+
+        boolean hasInboundZkSyncAToken = legs.stream()
+                .anyMatch(leg -> leg != null && !leg.fee()
+                        && leg.quantityDelta() != null && leg.quantityDelta().signum() > 0
+                        && isZkSyncAToken(leg.assetSymbol()));
+        boolean hasOutboundZkSyncAToken = legs.stream()
+                .anyMatch(leg -> leg != null && !leg.fee()
+                        && leg.quantityDelta() != null && leg.quantityDelta().signum() < 0
+                        && isZkSyncAToken(leg.assetSymbol()));
+        boolean hasOutboundNonAToken = legs.stream()
+                .anyMatch(leg -> leg != null && !leg.fee()
+                        && leg.quantityDelta() != null && leg.quantityDelta().signum() < 0
+                        && !isZkSyncAToken(leg.assetSymbol()) && !isAaveDebtMarker(leg));
+        boolean hasInboundNonAToken = legs.stream()
+                .anyMatch(leg -> leg != null && !leg.fee()
+                        && leg.quantityDelta() != null && leg.quantityDelta().signum() > 0
+                        && !isZkSyncAToken(leg.assetSymbol()) && !isAaveDebtMarker(leg));
+
+        // SUPPLY: outbound ERC-20 + inbound aToken (no aToken going out, no ERC-20 coming in)
+        if (hasInboundZkSyncAToken && !hasOutboundZkSyncAToken
+                && hasOutboundNonAToken && !hasInboundNonAToken) {
+            return Optional.of(build(context, NormalizedTransactionType.LENDING_DEPOSIT));
+        }
+        // WITHDRAW: outbound aToken + inbound ERC-20 (no aToken coming in, no ERC-20 going out)
+        if (hasOutboundZkSyncAToken && !hasInboundZkSyncAToken
+                && hasInboundNonAToken && !hasOutboundNonAToken) {
+            return Optional.of(build(context, NormalizedTransactionType.LENDING_WITHDRAW));
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Returns {@code true} when the asset symbol is a zkSync Aave aToken (prefix {@code AZKS}).
+     * This prefix is exclusive to Aave V3 on zkSync Era (e.g. {@code aZksWETH}, {@code aZksZK}).
+     */
+    private static boolean isZkSyncAToken(String assetSymbol) {
+        if (assetSymbol == null || assetSymbol.isBlank()) {
+            return false;
+        }
+        return assetSymbol.trim().toUpperCase(Locale.ROOT).startsWith("AZKS");
     }
 }

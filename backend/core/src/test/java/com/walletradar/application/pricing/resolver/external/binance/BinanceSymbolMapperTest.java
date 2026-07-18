@@ -25,7 +25,9 @@ class BinanceSymbolMapperTest {
     }
 
     @Test
-    void wrappedStakedEthFallsBackToStEthAndEthMarkets() {
+    void wrappedStakedEthMapsToItsOwnSpotPairsOnly() {
+        // ADR-054 §6 / plan §7c: wstETH resolves its OWN market price; the STETH/ETH exchange
+        // fallback was removed so only WSTETH spot pairs are produced.
         BinanceSymbolMapper mapper = new BinanceSymbolMapper(new ExternalPriceMappingService());
 
         assertThat(mapper.candidateSymbols(new PriceRequest(
@@ -39,15 +41,7 @@ class BinanceSymbolMapperTest {
                 "WSTETHUSDT",
                 "WSTETHFDUSD",
                 "WSTETHUSDC",
-                "WSTETHBUSD",
-                "STETHUSDT",
-                "STETHFDUSD",
-                "STETHUSDC",
-                "STETHBUSD",
-                "ETHUSDT",
-                "ETHFDUSD",
-                "ETHUSDC",
-                "ETHBUSD"
+                "WSTETHBUSD"
         );
     }
 }

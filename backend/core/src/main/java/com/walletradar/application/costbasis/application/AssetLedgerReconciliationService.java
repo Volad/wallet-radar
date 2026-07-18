@@ -5,9 +5,11 @@ import com.walletradar.application.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.application.costbasis.domain.OnChainBalance;
 import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
 import com.walletradar.application.costbasis.support.AccountingAssetIdentitySupport;
-import com.walletradar.application.costbasis.support.BybitUmbrellaSupport;
+import com.walletradar.application.costbasis.support.CexUmbrellaSupport;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.session.UserSession;
+import com.walletradar.domain.wallet.WalletDomainKind;
+import com.walletradar.domain.wallet.WalletRef;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoOperations;
@@ -157,13 +159,13 @@ class AssetLedgerReconciliationService {
             }
         }
 
-        LinkedHashSet<String> enabledBybitVenueRefs = new LinkedHashSet<>(BybitUmbrellaSupport.enabledBybitAccountRefs(session));
-        if (!enabledBybitVenueRefs.isEmpty()) {
-            Map<String, BybitFamilyUmbrellaAccumulator> umbrellas = new LinkedHashMap<>();
+        LinkedHashSet<String> enabledCexVenueRefs = new LinkedHashSet<>(CexUmbrellaSupport.enabledCexAccountRefs(session));
+        if (!enabledCexVenueRefs.isEmpty()) {
+            Map<String, CexFamilyUmbrellaAccumulator> umbrellas = new LinkedHashMap<>();
             for (Map.Entry<BucketKey, AssetLedgerPoint> ledgerEntry : latestPointByBucket.entrySet()) {
                 BucketKey bucketKey = ledgerEntry.getKey();
                 AssetLedgerPoint latestPoint = ledgerEntry.getValue();
-                if (!BybitUmbrellaSupport.bybitLedgerMatchesEnabledVenue(bucketKey.walletAddress(), enabledBybitVenueRefs)) {
+                if (!CexUmbrellaSupport.cexLedgerMatchesEnabledVenue(bucketKey.walletAddress(), enabledCexVenueRefs)) {
                     continue;
                 }
                 String pointFamilyIdentity = resolvedFamilyIdentity(
@@ -175,31 +177,31 @@ class AssetLedgerReconciliationService {
                 if (!Objects.equals(pointFamilyIdentity, familyIdentity)) {
                     continue;
                 }
-                BigDecimal currentQuantity = BybitUmbrellaSupport.bybitRawQuantityAfter(latestPoint);
+                BigDecimal currentQuantity = CexUmbrellaSupport.cexRawQuantityAfter(latestPoint);
                 if (currentQuantity.signum() <= 0) {
                     continue;
                 }
-                String aggregatedWallet = BybitUmbrellaSupport.ledgerWalletKeyForAggregation(
+                String aggregatedWallet = CexUmbrellaSupport.ledgerWalletKeyForAggregation(
                         bucketKey.walletAddress(),
-                        enabledBybitVenueRefs
+                        enabledCexVenueRefs
                 );
-                umbrellas.computeIfAbsent(aggregatedWallet, ignored -> new BybitFamilyUmbrellaAccumulator())
+                umbrellas.computeIfAbsent(aggregatedWallet, ignored -> new CexFamilyUmbrellaAccumulator())
                         .addVenue(latestPoint.getWalletAddress(), currentQuantity, latestPoint);
             }
 
-            Map<String, Map<String, BigDecimal>> liveByAccountRef = loadLiveBybitBalances(session);
-            for (Map.Entry<String, BybitFamilyUmbrellaAccumulator> umbrellaEntry : umbrellas.entrySet()) {
+            Map<String, Map<String, BigDecimal>> liveByCexAccountRef = loadLiveCexBalances(session);
+            for (Map.Entry<String, CexFamilyUmbrellaAccumulator> umbrellaEntry : umbrellas.entrySet()) {
                 String umbrellaWallet = umbrellaEntry.getKey();
-                BybitFamilyUmbrellaAccumulator umbrella = umbrellaEntry.getValue();
-                Map<String, BigDecimal> live = liveByAccountRef.get(umbrellaWallet);
+                CexFamilyUmbrellaAccumulator umbrella = umbrellaEntry.getValue();
+                Map<String, BigDecimal> live = liveByCexAccountRef.get(umbrellaWallet);
                 BigDecimal liveQty = live == null
                         ? BigDecimal.ZERO
-                        : BybitUmbrellaSupport.liveQuantityForCandidates(
+                        : CexUmbrellaSupport.liveQuantityForCandidates(
                         live,
                         umbrella.priceLookupCandidates(),
                         umbrella.fallbackSymbol()
                 );
-                BybitUmbrellaSupport.ScaledUmbrellaTotals scaled = BybitUmbrellaSupport.scaleUmbrellaToLive(
+                CexUmbrellaSupport.ScaledUmbrellaTotals scaled = CexUmbrellaSupport.scaleUmbrellaToLive(
                         umbrella.quantity(),
                         umbrella.coveredQuantity(),
                         umbrella.totalCostBasisUsd(),
@@ -270,7 +272,12 @@ class AssetLedgerReconciliationService {
                 netRealisedPnlUsd,
                 gasPaidUsd,
                 List.copyOf(uncoveredBuckets),
-                shortfallSources
+                shortfallSources,
+                null,
+                null,
+                null,
+                null,
+                List.of()
         );
     }
 
@@ -330,7 +337,7 @@ class AssetLedgerReconciliationService {
         return mongoOperations.find(query, OnChainBalance.class);
     }
 
-    private Map<String, Map<String, BigDecimal>> loadLiveBybitBalances(UserSession session) {
+    private Map<String, Map<String, BigDecimal>> loadLiveCexBalances(UserSession session) {
         Map<String, Map<String, BigDecimal>> liveByAccountRef = new LinkedHashMap<>();
         if (session.getIntegrations() == null) {
             return liveByAccountRef;
@@ -339,8 +346,11 @@ class AssetLedgerReconciliationService {
             if (integration == null
                     || integration.getStatus() == UserSession.IntegrationStatus.DISABLED
                     || integration.getAccountRef() == null
-                    || integration.getIntegrationId() == null
-                    || !integration.getAccountRef().toUpperCase(Locale.ROOT).startsWith("BYBIT:")) {
+                    || integration.getIntegrationId() == null) {
+                continue;
+            }
+            WalletRef ref = WalletRef.parse(integration.getAccountRef());
+            if (ref.domain() != WalletDomainKind.CEX) {
                 continue;
             }
             Optional<CexLiveBalancePort.SnapshotView> snapshotView =
@@ -353,7 +363,7 @@ class AssetLedgerReconciliationService {
                 continue;
             }
             liveByAccountRef.put(
-                    BybitUmbrellaSupport.normalizeAddress(integration.getAccountRef()),
+                    CexUmbrellaSupport.normalizeAddress(integration.getAccountRef()),
                     view.umbrella()
             );
         }
@@ -570,7 +580,7 @@ class AssetLedgerReconciliationService {
         }
     }
 
-    private static final class BybitFamilyUmbrellaAccumulator {
+    private static final class CexFamilyUmbrellaAccumulator {
         private BigDecimal quantity = BigDecimal.ZERO;
         private BigDecimal coveredQuantity = BigDecimal.ZERO;
         private BigDecimal totalCostBasisUsd = BigDecimal.ZERO;
@@ -603,7 +613,7 @@ class AssetLedgerReconciliationService {
                 }
             }
             if (latestPoint != null && latestPoint.getAssetSymbol() != null) {
-                priceLookupCandidates.addAll(BybitUmbrellaSupport.priceLookupCandidates(latestPoint.getAssetSymbol()));
+                priceLookupCandidates.addAll(CexUmbrellaSupport.priceLookupCandidates(latestPoint.getAssetSymbol()));
                 if (fallbackSymbol == null) {
                     fallbackSymbol = latestPoint.getAssetSymbol();
                 }

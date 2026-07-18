@@ -214,7 +214,7 @@
 
         </wr-filter-sidebar>
 
-        <main class="asset-ledger-content">
+        <main class="asset-ledger-content" (scroll)="closeAvcoHint()">
           <div class="content-summary">
             <header class="content-head">
               <div>
@@ -222,12 +222,12 @@
                 <div class="eyebrow">Move basis</div>
                 <div class="content-title-row">
                   <h2>{{ data.displaySymbol }}</h2>
-                  <span class="pill" [attr.title]="formatQuantity(data.current.coveredQuantity, 12)">
-                    {{ formatQuantity(data.current.coveredQuantity, 3) }} covered
+                  <span class="pill">
+                    <wr-smart-amount [value]="data.current.coveredQuantity" mode="qty" /> covered
                   </span>
                   @if (data.current.uncoveredQuantity > 0) {
-                    <span class="pill warning" [attr.title]="formatQuantity(data.current.uncoveredQuantity, 12)">
-                      {{ formatQuantity(data.current.uncoveredQuantity, 3) }} uncovered
+                    <span class="pill warning">
+                      <wr-smart-amount [value]="data.current.uncoveredQuantity" mode="qty" /> uncovered
                     </span>
                   }
                 </div>
@@ -236,20 +236,90 @@
             </header>
 
             <div class="stats">
-              <div class="sc">
-                <div class="sc-l">Net AVCO</div>
-                <div class="sc-v avco">{{ formatUsd(data.current.netAvcoUsd, 0) }}</div>
-                <div class="sc-s">avg cost / {{ data.displaySymbol }}</div>
-              </div>
-              <div class="sc">
-                <div class="sc-l">Market AVCO</div>
-                <div class="sc-v avco-secondary">{{ formatUsd(data.current.avcoUsd, 0) }}</div>
+              <div class="sc" [class.sc-hint-open]="openAvcoHintKey() === 'market'">
+                <div class="sc-l sc-l-row">
+                  <span>Market AVCO</span>
+                  <button
+                    type="button"
+                    class="avco-hint-btn"
+                    aria-label="What is Market AVCO?"
+                    aria-haspopup="dialog"
+                    aria-controls="avco-hint-popover"
+                    [attr.aria-expanded]="openAvcoHintKey() === 'market'"
+                    (click)="toggleAvcoHint('market', $event)">?</button>
+                </div>
+                <div class="sc-v avco-secondary">
+                  <wr-smart-amount [value]="data.current.avcoUsd" />
+                </div>
                 <div class="sc-s">market basis / {{ data.displaySymbol }}</div>
+              </div>
+              <div class="sc" [class.sc-hint-open]="openAvcoHintKey() === 'balance'">
+                <div class="sc-l sc-l-row">
+                  <span>Balance AVCO</span>
+                  <button
+                    type="button"
+                    class="avco-hint-btn"
+                    aria-label="What is Balance AVCO?"
+                    aria-haspopup="dialog"
+                    aria-controls="avco-hint-popover"
+                    [attr.aria-expanded]="openAvcoHintKey() === 'balance'"
+                    (click)="toggleAvcoHint('balance', $event)">?</button>
+                </div>
+                <div class="sc-v avco">
+                  <wr-smart-amount [value]="data.current.netAvcoUsd" />
+                </div>
+                <div class="sc-s">balance avg cost / {{ data.displaySymbol }}</div>
+              </div>
+              <div class="sc" [class.sc-hint-open]="openAvcoHintKey() === 'blended'">
+                <div class="sc-l sc-l-row">
+                  <span>Blended AVCO</span>
+                  <button
+                    type="button"
+                    class="avco-hint-btn"
+                    aria-label="What is Blended AVCO?"
+                    aria-haspopup="dialog"
+                    aria-controls="avco-hint-popover"
+                    [attr.aria-expanded]="openAvcoHintKey() === 'blended'"
+                    (click)="toggleAvcoHint('blended', $event)">?</button>
+                </div>
+                <div class="sc-v avco-blended-value">
+                  <wr-smart-amount [value]="blendedNetAvcoCurrent()" />
+                </div>
+                <div class="sc-s">total-exposure avg cost / {{ data.displaySymbol }}</div>
+              </div>
+              <div class="sc" [class.sc-hint-open]="openAvcoHintKey() === 'breakeven'">
+                <div class="sc-l sc-l-row">
+                  <span>Effective cost</span>
+                  <button
+                    type="button"
+                    class="avco-hint-btn"
+                    aria-label="What is Effective cost?"
+                    aria-haspopup="dialog"
+                    aria-controls="avco-hint-popover"
+                    [attr.aria-expanded]="openAvcoHintKey() === 'breakeven'"
+                    (click)="toggleAvcoHint('breakeven', $event)">?</button>
+                </div>
+                <div class="sc-v avco-breakeven-value">
+                  @if (data.current.breakEvenUsd !== null) {
+                    <wr-smart-amount [value]="data.current.breakEvenUsd" />
+                  } @else {
+                    <span class="sc-emdash">—</span>
+                  }
+                </div>
+                @if (data.current.lockedSurplusUsd > 0) {
+                  <div class="sc-s sc-s-surplus">
+                    past $0 by <wr-smart-amount [value]="data.current.lockedSurplusUsd" /> surplus
+                  </div>
+                } @else if (data.current.attributionTargetFamily !== null) {
+                  <div class="sc-s">P&#64;L credited to {{ attributionParentLabel(data.current.attributionTargetFamily) }}</div>
+                } @else {
+                  <div class="sc-s">effective cost / {{ data.displaySymbol }}</div>
+                }
               </div>
               <div class="sc">
                 <div class="sc-l">qty held</div>
-                <div class="sc-v" [attr.title]="formatQuantity(data.current.quantity, 12)">
-                  {{ formatQuantity(data.current.quantity, 3) }} {{ data.displaySymbol }}
+                <div class="sc-v">
+                  <wr-smart-amount [value]="data.current.quantity" mode="qty" [suffix]="data.displaySymbol" />
                 </div>
                 <div class="sc-s">net position</div>
               </div>
@@ -259,17 +329,119 @@
                   class="sc-v"
                   [class.pos]="data.current.realisedPnlUsd >= 0"
                   [class.neg]="data.current.realisedPnlUsd < 0">
-                  {{ formatSignedUsd(data.current.realisedPnlUsd, 0) }}
+                  <wr-smart-amount [value]="data.current.realisedPnlUsd" mode="usd-signed" />
                 </div>
                 <div class="sc-s">all SELL events</div>
               </div>
               <div class="sc">
                 <div class="sc-l">gas paid</div>
-                <div class="sc-v">{{ formatUsd(data.current.gasPaidUsd, 0) }}</div>
+                <div class="sc-v">
+                  <wr-smart-amount [value]="data.current.gasPaidUsd" />
+                </div>
                 <div class="sc-s">USD equiv</div>
               </div>
             </div>
+
+            @if (openAvcoHintKey(); as hintKey) {
+              @let hint = avcoHintContent(hintKey, data.displaySymbol, data.current.familyMemberSymbols);
+              <div
+                id="avco-hint-popover"
+                class="avco-hint"
+                role="dialog"
+                [attr.aria-label]="hint.title"
+                [style.left.px]="avcoHintPosition().left"
+                [style.top.px]="avcoHintPosition().top">
+                <div class="avco-hint-title">{{ hint.title }}</div>
+                <p class="avco-hint-body">{{ hint.body }}</p>
+                <p class="avco-hint-note">{{ hint.footnote }}</p>
+                @if (hint.members) {
+                  <p class="avco-hint-members">{{ hint.members }}</p>
+                }
+              </div>
+            }
           </div>
+
+          <!-- AVCO-series legend (RC-E3 / ADR-061). Each item is a toggle button that shows/hides its
+               line on the canvas (all ON by default). Swatches render each line's actual dash pattern
+               (line-style, not colour-only) so the three series are distinguishable without hue (a11y). -->
+          <ul class="avco-legend" aria-label="AVCO series legend">
+            <li>
+              <button
+                type="button"
+                class="avco-legend-item"
+                [class.active]="showBalanceAvco()"
+                [attr.aria-pressed]="showBalanceAvco()"
+                [style.--chipColor]="'rgb(34,211,238)'"
+                (click)="toggleAvcoLine('balance')">
+                <span class="check-box" [class.checked]="showBalanceAvco()"></span>
+                <svg class="avco-swatch" width="26" height="8" viewBox="0 0 26 8" aria-hidden="true" focusable="false">
+                  <line x1="1" y1="4" x2="25" y2="4" stroke="rgb(34,211,238)" stroke-width="1.75" />
+                </svg>
+                <span class="avco-legend-label">Balance AVCO</span>
+              </button>
+            </li>
+            <li>
+              <button
+                type="button"
+                class="avco-legend-item"
+                [class.active]="showBlendedAvco()"
+                [attr.aria-pressed]="showBlendedAvco()"
+                [style.--chipColor]="'rgb(245,158,11)'"
+                (click)="toggleAvcoLine('blended')">
+                <span class="check-box" [class.checked]="showBlendedAvco()"></span>
+                <svg class="avco-swatch" width="26" height="8" viewBox="0 0 26 8" aria-hidden="true" focusable="false">
+                  <line
+                    x1="1"
+                    y1="4"
+                    x2="25"
+                    y2="4"
+                    stroke="rgb(245,158,11)"
+                    stroke-width="1.75"
+                    stroke-linecap="round"
+                    stroke-dasharray="1 5" />
+                </svg>
+                <span class="avco-legend-label">Blended AVCO</span>
+              </button>
+            </li>
+            <li>
+              <button
+                type="button"
+                class="avco-legend-item"
+                [class.active]="showMarketAvco()"
+                [attr.aria-pressed]="showMarketAvco()"
+                [style.--chipColor]="'rgb(255,255,255)'"
+                (click)="toggleAvcoLine('market')">
+                <span class="check-box" [class.checked]="showMarketAvco()"></span>
+                <svg class="avco-swatch" width="26" height="8" viewBox="0 0 26 8" aria-hidden="true" focusable="false">
+                  <line x1="1" y1="4" x2="25" y2="4" stroke="rgb(255,255,255)" stroke-width="1.25" stroke-dasharray="5 4" />
+                </svg>
+                <span class="avco-legend-label">Market AVCO</span>
+              </button>
+            </li>
+            <li>
+              <button
+                type="button"
+                class="avco-legend-item"
+                [class.active]="showEffectiveCost()"
+                [attr.aria-pressed]="showEffectiveCost()"
+                [style.--chipColor]="'rgb(52,211,153)'"
+                (click)="toggleAvcoLine('effective')">
+                <span class="check-box" [class.checked]="showEffectiveCost()"></span>
+                <svg class="avco-swatch" width="26" height="8" viewBox="0 0 26 8" aria-hidden="true" focusable="false">
+                  <line
+                    x1="1"
+                    y1="4"
+                    x2="25"
+                    y2="4"
+                    stroke="rgb(52,211,153)"
+                    stroke-width="1.6"
+                    stroke-linecap="round"
+                    stroke-dasharray="6 3 1 3" />
+                </svg>
+                <span class="avco-legend-label">Effective cost</span>
+              </button>
+            </li>
+          </ul>
 
           <div class="cv-wrap">
             <canvas
@@ -444,8 +616,8 @@
                           {{ formatSignedQuantity(marker.quantityDelta, 6) }}
                         </span>
                       </td>
-                      <td class="r mono-cell">{{ formatUsd(marker.amountUsd, 2) }}</td>
-                      <td class="r mono-cell">{{ formatUsd(marker.priceUsd, 2) }}</td>
+                      <td class="r mono-cell"><wr-smart-amount [value]="marker.amountUsd" /></td>
+                      <td class="r mono-cell"><wr-smart-amount [value]="marker.priceUsd" /></td>
                       <td>
                         <span class="table-endpoint" [title]="marker.pathFromTitle ?? marker.pathFrom">
                           <span class="endpoint-dot" [class.colored]="marker.pathFromColor !== null" [style.--endpointColor]="marker.pathFromColor ?? 'transparent'"></span>
@@ -463,7 +635,7 @@
                           <span
                             [class.pos]="(marker.realisedPnlDeltaUsd ?? 0) > 0"
                             [class.neg]="(marker.realisedPnlDeltaUsd ?? 0) < 0">
-                            {{ formatSignedUsd(marker.realisedPnlDeltaUsd, 2) }}
+                            <wr-smart-amount [value]="marker.realisedPnlDeltaUsd" mode="usd-signed" />
                           </span>
                         } @else {
                           <span class="muted-c">—</span>
@@ -499,8 +671,8 @@
                                     <th>From</th>
                                     <th>To</th>
                                     <th>Basis</th>
-                                    <th class="r">Net AVCO before</th>
-                                    <th class="r">Net AVCO after</th>
+                                    <th class="r">Balance AVCO before</th>
+                                    <th class="r">Balance AVCO after</th>
                                     <th class="r">Market AVCO before</th>
                                     <th class="r">Market AVCO after</th>
                                     <th class="r">Gas</th>
@@ -524,8 +696,8 @@
                                           {{ formatSignedQuantity(row.quantityDelta, 6) }}
                                         </span>
                                       </td>
-                                      <td class="r mono-cell">{{ formatUsd(row.amountUsd, 2) }}</td>
-                                      <td class="r mono-cell">{{ formatUsd(row.priceUsd, 2) }}</td>
+                                      <td class="r mono-cell"><wr-smart-amount [value]="row.amountUsd" /></td>
+                                      <td class="r mono-cell"><wr-smart-amount [value]="row.priceUsd" /></td>
                                       <td class="mono-cell tx-expand-cell">
                                         <wr-copy-hash [hash]="row.txHash" />
                                       </td>
@@ -547,11 +719,11 @@
                                           <div class="log-expand-meta">{{ row.avcoKindLabel }}</div>
                                         }
                                       </td>
-                                      <td class="r mono-cell">{{ formatUsd(row.netAvcoBeforeUsd, 2) }}</td>
-                                      <td class="r mono-cell">{{ formatUsd(row.netAvcoAfterUsd, 2) }}</td>
-                                      <td class="r mono-cell avco-tax-cell">{{ formatUsd(row.avcoBeforeUsd, 2) }}</td>
-                                      <td class="r mono-cell avco-tax-cell">{{ formatUsd(row.avcoAfterUsd, 2) }}</td>
-                                      <td class="r mono-cell">{{ formatUsd(row.gasDeltaUsd, 2) }}</td>
+                                      <td class="r mono-cell"><wr-smart-amount [value]="row.netAvcoBeforeUsd" /></td>
+                                      <td class="r mono-cell"><wr-smart-amount [value]="row.netAvcoAfterUsd" /></td>
+                                      <td class="r mono-cell avco-tax-cell"><wr-smart-amount [value]="row.avcoBeforeUsd" /></td>
+                                      <td class="r mono-cell avco-tax-cell"><wr-smart-amount [value]="row.avcoAfterUsd" /></td>
+                                      <td class="r mono-cell"><wr-smart-amount [value]="row.gasDeltaUsd" /></td>
                                       <td class="flows-cell">
                                         @if (row.flows.length > 0) {
                                           <div class="log-expand-flows">
@@ -626,11 +798,11 @@
           </div>
           <div class="tr">
             <span class="k">usd amount</span>
-            <span class="v">{{ formatUsd(marker.amountUsd, 2) }}</span>
+            <span class="v"><wr-smart-amount [value]="marker.amountUsd" /></span>
           </div>
           <div class="tr">
             <span class="k">price</span>
-            <span class="v">{{ formatUsd(marker.priceUsd, 2) }}</span>
+            <span class="v"><wr-smart-amount [value]="marker.priceUsd" /></span>
           </div>
           <div class="tr tx-row">
             <span class="k">tx hash</span>
@@ -676,27 +848,43 @@
           </div>
           <div class="tr">
             <span class="k">gas</span>
-            <span class="v">{{ formatUsd(marker.gasDeltaUsd, 2) }}</span>
+            <span class="v"><wr-smart-amount [value]="marker.gasDeltaUsd" /></span>
           </div>
         </div>
 
         <div class="ti-avco">
           <div class="ti-ft">AVCO / Basis</div>
           <div class="tr">
-            <span class="k">Net AVCO before</span>
-            <span class="v">{{ formatUsd(marker.netAvcoBeforeUsd, 2) }}</span>
+            <span class="k">Balance AVCO before</span>
+            <span class="v"><wr-smart-amount [value]="marker.netAvcoBeforeUsd" /></span>
           </div>
           <div class="tr">
-            <span class="k">Net AVCO after</span>
-            <span class="v">{{ formatUsd(marker.netAvcoAfterUsd, 2) }}</span>
+            <span class="k">Balance AVCO after</span>
+            <span class="v"><wr-smart-amount [value]="marker.netAvcoAfterUsd" /></span>
+          </div>
+          <div class="tr">
+            <span class="k">Blended AVCO before</span>
+            <span class="v avco-blended-value"><wr-smart-amount [value]="marker.blendedNetAvcoBeforeUsd" /></span>
+          </div>
+          <div class="tr">
+            <span class="k">Blended AVCO after</span>
+            <span class="v avco-blended-value"><wr-smart-amount [value]="marker.blendedNetAvcoAfterUsd" /></span>
           </div>
           <div class="tr">
             <span class="k">Market AVCO before</span>
-            <span class="v avco-tax-value">{{ formatUsd(marker.avcoBeforeUsd, 2) }}</span>
+            <span class="v avco-tax-value"><wr-smart-amount [value]="marker.avcoBeforeUsd" /></span>
           </div>
           <div class="tr">
             <span class="k">Market AVCO after</span>
-            <span class="v avco-tax-value">{{ formatUsd(marker.avcoAfterUsd, 2) }}</span>
+            <span class="v avco-tax-value"><wr-smart-amount [value]="marker.avcoAfterUsd" /></span>
+          </div>
+          <div class="tr">
+            <span class="k">Balance qty</span>
+            <span class="v"><wr-smart-amount [value]="marker.liquidQuantityAfter" mode="qty" [suffix]="marker.displaySymbol" /></span>
+          </div>
+          <div class="tr">
+            <span class="k">Covered qty (blended)</span>
+            <span class="v avco-blended-value"><wr-smart-amount [value]="marker.blendedCoveredQuantityAfter" mode="qty" [suffix]="marker.displaySymbol" /></span>
           </div>
           @if (marker.avcoKindLabel) {
             <div class="tr">
@@ -708,6 +896,11 @@
             <span class="k">basis</span>
             <span class="v neu">{{ marker.basisSummary }}</span>
           </div>
+          @if (isPoolNearZeroDrainedButParked(marker)) {
+            <div class="tr ti-pool-note">
+              <span class="v">{{ poolNearZeroNote }}</span>
+            </div>
+          }
         </div>
       </div>
     </div>

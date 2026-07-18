@@ -34,7 +34,7 @@
 | Pipeline stage INGESTION | BACKFILL |
 | EconomicEvent entity | NormalizedTransaction |
 | Persisted portfolio snapshot document | on_chain_balances + current_price_quotes + read-time join |
-| Route /move-basis | /sessions/:id/assets/:familyIdentity |
+| Route /move-basis | `/move-basis/:familyIdentity` (legacy `/sessions/:id/assets/:familyIdentity` redirects) |
 | transfer_links required today | Planned ADR-003; metadata + repair services |
 
 ## Related

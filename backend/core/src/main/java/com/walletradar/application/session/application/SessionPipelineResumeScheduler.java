@@ -2,6 +2,7 @@ package com.walletradar.application.session.application;
 
 import com.walletradar.domain.event.AccountingReplayCompletedEvent;
 import com.walletradar.domain.event.BybitNormalizationRequestedEvent;
+import com.walletradar.domain.event.DzengiNormalizationRequestedEvent;
 import com.walletradar.domain.event.LinkingRequestedEvent;
 import com.walletradar.domain.event.OnChainNormalizationCompletedEvent;
 import com.walletradar.domain.event.OnChainReclassificationRequestedEvent;
@@ -15,6 +16,7 @@ import com.walletradar.domain.sync.BackfillSegmentRepository;
 import com.walletradar.domain.sync.SyncStatus;
 import com.walletradar.domain.sync.SyncStatusRepository;
 import com.walletradar.domain.transaction.bybit.BybitExtractedEvent;
+import com.walletradar.domain.transaction.dzengi.DzengiExtractedEvent;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRaw;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.raw.RawTransaction;
@@ -52,7 +54,7 @@ public class SessionPipelineResumeScheduler {
             Criteria.where("excludedFromAccounting").exists(false),
             Criteria.where("excludedFromAccounting").is(Boolean.FALSE)
     );
-    private static final Criteria IN_SCOPE_BYBIT_RAW_CRITERIA = new Criteria().andOperator(
+    private static final Criteria IN_SCOPE_CEX_RAW_CRITERIA = new Criteria().andOperator(
             Criteria.where("status").is("RAW"),
             Criteria.where("basisRelevant").is(Boolean.TRUE),
             new Criteria().orOperator(
@@ -157,6 +159,14 @@ public class SessionPipelineResumeScheduler {
                     new BybitNormalizationRequestedEvent(session.getId(), "resume-watchdog")
             );
         }
+        boolean pendingDzengi = gateSnapshot.hasPendingDzengiWork(session.getId());
+        if (pendingDzengi) {
+            return new ResumeAction(
+                    UserSession.PipelineStage.DZENGI_NORMALIZATION,
+                    "raw-dzengi-extracted",
+                    new DzengiNormalizationRequestedEvent(session.getId(), "resume-watchdog")
+            );
+        }
         boolean pendingLinking = linkingDataGateService.hasPendingLinking(session.getId());
         boolean pendingPrice = gateSnapshot.hasPendingPrice(addresses);
         // Cycle/14: linking (incl. legacy bridge repair) must run before snapshot refresh when
@@ -199,6 +209,7 @@ public class SessionPipelineResumeScheduler {
                 pendingClarification,
                 pendingReclassification,
                 pendingBybit,
+                pendingDzengi,
                 pendingLinking,
                 pendingPrice,
                 pendingStat,
@@ -296,7 +307,7 @@ public class SessionPipelineResumeScheduler {
     private boolean hasPendingBybitWork(UserSession session) {
         Query rawExtractedQuery = new Query(new Criteria().andOperator(
                 Criteria.where("sessionId").is(session.getId()),
-                IN_SCOPE_BYBIT_RAW_CRITERIA
+                IN_SCOPE_CEX_RAW_CRITERIA
         ));
         if (mongoOperations.exists(rawExtractedQuery, BybitExtractedEvent.class)) {
             return true;
@@ -304,7 +315,7 @@ public class SessionPipelineResumeScheduler {
 
         Query rawBybitQuery = new Query(new Criteria().andOperator(
                 Criteria.where("sessionId").is(session.getId()),
-                IN_SCOPE_BYBIT_RAW_CRITERIA
+                IN_SCOPE_CEX_RAW_CRITERIA
         ));
         return mongoOperations.exists(rawBybitQuery, ExternalLedgerRaw.class);
     }
@@ -413,6 +424,7 @@ public class SessionPipelineResumeScheduler {
             boolean pendingClarification,
             boolean pendingReclassification,
             boolean pendingBybit,
+            boolean pendingDzengi,
             boolean pendingLinking,
             boolean pendingPrice,
             boolean pendingStat,
@@ -430,6 +442,7 @@ public class SessionPipelineResumeScheduler {
                 || pendingClarification
                 || pendingReclassification
                 || pendingBybit
+                || pendingDzengi
                 || pendingLinking
                 || pendingPrice
                 || pendingStat
@@ -515,13 +528,18 @@ public class SessionPipelineResumeScheduler {
 
         Set<String> bybitExtractedSessions = distinctSessionIds(new Criteria().andOperator(
                 Criteria.where("sessionId").in(addressesBySession.keySet()),
-                IN_SCOPE_BYBIT_RAW_CRITERIA
+                IN_SCOPE_CEX_RAW_CRITERIA
         ), BybitExtractedEvent.class, "sessionId");
 
         Set<String> bybitRawSessions = distinctSessionIds(new Criteria().andOperator(
                 Criteria.where("sessionId").in(addressesBySession.keySet()),
-                IN_SCOPE_BYBIT_RAW_CRITERIA
+                IN_SCOPE_CEX_RAW_CRITERIA
         ), ExternalLedgerRaw.class, "sessionId");
+
+        Set<String> dzengiExtractedSessions = distinctSessionIds(new Criteria().andOperator(
+                Criteria.where("sessionId").in(addressesBySession.keySet()),
+                IN_SCOPE_CEX_RAW_CRITERIA
+        ), DzengiExtractedEvent.class, "sessionId");
 
         Map<String, String> universeBySession = sessions.stream()
                 .filter(session -> session.getId() != null && !session.getId().isBlank())
@@ -546,6 +564,7 @@ public class SessionPipelineResumeScheduler {
                 balanceSessionIds,
                 bybitExtractedSessions,
                 bybitRawSessions,
+                dzengiExtractedSessions,
                 ledgerUniverses,
                 universeBySession
         );
@@ -610,6 +629,7 @@ public class SessionPipelineResumeScheduler {
             Set<String> balanceSessionIds,
             Set<String> bybitExtractedSessions,
             Set<String> bybitRawSessions,
+            Set<String> dzengiExtractedSessions,
             Set<String> ledgerUniverses,
             Map<String, String> universeBySession
     ) {
@@ -639,6 +659,10 @@ public class SessionPipelineResumeScheduler {
 
         boolean hasPendingBybitWork(String sessionId) {
             return bybitExtractedSessions.contains(sessionId) || bybitRawSessions.contains(sessionId);
+        }
+
+        boolean hasPendingDzengiWork(String sessionId) {
+            return dzengiExtractedSessions.contains(sessionId);
         }
 
         boolean requiresBalanceSnapshotRefresh(String sessionId, List<String> addresses, boolean snapshotComplete) {
@@ -680,6 +704,7 @@ public class SessionPipelineResumeScheduler {
 
         static ResumeGateSnapshot empty() {
             return new ResumeGateSnapshot(
+                    Set.of(),
                     Set.of(),
                     Set.of(),
                     Set.of(),

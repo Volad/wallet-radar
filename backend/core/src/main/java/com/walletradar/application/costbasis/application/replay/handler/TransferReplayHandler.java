@@ -124,6 +124,15 @@ public class TransferReplayHandler {
 
         TransferPendingKey transferKey = keyFactory.transferKey(transaction, flow);
         if (transferKey == null) {
+            if (transaction.getType() == NormalizedTransactionType.FIAT_EXIT
+                    && flow.getQuantityDelta() != null
+                    && flow.getQuantityDelta().signum() < 0) {
+                // Permanent fiat exit with no matching inbound: reduce quantity and cost basis
+                // proportionally so AVCO remains stable. applyUnknownTransfer would only
+                // remove quantity, leaving totalCostBasisUsd unchanged and inflating AVCO.
+                flowSupport.removeFromPosition(flow, position);
+                return AssetLedgerPoint.BasisEffect.CARRY_OUT;
+            }
             flowSupport.applyUnknownTransfer(flow, position);
             return AssetLedgerPoint.BasisEffect.UNKNOWN;
         }

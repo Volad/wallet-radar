@@ -18,6 +18,7 @@ import com.walletradar.application.costbasis.application.replay.support.Counterp
 import com.walletradar.application.costbasis.application.replay.support.ReplayAssetSupport;
 import com.walletradar.application.costbasis.application.replay.support.ReplayFlowSupport;
 import com.walletradar.application.costbasis.application.replay.support.ReplayPendingTransferKeyFactory;
+import com.walletradar.application.costbasis.support.AcquisitionFeeCapitalizationPolicy;
 import com.walletradar.application.costbasis.application.replay.support.ReplayTransferClassifier;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
@@ -32,6 +33,7 @@ import java.util.ArrayList;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -73,14 +75,17 @@ class ReplayDispatcherBybitCollapsedSelfTransferTest {
     void setUp() {
         dispatcher = new ReplayDispatcher(
                 replayTransactionRouter, assetSupport, flowSupport, transferClassifier,
-                pendingTransferKeyFactory, replayRouteHandlerRegistry, transferReplayHandler,
+                pendingTransferKeyFactory, replayRouteHandlerRegistry,
+                mock(AcquisitionFeeCapitalizationPolicy.class),
+                transferReplayHandler,
                 bybitVenueInternalReplayHandler,
                 liquidStakingReplayHandler, familyEquivalentCustodyReplayHandler,
                 genericAsyncLifecycleReplayHandler, gmxLpEntryReplayHandler,
                 lpReceiptEntryReplayHandler, positionScopedLpExitReplayHandler,
                 asyncSpotOrderReplayHandler,
                 counterpartyBasisPoolReplayHook, leverageBorrowReplayHook,
-                borrowReplayHandler, repayReplayHandler
+                borrowReplayHandler, repayReplayHandler,
+                mock(com.walletradar.application.costbasis.application.replay.support.ReplayMarketAuthority.class)
         );
     }
 

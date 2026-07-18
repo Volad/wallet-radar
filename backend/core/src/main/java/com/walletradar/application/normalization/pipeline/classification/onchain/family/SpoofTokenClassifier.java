@@ -27,6 +27,10 @@ import java.util.Optional;
  * OUT, IN, and SWAP directions — if any principal leg is a spoof the row is a scam interaction and
  * is excluded from accounting (the cost basis is already protected because confusable symbols are
  * never aliased onto a canonical asset, so a legitimate counter-leg cannot be corrupted).</p>
+ *
+ * <p>Note: native-symbol ERC-20 impersonation (SF-1(c), e.g. a fake "ETH" ERC-20 on Arbitrum at a
+ * known scam contract) is handled post-classification by {@code ScamDisperseClonePhishingTagger},
+ * which sets {@code excludedFromAccounting=true} for known phishing disperse-clone contracts.</p>
  */
 @Component
 public class SpoofTokenClassifier implements OnChainFamilyClassifier {

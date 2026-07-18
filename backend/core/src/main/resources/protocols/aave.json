@@ -6,6 +6,15 @@
   "capabilities": ["DEBT_TOKEN_MARKERS", "BORROW_REPAY"],
   "families": ["LENDING"],
   "clarificationHints": ["FULL_RECEIPT"],
+  "semanticClassifier": "aave-v3",
+  "lending": {
+    "marketRateSource": "protocol-registry+aave-pool-addresses-provider",
+    "supportsVariableDebt": true
+  },
+  "valuationSource": {
+    "primarySource": "aave-oracle",
+    "fallbackSources": ["coingecko-underlying"]
+  },
   "markers": {
     "methodSelectors": {
       "lendingDeposit": ["0x617ba037", "0xe8eda9df", "0x852a12e3", "0x02c205f0", "0x474cf53d"],

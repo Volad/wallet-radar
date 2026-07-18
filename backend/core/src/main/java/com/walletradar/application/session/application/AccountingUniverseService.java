@@ -8,6 +8,10 @@ import com.walletradar.domain.session.AccountingUniverseRepository;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRaw;
 import com.walletradar.domain.common.ton.TonAddressCanonicalizer;
+import com.walletradar.canonical.correlation.CorrelationContract;
+import com.walletradar.domain.wallet.OnChainAddressClassifier;
+import com.walletradar.domain.wallet.WalletDomainKind;
+import com.walletradar.domain.wallet.WalletRef;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -28,7 +32,6 @@ import java.util.concurrent.TimeUnit;
 @RequiredArgsConstructor
 public class AccountingUniverseService {
 
-    private static final String BYBIT_PREFIX = "BYBIT:";
     private static final OwnMembership NOT_MEMBER = new OwnMembership(false, null, false, null);
 
     private final AccountingUniverseRepository accountingUniverseRepository;
@@ -158,8 +161,8 @@ public class AccountingUniverseService {
         if (normalizedLeft.isBlank() || normalizedRight.isBlank() || normalizedLeft.equals(normalizedRight)) {
             return false;
         }
-        List<String> leftCandidates = bybitRefCandidates(normalizedLeft);
-        List<String> rightCandidates = bybitRefCandidates(normalizedRight);
+        List<String> leftCandidates = cexRefCandidates(normalizedLeft);
+        List<String> rightCandidates = cexRefCandidates(normalizedRight);
         Criteria[] orBranches = leftCandidates.stream()
                 .flatMap(left -> rightCandidates.stream()
                         .map(right -> Criteria.where("members.ref").all(List.of(left, right))))
@@ -199,77 +202,62 @@ public class AccountingUniverseService {
             String ref = member.getRef().trim();
             OwnMembership membership = new OwnMembership(true, type, backfillEnabled, normalizeStoredRef(ref));
 
-            if (ref.regionMatches(true, 0, BYBIT_PREFIX, 0, BYBIT_PREFIX.length())) {
-                registerBybitMember(builder, ref, membership, member.getSubAccountUids());
-                continue;
-            }
-            if (ref.startsWith("0x") || ref.startsWith("0X")) {
-                builder.evm.put(ref.toLowerCase(Locale.ROOT), membership);
-                continue;
-            }
-            if (TonAddressCanonicalizer.looksLikeTon(ref)) {
-                for (String key : TonAddressCanonicalizer.lookupKeys(ref)) {
-                    builder.ton.put(key, membership);
+            WalletRef walletRef = WalletRef.parse(ref);
+            switch (walletRef.domain()) {
+                case EVM -> builder.evm.put(walletRef.uid(), membership);
+                case TON -> {
+                    for (String key : TonAddressCanonicalizer.lookupKeys(ref)) {
+                        builder.ton.put(key, membership);
+                    }
                 }
-                continue;
+                case CEX -> registerCexMember(builder, walletRef, membership, member.getSubAccountUids());
+                default -> builder.solana.put(ref, membership);
             }
-            builder.solana.put(ref, membership);
         }
         return builder.build();
     }
 
-    private static void registerBybitMember(
+    /**
+     * Registers a CEX member in the index, keyed by {@code umbrellaKey.toLowerCase()}.
+     *
+     * <p>For venues with sub-account splits (Bybit), also registers additional sub-account UIDs
+     * supplied in {@code subAccountUids} (if any) using the same umbrella prefix.</p>
+     */
+    private static void registerCexMember(
             UniverseIndex.Builder builder,
-            String ref,
+            WalletRef primaryRef,
             OwnMembership membership,
             List<String> subAccountUids
     ) {
-        String masterUid = extractBybitUid(ref);
-        if (!masterUid.isBlank()) {
-            builder.bybit.put(masterUid, membership);
+        String umbrellaKey = primaryRef.umbrellaKey().toLowerCase(Locale.ROOT);
+        if (!umbrellaKey.isBlank()) {
+            builder.cex.put(umbrellaKey, membership);
         }
         if (subAccountUids != null) {
+            String prefix = (primaryRef.providerPrefix() + ":").toLowerCase(Locale.ROOT);
             for (String subUid : subAccountUids) {
                 if (subUid == null || subUid.isBlank()) {
                     continue;
                 }
-                builder.bybit.put(subUid.trim(), membership);
+                String subKey = prefix + subUid.trim().toLowerCase(Locale.ROOT);
+                builder.cex.put(subKey, membership);
             }
         }
     }
 
-    private static String extractBybitUid(String ref) {
-        if (ref == null || !ref.regionMatches(true, 0, BYBIT_PREFIX, 0, BYBIT_PREFIX.length())) {
-            return "";
-        }
-        String remainder = ref.substring(BYBIT_PREFIX.length()).trim();
-        int colon = remainder.indexOf(':');
-        return colon >= 0 ? remainder.substring(0, colon).trim() : remainder.trim();
-    }
-
     private static String normalizeStoredRef(String ref) {
-        if (ref.regionMatches(true, 0, BYBIT_PREFIX, 0, BYBIT_PREFIX.length())) {
-            String uid = extractBybitUid(ref);
-            return uid.isBlank() ? ref : BYBIT_PREFIX + uid;
-        }
-        if (ref.startsWith("0x") || ref.startsWith("0X")) {
-            return ref.toLowerCase(Locale.ROOT);
-        }
-        if (TonAddressCanonicalizer.looksLikeTon(ref)) {
-            return TonAddressCanonicalizer.preferredMemberRef(ref);
-        }
-        return ref;
+        return WalletRef.parse(ref).canonicalRef();
     }
 
-    private List<String> bybitRefCandidates(String normalizedRef) {
-        if (normalizedRef.startsWith(BYBIT_PREFIX)) {
-            int firstColon = normalizedRef.indexOf(':');
-            int secondColon = normalizedRef.indexOf(':', firstColon + 1);
-            if (secondColon > 0) {
-                String root = normalizedRef.substring(0, secondColon);
-                if (!root.equals(normalizedRef)) {
-                    return List.of(normalizedRef, root);
-                }
+    private List<String> cexRefCandidates(String normalizedRef) {
+        WalletRef ref = WalletRef.parse(normalizedRef);
+        if (ref.domain() == WalletDomainKind.CEX && ref.subAccount() != null) {
+            // umbrellaKey() returns "BYBIT:<uid>" (uppercase prefix, no sub-account),
+            // which matches the form stored in accounting_universes.members.ref.
+            // Do NOT lowercase it — the universe stores the uppercase-prefixed canonical form.
+            String umbrella = ref.umbrellaKey();
+            if (!umbrella.equals(normalizedRef)) {
+                return List.of(normalizedRef, umbrella);
             }
         }
         return List.of(normalizedRef);
@@ -305,11 +293,14 @@ public class AccountingUniverseService {
                 continue;
             }
             String trimmed = ref.trim();
-            if (trimmed.regionMatches(true, 0, BYBIT_PREFIX, 0, BYBIT_PREFIX.length())
-                    && trimmed.split(":").length < 3) {
-                expanded.add(trimmed + ":UTA");
-                expanded.add(trimmed + ":FUND");
-                expanded.add(trimmed + ":EARN");
+            WalletRef walletRef = WalletRef.parse(trimmed);
+            // Expand CEX refs that have sub-accounts but are stored without a sub-account suffix.
+            // Bybit uses FUND / UTA / EARN sub-accounts; Dzengi is flat (no expansion needed).
+            if (walletRef.domain() == WalletDomainKind.CEX && walletRef.subAccount() == null
+                    && CorrelationContract.VENUE_BYBIT.equals(walletRef.providerPrefix())) {
+                expanded.add(trimmed + CorrelationContract.WALLET_SUFFIX_UTA);
+                expanded.add(trimmed + CorrelationContract.WALLET_SUFFIX_FUND);
+                expanded.add(trimmed + CorrelationContract.WALLET_SUFFIX_EARN);
                 continue;
             }
             expanded.add(trimmed);
@@ -327,7 +318,7 @@ public class AccountingUniverseService {
                 .forEach(refs::add);
         mongoOperations.findDistinct(query, "uid", ExternalLedgerRaw.class, String.class).stream()
                 .filter(Objects::nonNull)
-                .map(uid -> BYBIT_PREFIX + uid.trim())
+                .map(uid -> CorrelationContract.VENUE_BYBIT + ":" + uid.trim())
                 .map(this::normalizeMemberRef)
                 .filter(ref -> !ref.isBlank())
                 .forEach(refs::add);
@@ -338,31 +329,14 @@ public class AccountingUniverseService {
         if (blank(address)) {
             return "";
         }
-        String trimmed = address.trim();
-        if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
-            return trimmed.toLowerCase(Locale.ROOT);
-        }
-        if (TonAddressCanonicalizer.looksLikeTon(trimmed)) {
-            return TonAddressCanonicalizer.preferredMemberRef(trimmed);
-        }
-        return trimmed;
+        return OnChainAddressClassifier.normalize(address);
     }
 
     private String normalizeMemberRef(String ref) {
         if (blank(ref)) {
             return "";
         }
-        String trimmed = ref.trim();
-        if (trimmed.regionMatches(true, 0, BYBIT_PREFIX, 0, BYBIT_PREFIX.length())) {
-            return BYBIT_PREFIX + trimmed.substring(BYBIT_PREFIX.length()).trim();
-        }
-        if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
-            return trimmed.toLowerCase(Locale.ROOT);
-        }
-        if (TonAddressCanonicalizer.looksLikeTon(trimmed)) {
-            return TonAddressCanonicalizer.preferredMemberRef(trimmed);
-        }
-        return trimmed;
+        return WalletRef.parse(ref).canonicalRef();
     }
 
     private String normalizedAccountingUniverseId(UserSession session) {
@@ -380,18 +354,19 @@ public class AccountingUniverseService {
         private final java.util.Map<String, OwnMembership> evm;
         private final java.util.Map<String, OwnMembership> solana;
         private final java.util.Map<String, OwnMembership> ton;
-        private final java.util.Map<String, OwnMembership> bybit;
+        /** CEX wallets keyed by {@code umbrellaKey.toLowerCase()} (e.g. {@code bybit:123456}, {@code dzengi:abc}). */
+        private final java.util.Map<String, OwnMembership> cex;
 
         private UniverseIndex(
                 java.util.Map<String, OwnMembership> evm,
                 java.util.Map<String, OwnMembership> solana,
                 java.util.Map<String, OwnMembership> ton,
-                java.util.Map<String, OwnMembership> bybit
+                java.util.Map<String, OwnMembership> cex
         ) {
             this.evm = evm;
             this.solana = solana;
             this.ton = ton;
-            this.bybit = bybit;
+            this.cex = cex;
         }
 
         static UniverseIndex empty() {
@@ -403,10 +378,12 @@ public class AccountingUniverseService {
                 return NOT_MEMBER;
             }
             String trimmed = address.trim();
-            if (trimmed.regionMatches(true, 0, BYBIT_PREFIX, 0, BYBIT_PREFIX.length())) {
-                String uid = extractBybitUid(trimmed);
-                OwnMembership bybitMatch = uid.isBlank() ? null : bybit.get(uid);
-                return bybitMatch != null ? bybitMatch : NOT_MEMBER;
+            // CEX lookup via WalletRef grammar (handles both Bybit and Dzengi correctly)
+            WalletRef ref = WalletRef.parse(trimmed);
+            if (ref.domain() == WalletDomainKind.CEX) {
+                String umbrellaKey = ref.umbrellaKey().toLowerCase(Locale.ROOT);
+                OwnMembership cexMatch = cex.get(umbrellaKey);
+                return cexMatch != null ? cexMatch : NOT_MEMBER;
             }
             if (network == NetworkId.SOLANA) {
                 return solana.getOrDefault(trimmed, NOT_MEMBER);
@@ -448,14 +425,14 @@ public class AccountingUniverseService {
             private final java.util.Map<String, OwnMembership> evm = new java.util.LinkedHashMap<>();
             private final java.util.Map<String, OwnMembership> solana = new java.util.LinkedHashMap<>();
             private final java.util.Map<String, OwnMembership> ton = new java.util.LinkedHashMap<>();
-            private final java.util.Map<String, OwnMembership> bybit = new java.util.LinkedHashMap<>();
+            private final java.util.Map<String, OwnMembership> cex = new java.util.LinkedHashMap<>();
 
             UniverseIndex build() {
                 return new UniverseIndex(
                         java.util.Map.copyOf(evm),
                         java.util.Map.copyOf(solana),
                         java.util.Map.copyOf(ton),
-                        java.util.Map.copyOf(bybit)
+                        java.util.Map.copyOf(cex)
                 );
             }
         }

@@ -1,11 +1,14 @@
 package com.walletradar.application.linking.pipeline.clarification;
 
+import com.walletradar.canonical.correlation.CorrelationContract;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.domain.wallet.WalletDomainKind;
+import com.walletradar.domain.wallet.WalletRef;
 import com.walletradar.application.cex.normalization.venue.bybit.BybitEarnPrincipalTransferPairer;
 import com.walletradar.application.cex.normalization.venue.bybit.BybitInternalTransferPairer;
 import lombok.RequiredArgsConstructor;
@@ -233,9 +236,9 @@ public class BybitInternalTransferOrphanFallbackService {
         if (corr == null || corr.isBlank() || corrIdCount == null) {
             return false;
         }
-        if (!(corr.startsWith("bybit-it-bundle-v1:")
+        if (!(corr.startsWith(CorrelationContract.BYBIT_IT_BUNDLE_V1_PREFIX)
                 || corr.startsWith("bybit-it-roundtrip-v1:")
-                || corr.startsWith("bybit-collapsed-v1:"))) {
+                || corr.startsWith(CorrelationContract.BYBIT_COLLAPSED_V1_PREFIX))) {
             return false;
         }
         return corrIdCount.getOrDefault(corr, 0) > 1;
@@ -277,12 +280,14 @@ public class BybitInternalTransferOrphanFallbackService {
     }
 
     private static String extractBybitUid(String address) {
-        if (address == null || !address.toUpperCase(Locale.ROOT).startsWith("BYBIT:")) {
+        if (address == null) {
             return null;
         }
-        String remainder = address.substring("BYBIT:".length());
-        int colon = remainder.indexOf(':');
-        return colon >= 0 ? remainder.substring(0, colon) : remainder;
+        WalletRef ref = WalletRef.parse(address);
+        if (ref.domain() != WalletDomainKind.CEX || ref.uid().isBlank()) {
+            return null;
+        }
+        return ref.uid();
     }
 
     /**
@@ -294,7 +299,7 @@ public class BybitInternalTransferOrphanFallbackService {
             return false;
         }
         String correlationId = tx.getCorrelationId();
-        if (correlationId != null && correlationId.startsWith("BYBIT-CORRIDOR:")) {
+        if (correlationId != null && correlationId.startsWith(CorrelationContract.BYBIT_CORRIDOR_PREFIX)) {
             return true;
         }
         String matchedCounterparty = tx.getMatchedCounterparty();

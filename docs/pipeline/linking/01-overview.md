@@ -1,6 +1,6 @@
 # Linking — Overview
 
-> **Last updated:** 2026-06-05  
+> **Last updated:** 2026-07-16  
 > **Pipeline stage:** `LINKING` (`UserSession.PipelineStage.LINKING`)
 
 Linking is the first **cross-row** pipeline stage. It runs after on-chain reclassification and Bybit normalization are complete, and before pricing. Its job is to attach deterministic lifecycle metadata to canonical `normalized_transactions` rows — not to change economics unless a repair pass has explicit evidence.
@@ -92,17 +92,17 @@ sequenceDiagram
 
 ## Entry points (verified)
 
-All paths under `backend/src/main/java/com/walletradar/`.
+All paths under `backend/core/src/main/java/com/walletradar/`.
 
 | Class | Package | Role |
 |-------|---------|------|
-| `LinkingJob` | `ingestion/job/linking/` | Stage driver; listens for reclassification / Bybit completion |
-| `LinkingBatchProcessor` | `ingestion/job/linking/` | Ordered repair and pairing passes |
-| `LinkingDataGateService` | `ingestion/job/linking/` | Session readiness gate |
-| `BybitBridgeLinkService` | `ingestion/job/linking/` | Bybit `withdraw_deposit` ↔ on-chain leg rematch |
-| `LinkingProperties` | `ingestion/config/` | Enable flag, batch size |
+| `LinkingJob` | `application/linking/job/` | Stage driver; listens for reclassification / Bybit completion |
+| `LinkingBatchProcessor` | `application/linking/job/` | Ordered repair and pairing passes |
+| `LinkingDataGateService` | `application/linking/job/` | Session readiness gate |
+| `BybitBridgeLinkService` | `application/linking/job/` | Bybit `withdraw_deposit` ↔ on-chain leg rematch |
+| `LinkingProperties` | `application/linking/config/` | Enable flag, batch size |
 
-Clarification-time link services (invoked from `LinkingBatchProcessor`) live under `ingestion/pipeline/clarification/` — see [02-rules-and-repairs.md](02-rules-and-repairs.md).
+Clarification-time link services (invoked from `LinkingBatchProcessor`) live under `application/linking/pipeline/clarification/` — see [02-rules-and-repairs.md](02-rules-and-repairs.md).
 
 ## Readiness gate
 
@@ -151,14 +151,15 @@ Scoped to **what linking may set or repair** on canonical rows. Economics stay u
 
 | Type | Linking behavior |
 |------|------------------|
-| `BRIDGE_OUT` | Pair to `BRIDGE_IN` via `LiFiBridgePairLinkService`, `MayanCctpBridgePairLinkService`, `AcrossBridgePairLinkService`, `CrossNetworkBridgePairFallbackService`; set `correlationId`, `matchedCounterparty`; repair sealed pairs via `BridgePairContinuityRepairService` |
-| `BRIDGE_IN` | Promote from `EXTERNAL_TRANSFER_IN` when registry/status evidence proves settlement (`EtherFiOftBridgeInClassifier`, Mayan/CCTP/Across/LI.FI); orphan inbound demotion to priced acquire via `UnmatchedBridgeInboundPricingFallbackService` |
+| `BRIDGE_OUT` | Pair to `BRIDGE_IN` via `LiFiBridgePairLinkService`, `MayanCctpBridgePairLinkService`, `AcrossBridgePairLinkService`, `CrossNetworkBridgePairFallbackService`; set `correlationId`, `matchedCounterparty`; repair sealed pairs via `BridgePairContinuityRepairService`. **Cross-asset pairing (NEW-08):** `LiFiBridgePairLinkService` (LiFi `GAS_PAYER` relayer evidence) and `CrossNetworkBridgePairFallbackService` pair asset-changing routes (e.g. `USDC`→`ETH`) by USD proximity, keeping `continuityCandidate=false` |
+| `BRIDGE_IN` | Promote from `EXTERNAL_TRANSFER_IN` when registry/status evidence proves settlement (`EtherFiOftBridgeInClassifier`, Mayan/CCTP/Across/LI.FI); orphan inbound demotion to priced acquire via `UnmatchedBridgeInboundPricingFallbackService`. **Relay inbounds (NEW-11):** registry-backed Relay `GAS_PAYER`/solver payouts (ARBITRUM `0x1619de6b…`, ZKSYNC solver) classify as `BRIDGE_IN` |
 | `EXTERNAL_TRANSFER_IN` / `EXTERNAL_TRANSFER_OUT` | Bybit corridor repair (`BybitTransferContinuityRepairService`, `BybitBridgeLinkService`); cross-network orphan pricing fallback; address-poisoning exclusion (`AddressPoisoningDetector`) |
 | `INTERNAL_TRANSFER` | Same-tx wallet pair via `InternalTransferPairLinkService`, `OnChainInternalTransferPairRepairService`; Bybit same-UID reclassify (`BybitInternalTransferExternalCpReclassifier`) |
 | `LP_ENTRY_REQUEST` / `LP_ENTRY_SETTLEMENT` | Async lifecycle correlation via `OnChainLifecycleLinkService` |
 | `LP_EXIT_REQUEST` / `LP_EXIT_SETTLEMENT` | Same |
 | `DEX_ORDER_REQUEST` / `DEX_ORDER_SETTLEMENT` | CoW Eth Flow via `CowSwapEthFlowSettlementLinkService` |
 | `DERIVATIVE_ORDER_*` | GMX V2 lifecycle linking in clarification; refund tagging in linking |
+| GMX GLV/GM keeper settlement | Link internal-transfer-only ETH payout to open `LP_EXIT_REQUEST` → `LP_EXIT_SETTLEMENT` (basis carried) via `GmxWithdrawalSettlementLinkService` (NEW-09); residual fee-refund dust demoted to basis-neutral `SPONSORED_GAS_IN` via `GmxExecutionFeeRefundBasisNeutralService` (NEW-13, strictly after the settlement link) |
 | `LENDING_*` / `VAULT_*` / `STAKING_*` | Protocol counterparty stamping; vault burn synthesis (`TurtleVaultBurnRepairService`) |
 | `SWAP` | No lifecycle pairing at linking unless part of async order family |
 | `BORROW` / `REPAY` | No linking pairing; debt markers stay audit-only |

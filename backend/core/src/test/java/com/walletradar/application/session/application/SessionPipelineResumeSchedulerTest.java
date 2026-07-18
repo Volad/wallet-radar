@@ -14,24 +14,31 @@ import com.walletradar.domain.sync.BackfillSegmentRepository;
 import com.walletradar.domain.sync.SyncStatus;
 import com.walletradar.domain.sync.SyncStatusRepository;
 import com.walletradar.domain.transaction.bybit.BybitExtractedEvent;
+import com.walletradar.domain.transaction.dzengi.DzengiExtractedEvent;
 import com.walletradar.domain.transaction.externalledger.ExternalLedgerRaw;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.raw.RawTransaction;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.query.Query;
 
 import java.time.Instant;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.lenient;
@@ -39,7 +46,15 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class SessionPipelineResumeSchedulerTest {
+
+    private final GateSnapshotStub gateStub = new GateSnapshotStub();
+
+    @BeforeEach
+    void resetGateStub() {
+        gateStub.reset();
+    }
 
     @Mock
     private com.walletradar.domain.session.UserSessionRepository userSessionRepository;
@@ -72,7 +87,7 @@ class SessionPipelineResumeSchedulerTest {
                 syncStatus("0xabc", NetworkId.ETHEREUM, true),
                 syncStatus("0xabc", NetworkId.BASE, true)
         ));
-        when(mongoOperations.exists(any(Query.class), eq(RawTransaction.class))).thenReturn(true);
+        gateStub.pendingRawWallets.add("0xabc");
 
         scheduler().resumeReadySessions();
 
@@ -103,7 +118,7 @@ class SessionPipelineResumeSchedulerTest {
                 syncStatus("0xabc", NetworkId.BASE, true, SyncStatus.SyncStatusValue.COMPLETE),
                 syncStatus("0xabc", NetworkId.LINEA, false, SyncStatus.SyncStatusValue.COMPLETE)
         ));
-        when(mongoOperations.exists(any(Query.class), eq(RawTransaction.class))).thenReturn(true);
+        gateStub.pendingRawWallets.add("0xabc");
 
         scheduler().resumeReadySessions();
 
@@ -155,8 +170,6 @@ class SessionPipelineResumeSchedulerTest {
         when(backfillSegmentRepository.countByIntegrationId("BYBIT-33625378")).thenReturn(6L);
         when(backfillSegmentRepository.countByIntegrationIdAndStatus("BYBIT-33625378", com.walletradar.domain.sync.BackfillSegment.SegmentStatus.COMPLETE))
                 .thenReturn(6L);
-        when(mongoOperations.exists(any(Query.class), eq(RawTransaction.class))).thenReturn(false);
-        when(mongoOperations.exists(any(Query.class), eq("normalized_transactions"))).thenReturn(false);
 
         scheduler().resumeReadySessions();
 
@@ -175,10 +188,8 @@ class SessionPipelineResumeSchedulerTest {
         when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
                 syncStatus("0xabc", NetworkId.ETHEREUM, true)
         ));
-        when(mongoOperations.exists(any(Query.class), eq(RawTransaction.class))).thenReturn(false);
-        when(mongoOperations.exists(any(Query.class), eq("normalized_transactions"))).thenReturn(true);
-        when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class)))
-                .thenReturn(true, false, false, false, false);
+        gateStub.normalizedWallets.add("0xabc");
+        gateStub.pendingClarificationWallets.add("0xabc");
 
         scheduler().resumeReadySessions();
 
@@ -196,12 +207,8 @@ class SessionPipelineResumeSchedulerTest {
         when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
                 syncStatus("0xabc", NetworkId.ETHEREUM, true)
         ));
-        when(mongoOperations.exists(any(Query.class), eq(RawTransaction.class))).thenReturn(false);
-        when(mongoOperations.exists(any(Query.class), eq("normalized_transactions"))).thenReturn(true);
-        when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class)))
-                .thenReturn(false, false, false, false, false);
-        when(mongoOperations.exists(any(Query.class), eq(BybitExtractedEvent.class))).thenReturn(false, false);
-        when(mongoOperations.exists(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(true);
+        gateStub.normalizedWallets.add("0xabc");
+        gateStub.bybitRawSessions.add("session-1");
 
         scheduler().resumeReadySessions();
 
@@ -209,9 +216,11 @@ class SessionPipelineResumeSchedulerTest {
             assertThat(event.sessionId()).isEqualTo("session-1");
             assertThat(event.trigger()).isEqualTo("resume-watchdog");
         });
-        verify(mongoOperations).exists(
+        verify(mongoOperations).findDistinct(
                 argThat(SessionPipelineResumeSchedulerTest::containsProcessableBybitRawCriteria),
-                eq(ExternalLedgerRaw.class)
+                eq("sessionId"),
+                eq(ExternalLedgerRaw.class),
+                eq(String.class)
         );
     }
 
@@ -223,11 +232,8 @@ class SessionPipelineResumeSchedulerTest {
         when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
                 syncStatus("0xabc", NetworkId.ETHEREUM, true)
         ));
-        when(mongoOperations.exists(any(Query.class), eq(RawTransaction.class))).thenReturn(false);
-        when(mongoOperations.exists(any(Query.class), eq("normalized_transactions"))).thenReturn(true);
-        when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class)))
-                .thenReturn(false, false, false, false, false);
-        when(mongoOperations.exists(any(Query.class), eq(BybitExtractedEvent.class))).thenReturn(true);
+        gateStub.normalizedWallets.add("0xabc");
+        gateStub.bybitExtractedSessions.add("session-1");
 
         scheduler().resumeReadySessions();
 
@@ -235,9 +241,11 @@ class SessionPipelineResumeSchedulerTest {
             assertThat(event.sessionId()).isEqualTo("session-1");
             assertThat(event.trigger()).isEqualTo("resume-watchdog");
         });
-        verify(mongoOperations).exists(
+        verify(mongoOperations).findDistinct(
                 argThat(SessionPipelineResumeSchedulerTest::containsProcessableBybitRawCriteria),
-                eq(BybitExtractedEvent.class)
+                eq("sessionId"),
+                eq(BybitExtractedEvent.class),
+                eq(String.class)
         );
     }
 
@@ -249,13 +257,8 @@ class SessionPipelineResumeSchedulerTest {
         when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
                 syncStatus("0xabc", NetworkId.ETHEREUM, true)
         ));
-        when(mongoOperations.exists(any(Query.class), eq(RawTransaction.class))).thenReturn(false);
-        when(mongoOperations.exists(any(Query.class), eq("normalized_transactions"))).thenReturn(true);
-        when(mongoOperations.exists(any(Query.class), eq(BybitExtractedEvent.class))).thenReturn(false);
-        when(mongoOperations.exists(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(false);
-        when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class)))
-                .thenReturn(false, false, false);
-        lenient().when(mongoOperations.exists(any(Query.class), eq("on_chain_balances"))).thenReturn(true);
+        gateStub.normalizedWallets.add("0xabc");
+        gateStub.balanceSessions.add("session-1");
         when(linkingDataGateService.hasPendingLinking("session-1")).thenReturn(true);
 
         scheduler().resumeReadySessions();
@@ -280,12 +283,7 @@ class SessionPipelineResumeSchedulerTest {
         when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
                 syncStatus("0xabc", NetworkId.ETHEREUM, true)
         ));
-        when(mongoOperations.exists(any(Query.class), eq(RawTransaction.class))).thenReturn(false);
-        when(mongoOperations.exists(any(Query.class), eq("normalized_transactions"))).thenReturn(true);
-        when(mongoOperations.exists(any(Query.class), eq(BybitExtractedEvent.class))).thenReturn(false, false);
-        when(mongoOperations.exists(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(false, false);
-        when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class)))
-                .thenReturn(false, false, false, false);
+        gateStub.normalizedWallets.add("0xabc");
         when(linkingDataGateService.hasPendingLinking("session-1")).thenReturn(true);
 
         scheduler().resumeReadySessions();
@@ -301,13 +299,9 @@ class SessionPipelineResumeSchedulerTest {
         when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
                 syncStatus("0xabc", NetworkId.ETHEREUM, true)
         ));
-        when(mongoOperations.exists(any(Query.class), eq(RawTransaction.class))).thenReturn(false);
-        when(mongoOperations.exists(any(Query.class), eq("normalized_transactions"))).thenReturn(true);
-        when(mongoOperations.exists(any(Query.class), eq(BybitExtractedEvent.class))).thenReturn(false, false);
-        when(mongoOperations.exists(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(false, false);
-        when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class)))
-                .thenReturn(false, false, true, false);
-        when(mongoOperations.exists(any(Query.class), eq("on_chain_balances"))).thenReturn(true);
+        gateStub.normalizedWallets.add("0xabc");
+        gateStub.pendingPriceWallets.add("0xabc");
+        gateStub.balanceSessions.add("session-1");
         when(linkingDataGateService.hasPendingLinking("session-1")).thenReturn(false);
 
         scheduler().resumeReadySessions();
@@ -326,13 +320,9 @@ class SessionPipelineResumeSchedulerTest {
         when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
                 syncStatus("0xabc", NetworkId.ETHEREUM, true)
         ));
-        when(mongoOperations.exists(any(Query.class), eq(RawTransaction.class))).thenReturn(false);
-        when(mongoOperations.exists(any(Query.class), eq("normalized_transactions"))).thenReturn(true);
-        when(mongoOperations.exists(any(Query.class), eq(BybitExtractedEvent.class))).thenReturn(false, false);
-        when(mongoOperations.exists(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(false, false);
-        when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class)))
-                .thenReturn(false, false, false, true);
-        when(mongoOperations.exists(any(Query.class), eq("on_chain_balances"))).thenReturn(true);
+        gateStub.normalizedWallets.add("0xabc");
+        gateStub.pendingStatWallets.add("0xabc");
+        gateStub.balanceSessions.add("session-1");
 
         scheduler().resumeReadySessions();
 
@@ -377,10 +367,8 @@ class SessionPipelineResumeSchedulerTest {
         when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
                 syncStatus("0xabc", NetworkId.ETHEREUM, true)
         ));
-        when(mongoOperations.exists(any(Query.class), eq(RawTransaction.class))).thenReturn(false);
-        when(mongoOperations.exists(any(Query.class), eq("normalized_transactions"))).thenReturn(true);
-        when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class)))
-                .thenReturn(true, false, false, false, false);
+        gateStub.normalizedWallets.add("0xabc");
+        gateStub.pendingClarificationWallets.add("0xabc");
 
         scheduler().resumeReadySessions();
 
@@ -401,14 +389,9 @@ class SessionPipelineResumeSchedulerTest {
         when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
                 syncStatus("0xabc", NetworkId.ETHEREUM, true)
         ));
-        when(mongoOperations.exists(any(Query.class), eq(RawTransaction.class))).thenReturn(false);
-        when(mongoOperations.exists(any(Query.class), eq("normalized_transactions"))).thenReturn(true);
-        when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class)))
-                .thenReturn(false, false, false, false);
-        when(mongoOperations.exists(any(Query.class), eq(BybitExtractedEvent.class))).thenReturn(false, false);
-        when(mongoOperations.exists(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(false, false);
+        gateStub.normalizedWallets.add("0xabc");
+        gateStub.balanceSessions.add("session-1");
         when(mongoOperations.exists(any(Query.class), eq("asset_ledger_points"))).thenReturn(true);
-        when(mongoOperations.exists(any(Query.class), eq("on_chain_balances"))).thenReturn(true);
         scheduler().resumeReadySessions();
 
         verify(applicationEventPublisher, never()).publishEvent(any());
@@ -433,14 +416,9 @@ class SessionPipelineResumeSchedulerTest {
         when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
                 syncStatus("0xabc", NetworkId.ETHEREUM, true)
         ));
-        when(mongoOperations.exists(any(Query.class), eq(RawTransaction.class))).thenReturn(false);
-        when(mongoOperations.exists(any(Query.class), eq("normalized_transactions"))).thenReturn(true);
-        when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class)))
-                .thenReturn(false, false, false, false, false);
-        when(mongoOperations.exists(any(Query.class), eq(BybitExtractedEvent.class))).thenReturn(false, false);
-        when(mongoOperations.exists(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(false, false);
-        when(mongoOperations.exists(any(Query.class), eq("asset_ledger_points"))).thenReturn(true);
-        when(mongoOperations.exists(any(Query.class), eq("on_chain_balances"))).thenReturn(true);
+        gateStub.normalizedWallets.add("0xabc");
+        gateStub.ledgerUniverses.add("session-1");
+        gateStub.balanceSessions.add("session-1");
 
         scheduler().resumeReadySessions();
 
@@ -458,15 +436,9 @@ class SessionPipelineResumeSchedulerTest {
         when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
                 syncStatus("0xabc", NetworkId.ETHEREUM, true)
         ));
-        when(mongoOperations.exists(any(Query.class), eq(RawTransaction.class))).thenReturn(false);
-        when(mongoOperations.exists(any(Query.class), eq("normalized_transactions"))).thenReturn(true);
-        when(mongoOperations.exists(any(Query.class), eq(BybitExtractedEvent.class))).thenReturn(false, false);
-        when(mongoOperations.exists(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(false, false);
-        when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class)))
-                .thenReturn(false, false, false, true);
-        when(mongoOperations.exists(argThat(query -> containsAccountingUniverseId(query, "session-1")), eq("asset_ledger_points")))
-                .thenReturn(false);
-        when(mongoOperations.exists(any(Query.class), eq("on_chain_balances"))).thenReturn(true);
+        gateStub.normalizedWallets.add("0xabc");
+        gateStub.confirmedWallets.add("0xabc");
+        gateStub.balanceSessions.add("session-1");
 
         scheduler().resumeReadySessions();
 
@@ -490,12 +462,7 @@ class SessionPipelineResumeSchedulerTest {
         when(syncStatusRepository.findByWalletAddressIn(List.of("0xabc"))).thenReturn(List.of(
                 syncStatus("0xabc", NetworkId.ETHEREUM, true)
         ));
-        when(mongoOperations.exists(any(Query.class), eq(RawTransaction.class))).thenReturn(false);
-        when(mongoOperations.exists(any(Query.class), eq("normalized_transactions"))).thenReturn(true);
-        when(mongoOperations.exists(any(Query.class), eq(NormalizedTransaction.class)))
-                .thenReturn(false, false, false, false);
-        when(mongoOperations.exists(any(Query.class), eq(BybitExtractedEvent.class))).thenReturn(false, false);
-        when(mongoOperations.exists(any(Query.class), eq(ExternalLedgerRaw.class))).thenReturn(false, false);
+        gateStub.normalizedWallets.add("0xabc");
         when(mongoOperations.exists(argThat(query -> containsAccountingUniverseId(query, "session-1")), eq("asset_ledger_points")))
                 .thenReturn(false);
         when(mongoOperations.exists(any(Query.class), eq("on_chain_balances"))).thenReturn(true);
@@ -511,6 +478,7 @@ class SessionPipelineResumeSchedulerTest {
     }
 
     private SessionPipelineResumeScheduler scheduler() {
+        wireGateSnapshotFindDistinct();
         lenient().when(accountingUniverseService.resolveScope(any(UserSession.class))).thenAnswer(invocation -> {
             UserSession session = invocation.getArgument(0);
             List<String> onChainWalletRefs = session.getWallets() == null ? List.of() : session.getWallets().stream()
@@ -579,6 +547,126 @@ class SessionPipelineResumeSchedulerTest {
         SyncStatus status = syncStatus(walletAddress, networkId, complete);
         status.setStatus(statusValue);
         return status;
+    }
+
+    private void wireGateSnapshotFindDistinct() {
+        lenient().when(mongoOperations.findDistinct(any(Query.class), anyString(), any(Class.class), eq(String.class)))
+                .thenAnswer(invocation -> {
+                    String field = invocation.getArgument(1);
+                    Query query = invocation.getArgument(0);
+                    Object entity = invocation.getArgument(2);
+                    if ("sessionId".equals(field)) {
+                        return gateStub.resolveSessionIds(query, entity);
+                    }
+                    if ("accountingUniverseId".equals(field)) {
+                        return List.copyOf(gateStub.ledgerUniverses);
+                    }
+                    return gateStub.resolveWalletAddresses(query, entity);
+                });
+        lenient().when(mongoOperations.findDistinct(any(Query.class), anyString(), anyString(), eq(String.class)))
+                .thenAnswer(invocation -> gateStub.resolve(
+                        invocation.getArgument(0),
+                        invocation.getArgument(1),
+                        invocation.getArgument(2)
+                ));
+    }
+
+    private static final class GateSnapshotStub {
+        private final Set<String> pendingRawWallets = new HashSet<>();
+        private final Set<String> normalizedWallets = new HashSet<>();
+        private final Set<String> pendingClarificationWallets = new HashSet<>();
+        private final Set<String> pendingReclassificationWallets = new HashSet<>();
+        private final Set<String> pendingPriceWallets = new HashSet<>();
+        private final Set<String> pendingStatWallets = new HashSet<>();
+        private final Set<String> confirmedWallets = new HashSet<>();
+        private final Set<String> ledgerWallets = new HashSet<>();
+        private final Set<String> balanceSessions = new HashSet<>();
+        private final Set<String> bybitExtractedSessions = new HashSet<>();
+        private final Set<String> bybitRawSessions = new HashSet<>();
+        private final Set<String> dzengiExtractedSessions = new HashSet<>();
+        private final Set<String> ledgerUniverses = new HashSet<>();
+
+        void reset() {
+            pendingRawWallets.clear();
+            normalizedWallets.clear();
+            pendingClarificationWallets.clear();
+            pendingReclassificationWallets.clear();
+            pendingPriceWallets.clear();
+            pendingStatWallets.clear();
+            confirmedWallets.clear();
+            ledgerWallets.clear();
+            balanceSessions.clear();
+            bybitExtractedSessions.clear();
+            bybitRawSessions.clear();
+            dzengiExtractedSessions.clear();
+            ledgerUniverses.clear();
+        }
+
+        List<String> resolveWalletAddresses(Query query, Object entityOrCollection) {
+            String json = queryJson(query);
+            if (entityOrCollection == RawTransaction.class && json.contains("normalizationStatus")) {
+                return List.copyOf(pendingRawWallets);
+            }
+            if (entityOrCollection == NormalizedTransaction.class) {
+                if (json.contains("PENDING_CLARIFICATION")) {
+                    return List.copyOf(pendingClarificationWallets);
+                }
+                if (json.contains("PENDING_RECLASSIFICATION")) {
+                    return List.copyOf(pendingReclassificationWallets);
+                }
+                if (json.contains("PENDING_PRICE")) {
+                    return List.copyOf(pendingPriceWallets);
+                }
+                if (json.contains("PENDING_STAT")) {
+                    return List.copyOf(pendingStatWallets);
+                }
+                if (json.contains("CONFIRMED")) {
+                    return List.copyOf(confirmedWallets);
+                }
+            }
+            if ("asset_ledger_points".equals(entityOrCollection)) {
+                return List.copyOf(ledgerWallets);
+            }
+            if ("normalized_transactions".equals(entityOrCollection) && !json.contains("\"status\"")) {
+                return List.copyOf(normalizedWallets);
+            }
+            return List.of();
+        }
+
+        List<String> resolveSessionIds(Query query, Object entityOrCollection) {
+            if (entityOrCollection == BybitExtractedEvent.class) {
+                return List.copyOf(bybitExtractedSessions);
+            }
+            if (entityOrCollection == ExternalLedgerRaw.class) {
+                return List.copyOf(bybitRawSessions);
+            }
+            if (entityOrCollection == DzengiExtractedEvent.class) {
+                return List.copyOf(dzengiExtractedSessions);
+            }
+            return List.of();
+        }
+
+        List<String> resolve(Query query, String field, Object entityOrCollection) {
+            if ("walletAddress".equals(field)) {
+                if (entityOrCollection instanceof Class<?> entityClass) {
+                    return resolveWalletAddresses(query, entityClass);
+                }
+                if (entityOrCollection instanceof String collection) {
+                    return resolveWalletAddresses(query, collection);
+                }
+            }
+            if ("sessionId".equals(field) && "on_chain_balances".equals(entityOrCollection)) {
+                return List.copyOf(balanceSessions);
+            }
+            if ("accountingUniverseId".equals(field) && "asset_ledger_points".equals(entityOrCollection)) {
+                return List.copyOf(ledgerUniverses);
+            }
+            return List.of();
+        }
+
+        private static String queryJson(Query query) {
+            return query == null || query.getQueryObject() == null ? "" : query.getQueryObject().toJson();
+        }
     }
 
     private static boolean containsWalletAddress(Query query, String walletAddress) {

@@ -10,13 +10,15 @@ destination bridge-pair evidence for the `LI.FI / Jumper` route family.
 ## Runtime Ownership
 
 - Bridge-start family mapping:
-  [BridgeStartClassifier.java](/Users/vladislavkondratenko/projects/wallet-radar/backend/src/main/java/com/walletradar/ingestion/pipeline/classification/onchain/family/BridgeStartClassifier.java)
+  [BridgeStartClassifier.java](../../../../../backend/core/src/main/java/com/walletradar/application/normalization/pipeline/classification/onchain/family/BridgeStartClassifier.java)
 - Bridge method-aware path:
-  [BridgeMethodAwareClassifier.java](/Users/vladislavkondratenko/projects/wallet-radar/backend/src/main/java/com/walletradar/ingestion/pipeline/classification/onchain/family/BridgeMethodAwareClassifier.java)
+  [BridgeMethodAwareClassifier.java](../../../../../backend/core/src/main/java/com/walletradar/application/normalization/pipeline/classification/onchain/family/BridgeMethodAwareClassifier.java)
 - Destination-side bridge pair linker:
-  [LiFiBridgePairLinkService.java](/Users/vladislavkondratenko/projects/wallet-radar/backend/src/main/java/com/walletradar/ingestion/pipeline/clarification/LiFiBridgePairLinkService.java)
+  [LiFiBridgePairLinkService.java](../../../../../backend/core/src/main/java/com/walletradar/application/linking/pipeline/clarification/LiFiBridgePairLinkService.java)
+- Cross-network long-tail fallback linker:
+  [CrossNetworkBridgePairFallbackService.java](../../../../../backend/core/src/main/java/com/walletradar/application/linking/pipeline/clarification/CrossNetworkBridgePairFallbackService.java)
 - Official status loader:
-  [LiFiStatusGateway.java](/Users/vladislavkondratenko/projects/wallet-radar/backend/src/main/java/com/walletradar/ingestion/pipeline/clarification/LiFiStatusGateway.java)
+  [LiFiStatusGateway.java](../../../../../backend/core/src/main/java/com/walletradar/application/linking/pipeline/clarification/LiFiStatusGateway.java)
 
 ## Authoritative Evidence
 
@@ -111,6 +113,28 @@ destination bridge-pair evidence for the `LI.FI / Jumper` route family.
   - source cost basis is reallocated into destination acquisition
   - source covered/uncovered ratio is preserved on destination quantity
   - this is not the same as plain move-basis continuity
+
+## Cross-asset bridge correlation (NEW-08)
+
+Beyond same-asset and same-family stable-wrapper pairing, LI.FI routes that **change the asset**
+(e.g. `USDC` → `ETH`) are correlated by USD-value proximity rather than symbol match:
+
+- **LiFi `GAS_PAYER` trusted destination evidence.** `LiFiBridgePairLinkService` accepts a LiFi
+  `GAS_PAYER` relayer address (registry role in `protocol-registry.json`) as trusted destination-side
+  settlement evidence, so a payout landing from the LiFi relayer is admissible bridge-settlement proof.
+- **`LiFiBridgePairLinkService` cross-asset pairing.** A route-proven `BRIDGE_OUT` is paired to a unique
+  destination `BRIDGE_IN` of a **different** asset when the two legs are within a bounded time window and
+  their USD values are proximate (USD-value gate), plus the destination sender is trusted bridge/relayer
+  infrastructure.
+- **`CrossNetworkBridgePairFallbackService` cross-asset USD-value gate.** The protocol-name-agnostic
+  fallback accepts a cross-asset orphan `BRIDGE_IN`/`BRIDGE_OUT` pair (same wallet, cross-network,
+  differing asset) within a tight window when their USD values are proximate, stamping
+  `counterpartyType=BRIDGE` on both legs.
+- **Continuity semantics unchanged.** Asset-changing pairs keep `continuityCandidate = false`; replay
+  settles them via the asset-changing REALLOCATE path (source `REALLOCATE_OUT`, destination restored
+  with source carried basis), never plain move-basis carry.
+- **UNICHAIN executor diamond.** The UNICHAIN LI.FI Permit2Proxy / executor diamond `0x1bcd304f…` is
+  registered as `BRIDGE` / `BRIDGE_ENTRY` so its legs are recognized as bridge infrastructure.
 
 ## Multi-source / supplemental LI.FI routes
 

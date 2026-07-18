@@ -28,6 +28,8 @@ import { RefreshStatusPollerService } from '../../core/services/refresh-status-p
 import { WalletApiService } from '../../core/services/wallet-api.service';
 import { CopyHashComponent } from '../../core/components/copy-hash/copy-hash.component';
 import { FilterSidebarComponent } from '../../core/components/filter-sidebar/filter-sidebar.component';
+import { SmartAmountComponent } from '../../core/components/smart-amount/smart-amount.component';
+import { smartFormatQty, smartFormatSignedUsd, smartFormatUsd } from '../../core/utils/amount.util';
 
 type EarningsChartMode = 'daily' | 'total';
 
@@ -78,7 +80,7 @@ const CHART_HEIGHT = 152;
 @Component({
   selector: 'wr-lp-page',
   standalone: true,
-  imports: [CommonModule, CopyHashComponent, FilterSidebarComponent],
+  imports: [CommonModule, CopyHashComponent, FilterSidebarComponent, SmartAmountComponent],
   templateUrl: './lp-page.component.html',
   styleUrl: './lp-page.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -761,32 +763,16 @@ export class LpPageComponent implements OnChanges {
   }
 
   formatSignedUsd(value: number | null): string {
-    if (value === null) {
-      return 'Unavailable';
-    }
-    const formatted = this.formatUsd(value);
-    return value > 0 ? `+${formatted}` : formatted;
+    if (value === null) return 'Unavailable';
+    return smartFormatSignedUsd(value);
   }
 
-  formatUsd(value: number): string {
-    const absolute = Math.abs(value);
-    const formatted = absolute >= 1_000_000
-      ? `$${(absolute / 1_000_000).toFixed(2)}M`
-      : absolute >= 1_000
-        ? `$${(absolute / 1_000).toFixed(1)}k`
-        : `$${absolute.toFixed(2)}`;
-    return value < 0 ? `-${formatted}` : formatted;
+  formatUsd(value: number | null): string {
+    return smartFormatUsd(value);
   }
 
-  formatQuantity(value: number): string {
-    const absolute = Math.abs(value);
-    if (absolute >= 1000) {
-      return value.toLocaleString('en-US', { maximumFractionDigits: 2 });
-    }
-    if (absolute >= 1) {
-      return value.toLocaleString('en-US', { maximumFractionDigits: 6 });
-    }
-    return value.toLocaleString('en-US', { maximumSignificantDigits: 6 });
+  formatQuantity(value: number | null): string {
+    return smartFormatQty(value);
   }
 
   formatDate(value: string | null): string {

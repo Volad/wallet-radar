@@ -4,7 +4,6 @@ import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.common.PriceSource;
 import com.walletradar.application.pricing.domain.PriceQuote;
 import com.walletradar.application.pricing.persistence.CurrentPriceQuoteDocument;
-import com.walletradar.application.pricing.resolver.external.PriceExternalSourceOrchestrator;
 import org.bson.Document;
 import org.bson.types.Decimal128;
 import org.junit.jupiter.api.Test;
@@ -23,7 +22,6 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -32,8 +30,6 @@ class CurrentPriceQuoteRefreshServiceTest {
 
     @Mock
     private MongoOperations mongoOperations;
-    @Mock
-    private PriceExternalSourceOrchestrator priceExternalSourceOrchestrator;
     @Mock
     private GmxProtocolSnapshotValuationService gmxProtocolSnapshotValuationService;
     @Mock
@@ -63,7 +59,6 @@ class CurrentPriceQuoteRefreshServiceTest {
         )));
         CurrentPriceQuoteRefreshService service = new CurrentPriceQuoteRefreshService(
                 mongoOperations,
-                priceExternalSourceOrchestrator,
                 gmxProtocolSnapshotValuationService,
                 userSessionRepository
         );
@@ -72,7 +67,6 @@ class CurrentPriceQuoteRefreshServiceTest {
 
         assertThat(refreshed).isEqualTo(1);
         verify(mongoOperations).upsert(any(Query.class), any(Update.class), eq(CurrentPriceQuoteDocument.class));
-        verify(priceExternalSourceOrchestrator, never()).resolveExternalOnly(any());
     }
 
     @Test
@@ -88,7 +82,6 @@ class CurrentPriceQuoteRefreshServiceTest {
                 .thenReturn(Optional.empty());
         CurrentPriceQuoteRefreshService service = new CurrentPriceQuoteRefreshService(
                 mongoOperations,
-                priceExternalSourceOrchestrator,
                 gmxProtocolSnapshotValuationService,
                 userSessionRepository
         );
@@ -96,6 +89,5 @@ class CurrentPriceQuoteRefreshServiceTest {
         int refreshed = service.refreshForSessionBalances("session-1", Instant.parse("2026-04-26T00:00:00Z"));
 
         assertThat(refreshed).isZero();
-        verify(priceExternalSourceOrchestrator, never()).resolveExternalOnly(any());
     }
 }

@@ -30,13 +30,14 @@ public class AdminIntegrationPipelineController {
     private String configuredRebuildToken;
 
     /**
-     * Bybit-only cold rebuild for one integration (raw + extracted + BYBIT normalized + ledger rows for that UID).
+     * Cold rebuild for one BYBIT or DZENGI integration (raw + extracted + venue normalized + ledger rows
+     * for that UID), then re-plans the integration backfill window so the API is re-fetched.
      * Optionally re-arms on-chain {@link com.walletradar.domain.sync.SyncStatus} block windows for wallets on the same session(s).
      *
      * <p>Auth: header {@code X-WalletRadar-Admin-Token} must match the configured token (constant-time compare).</p>
      */
     @PostMapping("/{integrationId}/full-rebuild")
-    public Mono<IntegrationPipelineAdminService.FullRebuildBybitResult> fullRebuildBybit(
+    public Mono<IntegrationPipelineAdminService.FullRebuildResult> fullRebuild(
             @PathVariable("integrationId") String integrationId,
             @RequestHeader(value = "X-WalletRadar-Admin-Token", required = false) String adminToken,
             @RequestParam(name = "repairOnChainWindows", defaultValue = "true") boolean repairOnChainWindows
@@ -50,7 +51,7 @@ public class AdminIntegrationPipelineController {
         if (!Objects.equals(configuredRebuildToken, adminToken)) {
             return Mono.error(new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid or missing X-WalletRadar-Admin-Token"));
         }
-        return Mono.fromCallable(() -> integrationPipelineAdminService.fullRebuildBybit(integrationId, repairOnChainWindows))
+        return Mono.fromCallable(() -> integrationPipelineAdminService.fullRebuild(integrationId, repairOnChainWindows))
                 .subscribeOn(Schedulers.boundedElastic())
                 .onErrorMap(IllegalArgumentException.class,
                         e -> new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage(), e))

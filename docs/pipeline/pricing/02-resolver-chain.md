@@ -1,6 +1,6 @@
 # Pricing — Resolver Chain
 
-> **Last updated:** 2026-06-05  
+> **Last updated:** 2026-07-08  
 > **Pipeline stage:** `PRICING`
 
 USD resolution for each priceable flow follows a **two-tier chain**: event-local resolvers first, then external market-data sources with Mongo cache reuse. Implementation center: `PriceResolutionService`.
@@ -72,10 +72,13 @@ flowchart LR
 
 | Priority | Adapter | `PriceSource` |
 |----------|---------|---------------|
+| 0 | `DzengiFxPriceSourceAdapter` | `DZENGI` (BYN on Dzengi rows only) |
 | 0 | `EcbEuroStablePriceSourceAdapter` | `ECB` |
 | 1 | `BybitPriceSourceAdapter` | `BYBIT` |
 | 2 | `BinancePriceSourceAdapter` | `BINANCE` |
 | 3 | `CoinGeckoPriceSourceAdapter` | `COINGECKO` |
+
+`DzengiFxPriceSourceAdapter` runs when `PriceRequest.transactionSource() == DZENGI` and asset symbol is `BYN`. It fetches the venue USD/BYN kline at event time and inverts to USD per BYN unit. See [ADR-050](../../adr/ADR-050-dzengi-fiat-fx-pricing.md).
 
 Adapters filtered by `supports(request)`; `@Order` on beans is secondary to runtime priority map.
 

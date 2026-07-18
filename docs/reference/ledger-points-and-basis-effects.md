@@ -2,22 +2,23 @@
 
 > **Entity:** `AssetLedgerPoint` — `backend/.../costbasis/domain/AssetLedgerPoint.java`  
 > **Collection:** `asset_ledger_points`  
-> **Last updated:** 2026-06-30
+> **Last updated:** 2026-07-16
 
 Immutable replay trace row for one applied accounting state transition. Source of truth for move-basis timeline and AVCO history reads.
 
 ## Dual cost basis fields (ADR-040)
 
-Each ledger point stores parallel **Tax** and **Net** lanes on the shared quantity pool:
+Each ledger point stores parallel **Market** and **Net** lanes on the shared quantity pool. (The
+Market lane was formerly named "Tax"; renamed per the ADR-040 amendment / [ADR-054](../adr/ADR-054-per-asset-avco-for-staked-derivatives.md).)
 
-| Tax lane | Net lane |
+| Market lane | Net lane |
 |---|---|
 | `totalCostBasisBeforeUsd` / `After` | `netTotalCostBasisBeforeUsd` / `After` |
 | `avcoBeforeUsd` / `After` | `netAvcoBeforeUsd` / `After` |
 | `costBasisDeltaUsd` | `netCostBasisDeltaUsd` |
 | `realisedPnlDeltaUsd` | `netRealisedPnlDeltaUsd` |
 
-Net lane uses $0 acquisition for zero-cost types (`REWARD_CLAIM`, LP fee-claim sideflows). Tax lane keeps FMV-at-receipt semantics.
+Net lane uses $0 acquisition for zero-cost types (`REWARD_CLAIM`, LP fee-claim sideflows). Market lane keeps FMV-at-receipt semantics.
 
 ## BasisEffect decision flow
 
@@ -55,6 +56,15 @@ flowchart TD
 | `realisedPnlDeltaUsd` | 0 |
 
 **Emitted by:** inbound BUY flows, unmatched `EXTERNAL_TRANSFER_IN`, `REWARD_CLAIM`, borrow inflow (basis-neutral component separate).
+
+> **External-capital `INFLOW` (NEW-02):** an external-capital deposit
+> (`EXTERNAL_TRANSFER_IN` with `externalCapitalBoundary=INFLOW`, e.g. Dzengi fiat USD/BYN) has no
+> pending/continuity match, so the transfer handler first returns `UNKNOWN`. When the inbound spot
+> fallback then prices it at market value (USD peg for USD, historical-cache FX for BYN) and the
+> position ends fully basis-backed (`uncoveredQuantity == 0`), the emitted label is resolved to
+> `ACQUIRE` — an unpaired external-capital inflow booked at market value **is** an acquisition. This
+> is a label-only resolution: quantity, cost basis, net lane, and AVCO are unchanged. If the fallback
+> cannot price the inflow (`uncoveredQuantity > 0` remains), the label stays `UNKNOWN`.
 
 **Mini-example:** 0 qty → buy 10 ETH @ $2000 → qtyAfter=10, totalCost=$20000, avco=$2000.
 
@@ -129,6 +139,17 @@ matched IN leg (`CARRY_IN` / `REALLOCATE_IN`) are **basis-symmetric** on both la
 **Definition:** Gas fee quantity/basis effect without principal movement.
 
 **Emitted by:** Sponsored gas top-ups, fee-only legs marked `GAS_ONLY`.
+
+> **Return-of-capital / gas-refund inflows are basis-neutral, never `ACQUIRE`.** Both of these route
+> through `SPONSORED_GAS_IN → GAS_ONLY` (quantity restored at $0 basis, `costBasisDelta=0`):
+> - **NEW-13 — residual GMX execution-fee refunds.** A bare native inflow from a GMX keeper stamped
+>   `GMX_EXECUTION_FEE_REFUND` that has **no** matching open `gmx-lp:*` `LP_EXIT_REQUEST` (i.e. NEW-09
+>   already declined to promote it to `LP_EXIT_SETTLEMENT`) is demoted by
+>   `GmxExecutionFeeRefundBasisNeutralService`, which runs strictly **after**
+>   `gmxWithdrawalSettlementLink` so genuine GLV/GM settlements are excluded.
+> - **NEW-14 — registered gas-payer top-ups.** A plain native top-up (`input=0x`, 21000 gas, within
+>   the per-network envelope) from a `GAS_PAYER`-role address in `protocol-registry.json` (e.g. the
+>   Rabby "Gas Fee Payer" EOA) classifies via `SponsoredGasTopUpSupport` → `SPONSORED_GAS_IN`.
 
 ### UNKNOWN {#unknown}
 
@@ -207,3 +228,4 @@ matched IN leg (`CARRY_IN` / `REALLOCATE_IN`) are **basis-symmetric** on both la
 - [Replay ledger state](../pipeline/replay/03-ledger-and-state.md)
 - [Move basis page](../frontend/move-basis.md)
 - [ADR-017 Timeline AVCO](../adr/ADR-017-timeline-avco-authority.md)
+- [ADR-054 Per-asset AVCO for staked derivatives](../adr/ADR-054-per-asset-avco-for-staked-derivatives.md) (Market/Net lane naming; C2 out of `FAMILY:ETH`)

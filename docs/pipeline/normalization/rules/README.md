@@ -47,6 +47,7 @@ Explicit rule documents for classification + clarification. Runtime code must no
 - [Velodrome](protocols/velodrome.md)
 - [LI.FI](protocols/li-fi.md)
 - [Bybit](protocols/bybit.md)
+- [Dzengi adaptation](dzengi-adaptation.md)
 - [Morpho](protocols/morpho.md)
 - [Balancer](protocols/balancer.md)
 - [Compound](protocols/compound.md)

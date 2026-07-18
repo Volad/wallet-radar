@@ -118,12 +118,69 @@ public class BlockScoutExplorerProvider implements ExplorerProvider {
 
     @Override
     public ExplorerReceipt getReceipt(String txHash, NetworkId networkId) {
+        // Primary: JSON-RPC eth_getTransactionReceipt
         JsonNode root = callRpc(networkId, "eth_getTransactionReceipt", List.of(txHash));
         JsonNode result = resultNode(root);
-        if (result == null || result.isMissingNode() || result.isNull() || !result.isObject()) {
+        if (result != null && !result.isMissingNode() && !result.isNull() && result.isObject()) {
+            return new ExplorerReceipt(toDocument(result));
+        }
+        // Fallback: BlockScout v2 REST /api/v2/transactions/{hash}/logs
+        // The JSON-RPC endpoint may not have archive data for older blocks even though
+        // BlockScout's indexed REST API has complete event log history for all transactions.
+        return buildReceiptFromV2Logs(txHash, networkId);
+    }
+
+    /**
+     * Constructs an {@link ExplorerReceipt} from the BlockScout v2 REST
+     * {@code /api/v2/transactions/{hash}/logs} endpoint.
+     *
+     * <p>The v2 response wraps each log as {@code {"address":{"hash":"0x..."},"topics":[...],"data":"0x","index":N}}.
+     * This method normalizes that structure into the flat receipt format consumed by
+     * {@link com.walletradar.application.linking.pipeline.clarification.ReceiptClarificationGateway}.</p>
+     */
+    private ExplorerReceipt buildReceiptFromV2Logs(String txHash, NetworkId networkId) {
+        JsonNode logsNode = callTransactionSubresource(networkId, txHash, "logs");
+        if (logsNode == null) {
             return null;
         }
-        return new ExplorerReceipt(toDocument(result));
+        JsonNode items = logsNode.path("items");
+        if (!items.isArray() || items.isEmpty()) {
+            return null;
+        }
+        List<Document> logs = new ArrayList<>();
+        for (JsonNode item : items) {
+            Document log = new Document();
+            // Address: v2 wraps as {"hash": "0x..."} — flatten to plain string
+            JsonNode addressNode = item.path("address");
+            String address = addressNode.isObject()
+                    ? addressNode.path("hash").asText(null)
+                    : (addressNode.isTextual() ? addressNode.asText(null) : null);
+            if (address != null && !address.isBlank()) {
+                log.put("address", address.toLowerCase(Locale.ROOT));
+            }
+            // Topics: array of hex strings
+            JsonNode topicsNode = item.path("topics");
+            if (topicsNode.isArray()) {
+                List<String> topics = new ArrayList<>();
+                for (JsonNode topic : topicsNode) {
+                    String topicStr = topic.asText(null);
+                    if (topicStr != null && !topicStr.isBlank()) {
+                        topics.add(topicStr.toLowerCase(Locale.ROOT));
+                    }
+                }
+                log.put("topics", topics);
+            }
+            log.put("data", item.path("data").asText("0x"));
+            int logIndex = item.path("index").asInt(-1);
+            if (logIndex >= 0) {
+                log.put("logIndex", "0x" + Integer.toHexString(logIndex));
+            }
+            logs.add(log);
+        }
+        Document receiptDoc = new Document();
+        receiptDoc.put("logs", logs);
+        receiptDoc.put("status", "0x1");
+        return new ExplorerReceipt(receiptDoc);
     }
 
     public BigInteger getNativeBalance(String walletAddress, NetworkId networkId) {

@@ -50,4 +50,14 @@ public class RawTransaction {
     private org.bson.Document rawData;
     /** Canonical clarification evidence persisted from post-fetch enrichment. */
     private org.bson.Document clarificationEvidence;
+    /**
+     * Operator-supplied LP position correlationId override for transactions where the full receipt
+     * is permanently unavailable but the position tokenId is known from external sources (e.g. a
+     * block explorer, Krystal, or a user-provided NFT ID). When set, normalization uses this value
+     * instead of attempting to decode the tokenId from calldata or receipt logs.
+     *
+     * <p>Format: {@code lp-position:<network>:<nfpmContract>:<tokenId>} — same as the value
+     * computed by {@link com.walletradar.application.normalization.pipeline.classification.support.LpPositionCorrelationSupport#contractKeyedCorrelationId}.
+     */
+    private String manualCorrelationOverride;
 }

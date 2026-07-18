@@ -1,62 +1,27 @@
 package com.walletradar.application.costbasis.support;
 
+import com.walletradar.canonical.correlation.CorrelationContract;
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.common.NetworkNativeAssets;
+import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.domain.wallet.WalletDomainKind;
+import com.walletradar.domain.wallet.WalletRef;
 
 import java.util.Locale;
-import java.util.Map;
-import java.util.Set;
 
 /**
  * Replay/materialization identity contract separate from immutable audit evidence.
  */
 public final class AccountingAssetIdentitySupport {
 
-    private static final String EARN_PRINCIPAL_CORRELATION_PREFIX = "bybit-earn-principal-v1:";
-    private static final String EARN_ONCHAIN_FUND_CORRELATION_PREFIX = "bybit-earn-onchain-fund-v1:";
-    private static final String BYBIT_CORRIDOR_CORRELATION_PREFIX = "BYBIT-CORRIDOR:";
-    private static final String BYBIT_COLLAPSED_CORRELATION_PREFIX = "bybit-collapsed-v1:";
+    private static final String EARN_PRINCIPAL_CORRELATION_PREFIX = CorrelationContract.BYBIT_EARN_PRINCIPAL_V1_PREFIX;
+    private static final String EARN_ONCHAIN_FUND_CORRELATION_PREFIX = CorrelationContract.BYBIT_EARN_ONCHAIN_FUND_V1_PREFIX;
+    private static final String BYBIT_CORRIDOR_CORRELATION_PREFIX = CorrelationContract.BYBIT_CORRIDOR_PREFIX;
+    private static final String BYBIT_COLLAPSED_CORRELATION_PREFIX = CorrelationContract.BYBIT_COLLAPSED_V1_PREFIX;
     private static final String ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
-
-    private static final Map<NetworkId, String> NATIVE_SYMBOLS = Map.ofEntries(
-            Map.entry(NetworkId.ETHEREUM, "ETH"),
-            Map.entry(NetworkId.ARBITRUM, "ETH"),
-            Map.entry(NetworkId.OPTIMISM, "ETH"),
-            Map.entry(NetworkId.BASE, "ETH"),
-            Map.entry(NetworkId.UNICHAIN, "ETH"),
-            Map.entry(NetworkId.ZKSYNC, "ETH"),
-            Map.entry(NetworkId.LINEA, "ETH"),
-            Map.entry(NetworkId.KATANA, "ETH"),
-            Map.entry(NetworkId.BSC, "BNB"),
-            Map.entry(NetworkId.POLYGON, "MATIC"),
-            Map.entry(NetworkId.AVALANCHE, "AVAX"),
-            Map.entry(NetworkId.MANTLE, "MNT"),
-            Map.entry(NetworkId.PLASMA, "XPL")
-    );
-
-    /**
-     * Wrapped-native contracts that are accounting-identical to the network's native token.
-     * Wrap/unwrap swaps between native and these contracts are treated as same-asset moves
-     * (no cost-basis impact). Addresses are lowercase.
-     */
-    private static final Map<NetworkId, Set<String>> NATIVE_ALIAS_CONTRACTS = Map.ofEntries(
-            Map.entry(NetworkId.ETHEREUM,  Set.of("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2")),  // WETH
-            Map.entry(NetworkId.ARBITRUM,  Set.of("0x82af49447d8a07e3bd95bd0d56f35241523fbab1")),  // WETH
-            Map.entry(NetworkId.OPTIMISM,  Set.of("0x4200000000000000000000000000000000000006")),  // WETH
-            Map.entry(NetworkId.BASE,      Set.of("0x4200000000000000000000000000000000000006")),  // WETH
-            Map.entry(NetworkId.UNICHAIN,  Set.of("0x4200000000000000000000000000000000000006")),  // WETH
-            Map.entry(NetworkId.ZKSYNC,    Set.of(
-                    "0x000000000000000000000000000000000000800a",  // native ETH alias (system contract)
-                    "0x5aea5775959fbc2557cc8789bc1bf90a239d9a91"   // WETH
-            )),
-            Map.entry(NetworkId.LINEA,     Set.of("0xe5d7c2a44ffddf6b295a15c148167daaaf5cf34f")),  // WETH
-            Map.entry(NetworkId.BSC,       Set.of("0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c")),  // WBNB
-            Map.entry(NetworkId.POLYGON,   Set.of("0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270")),  // WMATIC
-            Map.entry(NetworkId.AVALANCHE, Set.of("0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7")),  // WAVAX
-            Map.entry(NetworkId.MANTLE,    Set.of("0x78c1b0c915c4faa5fffa6cabf0219da63d7f4cb8"))   // WMNT
-    );
 
     private static final String VARIABLE_DEBT_PREFIX = "VARIABLEDEBT";
     private static final String STABLE_DEBT_PREFIX = "STABLEDEBT";
@@ -91,11 +56,15 @@ public final class AccountingAssetIdentitySupport {
     }
 
     public static String positionWalletAddress(String walletAddress) {
-        if (walletAddress == null || !walletAddress.startsWith("BYBIT:")) {
-            return walletAddress;
+        if (walletAddress == null) {
+            return null;
         }
-        if (walletAddress.endsWith(":UTA") || walletAddress.endsWith(":FUND")) {
-            return walletAddress.substring(0, walletAddress.lastIndexOf(':'));
+        WalletRef ref = WalletRef.parse(walletAddress);
+        if (ref.domain() == WalletDomainKind.CEX && ref.subAccount() != null) {
+            String sub = ref.subAccount().toUpperCase(Locale.ROOT);
+            if (sub.equals("UTA") || sub.equals("FUND")) {
+                return ref.umbrellaKey();
+            }
         }
         return walletAddress;
     }
@@ -114,10 +83,17 @@ public final class AccountingAssetIdentitySupport {
      * those rows place basis directly on {@code :FUND}, so the {@code CARRY_OUT} must drain that
      * sub-account.
      *
-     * <p>BYBIT-CORRIDOR transactions from the {@code :FUND} sub-account also keep the full
-     * wallet address because the earn-principal transfer that placed assets into {@code :FUND}
-     * stored them under {@code BYBIT:UID:FUND}. Stripping the suffix would cause the carry-out
-     * to drain an empty root position instead of the actual funded position.
+     * <p>BYBIT-CORRIDOR legs are direction-aware (BLOCKER-4). An <em>outbound drain</em>
+     * ({@code quantityDelta < 0}, non-FEE flow) from the {@code :FUND} sub-account keeps the full
+     * {@code BYBIT:UID:FUND} wallet because the earn-principal transfer that placed assets into
+     * {@code :FUND} stored them there; stripping the suffix would drain an empty root position.
+     * An <em>inbound deposit</em> ({@code quantityDelta > 0}) instead collapses {@code :FUND}/
+     * {@code :UTA} to the UID umbrella so the credited inventory lands on the same key that all
+     * other spot activity (converts, EXECUTION_SPOT sells, {@code bybit-collapsed-v1} transfers)
+     * consumes — otherwise the deposit is stranded on {@code :FUND} and later spot disposals
+     * over-sell against a phantom shortfall. Conservation still holds: the corridor conservation
+     * guards key on the corridor queue (correlationId + asset identity), not the position wallet,
+     * so the {@code CARRY_IN}→queue consumption is invariant to this position-key collapse.
      */
     public static String replayPositionWalletAddress(
             NormalizedTransaction transaction,
@@ -132,14 +108,17 @@ public final class AccountingAssetIdentitySupport {
             }
             wallet = wallet.trim();
             if (isFlexibleEarnPrincipal(transaction)) {
-                String upper = wallet.toUpperCase(Locale.ROOT);
-                if (upper.endsWith(":FUND") || upper.endsWith(":UTA")) {
-                    return wallet.substring(0, wallet.lastIndexOf(':'));
+                WalletRef walletRef = WalletRef.parse(wallet);
+                if (walletRef.domain() == WalletDomainKind.CEX && walletRef.subAccount() != null) {
+                    String sub = walletRef.subAccount().toUpperCase(Locale.ROOT);
+                    if (sub.equals("FUND") || sub.equals("UTA")) {
+                        return walletRef.umbrellaKey();
+                    }
                 }
             }
             return wallet;
         }
-        if (isBybitCorridorFromFund(transaction)) {
+        if (isBybitCorridorOutboundDrainFromFund(transaction, flow)) {
             String wallet = transaction.getWalletAddress();
             if (wallet != null && !wallet.isBlank()) {
                 return wallet.trim();
@@ -161,10 +140,10 @@ public final class AccountingAssetIdentitySupport {
         // their combined totals.
         if (isBybitRewardClaim(transaction)) {
             String wallet = transaction.getWalletAddress();
-            if (wallet != null && wallet.startsWith("BYBIT:")) {
-                String upper = wallet.toUpperCase(Locale.ROOT);
-                if (upper.endsWith(":EARN") || upper.endsWith(":FUND") || upper.endsWith(":UTA")) {
-                    return wallet.substring(0, wallet.lastIndexOf(':'));
+            if (wallet != null) {
+                WalletRef ref = WalletRef.parse(wallet);
+                if (ref.domain() == WalletDomainKind.CEX && ref.subAccount() != null) {
+                    return ref.umbrellaKey();
                 }
                 return wallet;
             }
@@ -223,11 +202,24 @@ public final class AccountingAssetIdentitySupport {
     }
 
     /**
-     * Returns true for BYBIT-CORRIDOR transactions whose Bybit-side wallet is the {@code :FUND}
-     * sub-account. These transactions carry out assets that earn-principal transfers deposited
-     * directly into {@code :FUND}, so the full sub-account address must be preserved.
+     * Returns true only for BYBIT-CORRIDOR <em>outbound drains</em> from the {@code :FUND}
+     * sub-account (BLOCKER-4). The full {@code :FUND} wallet is preserved so the carry-out drains
+     * the sub-account pool that earn-principal transfers funded directly on {@code :FUND}.
+     *
+     * <p>Gate: correlationId under {@link CorrelationContract#BYBIT_CORRIDOR_PREFIX}, wallet is a
+     * CEX {@code :FUND} sub-account, and the flow is an outbound value move (non-{@code FEE} role,
+     * negative {@code quantityDelta}). Bybit corridor legs are single-flow {@code INTERNAL_TRANSFER}
+     * rows with role {@code TRANSFER} and no FEE legs, so the flow sign is the direction signal.
+     *
+     * <p>Inbound corridor deposits ({@code quantityDelta > 0}) return false and fall through to
+     * {@link #positionWalletAddress(NormalizedTransaction)}, which collapses {@code :FUND}/
+     * {@code :UTA} onto the UID umbrella. FEE-role or zero/null-delta flows also return false and
+     * never preserve {@code :FUND}.
      */
-    private static boolean isBybitCorridorFromFund(NormalizedTransaction transaction) {
+    private static boolean isBybitCorridorOutboundDrainFromFund(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
         if (transaction == null) {
             return false;
         }
@@ -236,11 +228,25 @@ public final class AccountingAssetIdentitySupport {
             return false;
         }
         String wallet = transaction.getWalletAddress();
-        return wallet != null && wallet.toUpperCase(Locale.ROOT).endsWith(":FUND");
+        if (wallet == null) {
+            return false;
+        }
+        WalletRef ref = WalletRef.parse(wallet);
+        if (ref.domain() != WalletDomainKind.CEX || !"FUND".equalsIgnoreCase(ref.subAccount())) {
+            return false;
+        }
+        return flow != null
+                && flow.getRole() != NormalizedLegRole.FEE
+                && flow.getQuantityDelta() != null
+                && flow.getQuantityDelta().signum() < 0;
+    }
+
+    public static boolean isVenueScopedCex(NormalizedTransactionSource source) {
+        return source == NormalizedTransactionSource.BYBIT || source == NormalizedTransactionSource.DZENGI;
     }
 
     public static NetworkId positionNetwork(NormalizedTransaction transaction) {
-        if (transaction != null && transaction.getSource() == NormalizedTransactionSource.BYBIT) {
+        if (transaction != null && isVenueScopedCex(transaction.getSource())) {
             return null;
         }
         return transaction == null ? null : transaction.getNetworkId();
@@ -257,7 +263,7 @@ public final class AccountingAssetIdentitySupport {
                 transaction == null ? null : transaction.getNetworkId(),
                 flow.getAssetSymbol(),
                 flow.getAssetContract(),
-                transaction != null && transaction.getSource() == NormalizedTransactionSource.BYBIT
+                transaction != null && isVenueScopedCex(transaction.getSource())
         );
     }
 
@@ -273,12 +279,12 @@ public final class AccountingAssetIdentitySupport {
             NetworkId networkId,
             String assetSymbol,
             String assetContract,
-            boolean venueScopedBybit
+            boolean venueScopedCex
     ) {
         String symbol = normalizeSymbol(assetSymbol);
         String contract = normalizeContract(assetContract);
 
-        if (venueScopedBybit) {
+        if (venueScopedCex) {
             if (!symbol.isBlank()) {
                 return "SYMBOL:" + symbol;
             }
@@ -303,14 +309,16 @@ public final class AccountingAssetIdentitySupport {
         if (networkId == null) {
             return false;
         }
-        // Contract check first: if the contract is in the alias map the token is treated as
+        // Contract check first: if the contract is in the alias set the token is treated as
         // the network native regardless of symbol (e.g. WAVAX contract → AVAX accounting
         // identity). Symbol-only check (native token with no contract) comes second.
+        // Source of truth: network-descriptors.yml (wrapped-native ∪ native-alias contracts),
+        // bridged at startup via NetworkNativeAssets.
         if (contract != null) {
-            return NATIVE_ALIAS_CONTRACTS.getOrDefault(networkId, Set.of()).contains(contract);
+            return NetworkNativeAssets.nativeAliasContracts(networkId).contains(contract);
         }
         // No contract → pure native token; accept only when symbol matches.
-        String nativeSymbol = NATIVE_SYMBOLS.get(networkId);
+        String nativeSymbol = NetworkNativeAssets.nativeSymbol(networkId);
         return nativeSymbol != null && nativeSymbol.equals(symbol);
     }
 

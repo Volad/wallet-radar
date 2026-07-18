@@ -1,5 +1,6 @@
 package com.walletradar.application.cex.normalization.venue.bybit;
 
+import com.walletradar.application.costbasis.support.AccountingAssetClassificationSupport;
 import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
@@ -239,7 +240,10 @@ public class BybitStakingConversionPairer {
         if (sign == 0) {
             return null;
         }
-        String family = AccountingAssetFamilySupport.continuityIdentity(principal);
+        String cluster = AccountingAssetClassificationSupport.normalizationClusterForSymbol(principal.getAssetSymbol());
+        String family = cluster != null
+                ? cluster
+                : AccountingAssetFamilySupport.continuityIdentity(principal);
         if (family == null) {
             return null;
         }

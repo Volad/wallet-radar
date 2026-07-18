@@ -10,125 +10,34 @@ import java.util.Set;
 
 /**
  * Shared accounting-family identity contract for continuity-preserving replay.
+ * C1/C2 boundary is owned by {@link AccountingAssetClassificationSupport} (ADR-054).
  */
 public final class AccountingAssetFamilySupport {
 
-    private static final String FAMILY_BTC = "FAMILY:BTC";
-    private static final String FAMILY_ETH = "FAMILY:ETH";
-    private static final String FAMILY_AVAX = "FAMILY:AVAX";
-    private static final String FAMILY_MNT = "FAMILY:MNT";
     private static final String FAMILY_USDC = "FAMILY:USDC";
     private static final String FAMILY_USDT = "FAMILY:USDT";
     private static final String FAMILY_DEUSD = "FAMILY:DEUSD";
-    private static final String FAMILY_USDE = "FAMILY:USDE";
     private static final String FAMILY_WSTUSR = "FAMILY:WSTUSR";
-    private static final String FAMILY_ARB = "FAMILY:ARB";
-    private static final String FAMILY_SOL = "FAMILY:SOL";
-    private static final String FAMILY_LP_RECEIPT = "FAMILY:LP_RECEIPT";
+    public static final String FAMILY_LP_RECEIPT = "FAMILY:LP_RECEIPT";
     private static final String FAMILY_ETH_IDENTITY = "FAMILY:ETH";
 
     /**
-     * Symbols mapped to {@link #FAMILY_ETH_IDENTITY} but excluded from spot ETH move-basis
-     * timeline rollup because their quantity semantics are incompatible with native ETH.
-     * <p>
-     * P0-B (ADR-017 amendment): CMETH, METH, WEETH, STETH, RSETH are liquid-staking / restaking
-     * variants of ETH with 1:≈1 redemption ratio and must be included in the family timeline.
-     * Only BBSOL remains excluded — it tracks SOL staking yield via the FAMILY:SOL path.
+     * Supplemental accounting-family entries that are intentionally NOT owned by the C1/C2 registry
+     * (ADR-060 / Wave W9). Every other symbol→family mapping is the single responsibility of
+     * {@link AccountingAssetClassificationSupport} — which {@link #continuityIdentity(String, String)}
+     * consults <em>first</em>, so a registry-classified symbol never reaches this fallback. Prior to
+     * W9 an ~80-entry {@code SYMBOL_FAMILIES} map duplicated the registry; it was proven subsumed for
+     * every key except the one below and removed.
+     *
+     * <p>{@code AAVASAVAX} (Aave aAvaSAVAX) is a 1:1 receipt of sAVAX and shares its
+     * {@code FAMILY:SAVAX} pool, but is not currently classified C1/C2. It is resolved here — after
+     * the registry, <em>before</em> {@link #inferredFamilyIdentity(String)} — to preserve exact
+     * behavior and to defeat the lending-inference reroute that would otherwise mis-send it to
+     * {@code FAMILY:AVAX} (the SAVAX→AVAX lifecycle mapping). Promoting it to a C1 receipt is a
+     * reviewer-gated follow-up (ADR-060 §B3c).</p>
      */
-    private static final Set<String> SPOT_ETH_TIMELINE_EXCLUDED_SYMBOLS = Set.of(
-            "BBSOL"
-    );
-
-    private static final Map<String, String> SYMBOL_FAMILIES = Map.ofEntries(
-            // BTC family
-            Map.entry("BTC", FAMILY_BTC),
-            Map.entry("WBTC", FAMILY_BTC),
-            Map.entry("AARBWBTC", FAMILY_BTC),
-            Map.entry("AETHWBTC", FAMILY_BTC),
-            Map.entry("ALINWBTC", FAMILY_BTC),
-            Map.entry("AMANWBTC", FAMILY_BTC),
-            Map.entry("AZKSWBTC", FAMILY_BTC),
-            Map.entry("ABASWBTC", FAMILY_BTC),
-            Map.entry("AOPTWBTC", FAMILY_BTC),
-            // ETH family
-            Map.entry("ETH", FAMILY_ETH),
-            Map.entry("WETH", FAMILY_ETH),
-            Map.entry("AWETH", FAMILY_ETH),
-            Map.entry("AETHWETH", FAMILY_ETH),
-            Map.entry("AARBWETH", FAMILY_ETH),
-            Map.entry("ALINWETH", FAMILY_ETH),
-            Map.entry("AMANWETH", FAMILY_ETH),
-            Map.entry("AZKSWETH", FAMILY_ETH),
-            Map.entry("ABASWETH", FAMILY_ETH),
-            Map.entry("AOPTWETH", FAMILY_ETH),
-            Map.entry("VBETH", FAMILY_ETH),
-            Map.entry("YVVBETH", FAMILY_ETH),
-            Map.entry("STETH", FAMILY_ETH),
-            Map.entry("WSTETH", FAMILY_ETH),
-            Map.entry("RETH", FAMILY_ETH),
-            Map.entry("CBETH", FAMILY_ETH),
-            Map.entry("EETH", FAMILY_ETH),
-            Map.entry("WEETH", FAMILY_ETH),
-            Map.entry("EZETH", FAMILY_ETH),
-            Map.entry("RSETH", FAMILY_ETH),
-            Map.entry("OSETH", FAMILY_ETH),
-            Map.entry("METH", FAMILY_ETH),
-            Map.entry("CMETH", FAMILY_ETH),
-            // SOL family
-            Map.entry("SOL", FAMILY_SOL),
-            Map.entry("BBSOL", FAMILY_SOL),
-            // ARB family
-            Map.entry("ARB", FAMILY_ARB),
-            Map.entry("AARBARB", FAMILY_ARB),
-            // USDC family
-            Map.entry("USDC", FAMILY_USDC),
-            Map.entry("USDBC", FAMILY_USDC),
-            Map.entry("AAVAUSDC", FAMILY_USDC),
-            Map.entry("AMANUSDC", FAMILY_USDC),
-            Map.entry("AARBUSDC", FAMILY_USDC),
-            Map.entry("AETHUSDC", FAMILY_USDC),
-            Map.entry("ABASUSDC", FAMILY_USDC),
-            Map.entry("AOPTUSDC", FAMILY_USDC),
-            Map.entry("AZKSUSDC", FAMILY_USDC),
-            Map.entry("VBUSDC", FAMILY_USDC),
-            Map.entry("EUSDC", FAMILY_USDC),
-            Map.entry("EEUSDC", FAMILY_USDC),
-            // Cycle/6 C1: Morpho-vault / Fluid-vault / Gauntlet / Re7 / Seamless USDC receipt tokens.
-            // Without these mappings, LENDING_DEPOSIT/LENDING_WITHDRAW + VAULT_DEPOSIT/VAULT_WITHDRAW
-            // legs fail isFamilyEquivalentCustodyTransfer and lose basis (D4 root cause).
-            Map.entry("FUSDC", FAMILY_USDC),
-            Map.entry("MCUSDC", FAMILY_USDC),
-            Map.entry("GTUSDCC", FAMILY_USDC),
-            Map.entry("RE7USDC", FAMILY_USDC),
-            Map.entry("SOUSDC", FAMILY_USDC),
-            // USDT family
-            Map.entry("USDT", FAMILY_USDT),
-            Map.entry("USDT0", FAMILY_USDT),
-            Map.entry("USD₮0", FAMILY_USDT),
-            Map.entry("EUSDT", FAMILY_USDT),
-            Map.entry("EUSDT0", FAMILY_USDT),
-            Map.entry("FUSDT", FAMILY_USDT),
-            Map.entry("SOUSDT", FAMILY_USDT),
-            Map.entry("VBUSDT", FAMILY_USDT),
-            // DEUSD / USDE / WSTUSR families
-            Map.entry("DEUSD", FAMILY_DEUSD),
-            Map.entry("EDEUSD", FAMILY_DEUSD),
-            Map.entry("USDE", FAMILY_USDE),
-            Map.entry("USDE0", FAMILY_USDE),
-            Map.entry("EWEETH", FAMILY_ETH),
-            Map.entry("EWSTUSR", FAMILY_WSTUSR),
-            Map.entry("WSTUSR", FAMILY_WSTUSR),
-            // AVAX family
-            Map.entry("AVAX", FAMILY_AVAX),
-            Map.entry("WAVAX", FAMILY_AVAX),
-            Map.entry("SAVAX", FAMILY_AVAX),
-            Map.entry("AAVAWAVAX", FAMILY_AVAX),
-            Map.entry("AAVASAVAX", FAMILY_AVAX),
-            // MNT family
-            Map.entry("MNT", FAMILY_MNT),
-            Map.entry("WMNT", FAMILY_MNT),
-            Map.entry("AMANMNT", FAMILY_MNT),
-            Map.entry("AMANWMNT", FAMILY_MNT)
+    static final Map<String, String> SUPPLEMENTAL_FAMILIES = Map.of(
+            "AAVASAVAX", "FAMILY:SAVAX"
     );
 
     private AccountingAssetFamilySupport() {
@@ -143,9 +52,6 @@ public final class AccountingAssetFamilySupport {
 
     public static String continuityIdentity(String assetSymbol, String assetContract) {
         String symbol = normalizeSymbol(assetSymbol);
-        // Confusable-symbol guard (F-6): a spoofed lookalike ticker (Cyrillic/Lisu/zero-width
-        // homoglyph) must never collapse into a canonical FAMILY:* bucket. Key it by its own
-        // contract (or raw symbol) so it stays an isolated, unpriced scam asset.
         if (CanonicalAssetCatalog.isConfusableSymbol(assetSymbol)) {
             String contract = normalizeContract(assetContract);
             if (contract != null) {
@@ -156,7 +62,11 @@ public final class AccountingAssetFamilySupport {
         if (isLpReceiptSymbol(symbol)) {
             return FAMILY_LP_RECEIPT;
         }
-        String familyIdentity = SYMBOL_FAMILIES.get(symbol);
+        String registryIdentity = AccountingAssetClassificationSupport.continuityFamilyIdentity(assetSymbol, assetContract);
+        if (registryIdentity != null) {
+            return registryIdentity;
+        }
+        String familyIdentity = SUPPLEMENTAL_FAMILIES.get(symbol);
         if (familyIdentity != null) {
             return familyIdentity;
         }
@@ -175,7 +85,12 @@ public final class AccountingAssetFamilySupport {
         if (contract == null || contract.isBlank()) {
             return null;
         }
-        return contract.trim().toLowerCase(Locale.ROOT);
+        String normalized = contract.trim();
+        String upper = normalized.toUpperCase(Locale.ROOT);
+        if (upper.startsWith("NATIVE:") || upper.startsWith("SYMBOL:") || upper.startsWith("FAMILY:")) {
+            return upper;
+        }
+        return normalized.toLowerCase(Locale.ROOT);
     }
 
     private static String normalizeSymbol(String symbol) {
@@ -192,19 +107,23 @@ public final class AccountingAssetFamilySupport {
                 || symbol.endsWith("-LP");
     }
 
-    public static boolean isExcludedFromSpotEthTimelineRollup(String assetSymbol) {
-        return SPOT_ETH_TIMELINE_EXCLUDED_SYMBOLS.contains(normalizeSymbol(assetSymbol));
-    }
-
     /**
      * Whether a ledger point may participate in family move-basis timeline quantity/AVCO
      * aggregation for the requested family page.
+     * <p>
+     * C2 tokens render on their own per-asset family page; only C1 members aggregate under
+     * {@code FAMILY:ETH} (ADR-054 / ADR-045).
      */
     public static boolean includeInSpotFamilyTimelineAggregation(String familyIdentity, String assetSymbol) {
         if (isLpReceiptSymbol(assetSymbol)) {
             return false;
         }
-        if (FAMILY_ETH_IDENTITY.equals(familyIdentity) && isExcludedFromSpotEthTimelineRollup(assetSymbol)) {
+        String symbolFamily = continuityIdentity(assetSymbol, null);
+        if (symbolFamily == null || !symbolFamily.equals(familyIdentity)) {
+            return false;
+        }
+        if (FAMILY_ETH_IDENTITY.equals(familyIdentity)
+                && AccountingAssetClassificationSupport.isC2DistinctAsset(assetSymbol)) {
             return false;
         }
         return true;
@@ -223,7 +142,10 @@ public final class AccountingAssetFamilySupport {
             return FAMILY_USDT;
         }
         if (matchesEulerIndexedReceipt(symbol, "EWEETH-")) {
-            return FAMILY_ETH;
+            return "FAMILY:EWEETH";
+        }
+        if (matchesEulerIndexedReceipt(symbol, "EWETH-")) {
+            return "FAMILY:EWETH";
         }
         if (matchesEulerIndexedReceipt(symbol, "EWSTUSR-")) {
             return FAMILY_WSTUSR;
@@ -231,12 +153,15 @@ public final class AccountingAssetFamilySupport {
         if (matchesEulerIndexedReceipt(symbol, "EDEUSD-")) {
             return FAMILY_DEUSD;
         }
-        // Cycle/5 N6: Aave (and compatible) receipt tokens share underlying family across chains.
         String lendingLifecycle = LendingAssetSymbolSupport.lendingReceiptLifecycleUnderlying(symbol);
         if (lendingLifecycle != null && !lendingLifecycle.isBlank() && !"UNKNOWN".equals(lendingLifecycle)) {
-            String familyIdentity = SYMBOL_FAMILIES.get(lendingLifecycle);
+            String familyIdentity = SUPPLEMENTAL_FAMILIES.get(lendingLifecycle);
             if (familyIdentity != null) {
                 return familyIdentity;
+            }
+            String registryFamily = AccountingAssetClassificationSupport.continuityFamilyIdentity(lendingLifecycle, null);
+            if (registryFamily != null) {
+                return registryFamily;
             }
         }
         return null;

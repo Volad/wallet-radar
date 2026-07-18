@@ -6,6 +6,7 @@ import com.walletradar.application.costbasis.application.replay.planning.PassThr
 import com.walletradar.application.costbasis.application.replay.query.ConfirmedReplayQueryService;
 import com.walletradar.application.costbasis.application.replay.state.ReplayExecutionState;
 import com.walletradar.application.costbasis.application.replay.support.CorridorBasisConservationGuard;
+import com.walletradar.application.costbasis.application.replay.support.LendingLoopBasisConservationGuard;
 import com.walletradar.application.costbasis.application.replay.support.NativePoolReconciliationGate;
 import com.walletradar.application.costbasis.application.replay.support.BybitEarnSubPoolConservationGuard;
 import com.walletradar.application.costbasis.application.replay.support.ReplayAccumulatorDriftCanary;
@@ -62,6 +63,7 @@ public class AvcoReplayService {
     private final BybitEarnSubPoolConservationGuard bybitEarnSubPoolConservationGuard;
     private final NativePoolReconciliationGate nativePoolReconciliationGate;
     private final ReplayAccumulatorDriftCanary replayAccumulatorDriftCanary;
+    private final LendingLoopBasisConservationGuard lendingLoopBasisConservationGuard;
 
     public int replayConfirmed() {
         return replayConfirmed(null, null, null);
@@ -146,6 +148,10 @@ public class AvcoReplayService {
             // default (CorridorBasisConservationGuard.SEVERITY); surfaces any released CARRY_OUT
             // that no credit inherited so an orphaned corridor/bridge basis cannot pass silently.
             corridorBasisConservationGuard.evaluate(replayState);
+            // B-ETH-02: lending-loop continuity buckets are outside the corridor guard's queue
+            // scope. Assert Σ parked == Σ restored + residual per lending-loop bucket (WARN-mode
+            // telemetry — an open loop leaving residual parked basis is a legitimate steady state).
+            lendingLoopBasisConservationGuard.evaluate(replayState);
             // Evaluate against the just-computed in-memory points: the persisted asset_ledger_points
             // are still the previous run's state at this sweep (saved below), so a DB re-query here
             // would report ledgerQty=0 for every Bybit asset.

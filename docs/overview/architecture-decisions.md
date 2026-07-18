@@ -534,6 +534,12 @@ Replay rules:
 Special accounting rules:
 - WETH stays stored as WETH and is aliased to the native asset only at replay time
 - `stETH`, `mETH`, `rETH`, `wstETH`, and `cbETH` stay independent assets
+- **C1 / C2 staked-ETH model (ADR-054, supersedes implied ADR-017 inclusion).** C1 assets — same
+  underlying at a 1:1 fixed rate (ETH, WETH, Aave `a*WETH`, VBETH) — share the `FAMILY:ETH` chart and
+  move between one another as REALLOCATE with no P&L. C2 staked/derivative ETH — distinct market assets
+  (stETH, wstETH, cmETH, weETH, …) — are **not** rolled into the `FAMILY:ETH` spot-family chart; each
+  holds its own per-token family and per-asset AVCO pool, and C1↔C2 identity changes realize P&L at
+  market
 - bridge, custody, lending, and vault continuity events preserve basis when correlation or protocol context is established
 
 Current milestone out of scope:

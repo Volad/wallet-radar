@@ -1,6 +1,7 @@
 package com.walletradar.application.linking.pipeline.clarification;
 
 import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
+import com.walletradar.canonical.correlation.CorrelationContract;
 import com.walletradar.domain.counterparty.CounterpartyType;
 import com.walletradar.domain.common.NetworkAddressFormat;
 import com.walletradar.domain.common.NetworkId;
@@ -10,6 +11,8 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionReposi
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.domain.wallet.WalletDomainKind;
+import com.walletradar.domain.wallet.WalletRef;
 import com.walletradar.application.cex.normalization.venue.bybit.BybitInternalTransferPairer;
 import com.walletradar.application.pricing.application.PriceableFlowPolicy;
 import com.walletradar.application.session.application.AccountingUniverseService;
@@ -47,6 +50,7 @@ public class BybitTransferContinuityRepairService {
     private static final BigDecimal ABSOLUTE_QTY_TOLERANCE = new BigDecimal("0.000001");
     private static final Pattern EVM_HEX_ADDRESS = Pattern.compile("^0x[a-fA-F0-9]{40}$");
     private static final Pattern BYBIT_REF = Pattern.compile("^BYBIT:[^\\s]+$");
+    private static final Pattern DZENGI_REF = Pattern.compile("^DZENGI:[^\\s]+$", Pattern.CASE_INSENSITIVE);
     private static final String BRIDGE_MISSING_REASON = "BRIDGE_ON_CHAIN_LEG_NOT_FOUND";
     private static final String EXTERNAL_CUSTODY_UNTRACKED_VENUE = "EXTERNAL_CUSTODY_UNTRACKED_VENUE";
 
@@ -71,12 +75,32 @@ public class BybitTransferContinuityRepairService {
                 changed++;
             }
         }
-        if (changed > 0 || !batch.isEmpty() || !bybitBatch.isEmpty()) {
-            log.info("BybitTransferContinuityRepair: onchainCandidates={} bybitCandidates={} paired={}",
-                    batch.size(), bybitBatch.size(), changed);
+        List<NormalizedTransaction> dzengiBatch = loadDzengiCandidateBatch(batchSize);
+        for (NormalizedTransaction dzengiCandidate : dzengiBatch) {
+            if (repairFromDzengiSide(dzengiCandidate)) {
+                changed++;
+            }
+        }
+        if (changed > 0 || !batch.isEmpty() || !bybitBatch.isEmpty() || !dzengiBatch.isEmpty()) {
+            log.info("BybitTransferContinuityRepair: onchainCandidates={} bybitCandidates={} dzengiCandidates={} paired={}",
+                    batch.size(), bybitBatch.size(), dzengiBatch.size(), changed);
         }
         changed += reclassifyPairedCorridorExternals(batchSize);
         return changed;
+    }
+
+    boolean repairFromDzengiSide(NormalizedTransaction dzengiCandidate) {
+        if (dzengiCandidate == null
+                || dzengiCandidate.getSource() != NormalizedTransactionSource.DZENGI
+                || blank(dzengiCandidate.getTxHash())
+                || !isRepairableCexExternalType(dzengiCandidate.getType())) {
+            return false;
+        }
+        List<NormalizedTransaction> onChainCandidates = selectOnChainPartnersForCex(dzengiCandidate);
+        if (onChainCandidates.size() != 1) {
+            return false;
+        }
+        return repair(onChainCandidates.getFirst());
     }
 
     boolean repairFromBybitSide(NormalizedTransaction bybitCandidate) {
@@ -126,24 +150,50 @@ public class BybitTransferContinuityRepairService {
         return mongoOperations.find(query, NormalizedTransaction.class);
     }
 
+    private List<NormalizedTransaction> loadDzengiCandidateBatch(int batchSize) {
+        Query query = Query.query(new Criteria().andOperator(
+                Criteria.where("source").is(NormalizedTransactionSource.DZENGI),
+                Criteria.where("type").in(
+                        NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                        NormalizedTransactionType.EXTERNAL_TRANSFER_OUT
+                ),
+                Criteria.where("txHash").exists(true).ne(""),
+                new Criteria().orOperator(
+                        Criteria.where("continuityCandidate").ne(Boolean.TRUE),
+                        Criteria.where("matchedCounterparty").exists(false),
+                        Criteria.where("matchedCounterparty").is(null),
+                        Criteria.where("matchedCounterparty").is("")
+                )
+        ));
+        query.with(Sort.by(
+                Sort.Order.asc("blockTimestamp"),
+                Sort.Order.asc("transactionIndex"),
+                Sort.Order.asc("_id")
+        ));
+        query.limit(Math.max(1, batchSize));
+        return mongoOperations.find(query, NormalizedTransaction.class);
+    }
+
     boolean repair(NormalizedTransaction onChainCandidate) {
         if (!isOnChainCandidate(onChainCandidate) && !isFa001OnChainPartner(onChainCandidate)) {
             return false;
         }
-        List<NormalizedTransaction> compatibleBybitRows = normalizedTransactionRepository.findAllByTxHashAndNetworkIdAndSource(
+        List<NormalizedTransaction> compatibleCexRows = new ArrayList<>();
+        compatibleCexRows.addAll(normalizedTransactionRepository.findAllByTxHashAndNetworkIdAndSource(
                         onChainCandidate.getTxHash(),
                         onChainCandidate.getNetworkId(),
                         NormalizedTransactionSource.BYBIT
                 ).stream()
-                .filter(bybitRow -> isPairable(onChainCandidate, bybitRow))
-                .toList();
-        // RC-9 D1: drop the size()==1 hard gate. A re-materialised refresh can present a stream
-        // mirror alongside the real corridor leg, flipping the count from 1 to 2 and producing a
-        // different (or no) correlation than the full rebuild. Instead pick the canonical Bybit leg
-        // deterministically (endpoint-matching FUND deposit anchor first, then lowest _id) so the
-        // corridor triple is a pure, order-stable function of the raw legs.
-        NormalizedTransaction bybitRow = selectCanonicalBybitLeg(onChainCandidate, compatibleBybitRows);
-        if (bybitRow == null) {
+                .filter(cexRow -> isPairable(onChainCandidate, cexRow))
+                .toList());
+        compatibleCexRows.addAll(normalizedTransactionRepository.findAllByTxHashAndSource(
+                        onChainCandidate.getTxHash(),
+                        NormalizedTransactionSource.DZENGI
+                ).stream()
+                .filter(cexRow -> isPairable(onChainCandidate, cexRow))
+                .toList());
+        NormalizedTransaction cexRow = selectCanonicalCexLeg(onChainCandidate, compatibleCexRows);
+        if (cexRow == null) {
             return false;
         }
         String correlationId = correlationId(onChainCandidate.getNetworkId(), onChainCandidate.getTxHash());
@@ -152,33 +202,24 @@ public class BybitTransferContinuityRepairService {
         boolean leftChanged = applyContinuityMetadata(
                 onChainCandidate,
                 correlationId,
-                bybitRow.getWalletAddress(),
+                cexRow.getWalletAddress(),
                 now
         );
         boolean rightChanged = applyContinuityMetadata(
-                bybitRow,
+                cexRow,
                 correlationId,
                 onChainCandidate.getWalletAddress(),
                 now
         );
         boolean onChainFlowsRetagged = retagOnChainPrincipalFlowsForContinuity(onChainCandidate, now);
-        boolean onChainRewritten = rewriteOnChainLegAsInternalCexTransfer(onChainCandidate, bybitRow, now);
-        // Cycle/5 N18: symmetric retag for the Bybit anchor. After N17 the FH/Deposit / FH/Withdraw
-        // flow carries role=BUY/SELL with no priced value yet; without retagging here the pricing job
-        // would later assign market value and the cost-basis replay would acquire fresh basis at
-        // market, producing the very phantom step-up that the continuity link was supposed to
-        // eliminate. By demoting the Bybit principal flow to TRANSFER (and clearing any price/value
-        // fields, including realised PnL written by an earlier replay pass), the replay engine sees a
-        // pure basis carry — on-chain disposes at original AVCO, Bybit acquires at the same AVCO,
-        // realised PnL = 0 across the pair (which matches reality: this is the user moving their own
-        // crypto between their wallets, not selling on one side and buying on the other).
-        boolean bybitFlowsRetagged = retagBybitPrincipalFlowsForContinuity(bybitRow, now);
-        boolean bybitRewritten = rewriteBybitLegAsInternalTransfer(bybitRow, now);
-        if (!leftChanged && !rightChanged && !onChainFlowsRetagged && !bybitFlowsRetagged && !onChainRewritten && !bybitRewritten) {
+        boolean onChainRewritten = rewriteOnChainLegAsInternalCexTransfer(onChainCandidate, cexRow, now);
+        boolean cexFlowsRetagged = retagCexPrincipalFlowsForContinuity(cexRow, now);
+        boolean cexRewritten = rewriteCexLegAsInternalTransfer(cexRow, now);
+        if (!leftChanged && !rightChanged && !onChainFlowsRetagged && !cexFlowsRetagged && !onChainRewritten && !cexRewritten) {
             return false;
         }
 
-        normalizedTransactionRepository.saveAll(deduplicateById(List.of(onChainCandidate, bybitRow)));
+        normalizedTransactionRepository.saveAll(deduplicateById(List.of(onChainCandidate, cexRow)));
         return true;
     }
 
@@ -193,9 +234,9 @@ public class BybitTransferContinuityRepairService {
                         NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
                         NormalizedTransactionType.EXTERNAL_TRANSFER_OUT
                 ),
-                Criteria.where("correlationId").regex("^BYBIT-CORRIDOR:"),
+                Criteria.where("correlationId").regex("^" + CorrelationContract.BYBIT_CORRIDOR_PREFIX),
                 Criteria.where("matchedCounterparty").exists(true).ne(""),
-                Criteria.where("matchedCounterparty").not().regex("^BYBIT:", "i")
+                Criteria.where("matchedCounterparty").not().regex("^" + CorrelationContract.VENUE_BYBIT + ":", "i")
         ));
         query.limit(Math.max(1, batchSize));
         List<NormalizedTransaction> candidates = mongoOperations.find(query, NormalizedTransaction.class);
@@ -217,35 +258,35 @@ public class BybitTransferContinuityRepairService {
         return dirty.size();
     }
 
-    private boolean rewriteBybitLegAsInternalTransfer(NormalizedTransaction bybit, Instant now) {
-        if (bybit == null
-                || bybit.getSource() != NormalizedTransactionSource.BYBIT
-                || bybit.getType() == NormalizedTransactionType.INTERNAL_TRANSFER) {
+    private boolean rewriteCexLegAsInternalTransfer(NormalizedTransaction cex, Instant now) {
+        if (cex == null
+                || !isVenueCexSource(cex.getSource())
+                || cex.getType() == NormalizedTransactionType.INTERNAL_TRANSFER) {
             return false;
         }
-        if (bybit.getType() != NormalizedTransactionType.EXTERNAL_TRANSFER_IN
-                && bybit.getType() != NormalizedTransactionType.EXTERNAL_TRANSFER_OUT) {
+        if (cex.getType() != NormalizedTransactionType.EXTERNAL_TRANSFER_IN
+                && cex.getType() != NormalizedTransactionType.EXTERNAL_TRANSFER_OUT) {
             return false;
         }
-        String matchedCounterparty = bybit.getMatchedCounterparty();
-        if (blank(matchedCounterparty) || matchedCounterparty.trim().regionMatches(true, 0, "BYBIT:", 0, "BYBIT:".length())) {
+        String matchedCounterparty = cex.getMatchedCounterparty();
+        if (blank(matchedCounterparty) || hasCexRef(matchedCounterparty, cex.getSource())) {
             return false;
         }
-        bybit.setType(NormalizedTransactionType.INTERNAL_TRANSFER);
-        bybit.setUpdatedAt(now);
+        cex.setType(NormalizedTransactionType.INTERNAL_TRANSFER);
+        cex.setUpdatedAt(now);
         return true;
     }
 
-    /**
-     * Cycle/5 N18: strip priced semantics from the Bybit FH-anchor principal flow once the cross-wallet
-     * continuity pair is established. Mirrors {@link #retagOnChainPrincipalFlowsForContinuity}.
-     */
-    private boolean retagBybitPrincipalFlowsForContinuity(NormalizedTransaction bybit, Instant now) {
-        if (bybit.getFlows() == null || bybit.getFlows().isEmpty()) {
+    private boolean rewriteBybitLegAsInternalTransfer(NormalizedTransaction bybit, Instant now) {
+        return rewriteCexLegAsInternalTransfer(bybit, now);
+    }
+
+    private boolean retagCexPrincipalFlowsForContinuity(NormalizedTransaction cex, Instant now) {
+        if (cex.getFlows() == null || cex.getFlows().isEmpty()) {
             return false;
         }
         boolean changed = false;
-        for (NormalizedTransaction.Flow flow : bybit.getFlows()) {
+        for (NormalizedTransaction.Flow flow : cex.getFlows()) {
             if (flow == null || flow.getRole() == NormalizedLegRole.FEE) {
                 continue;
             }
@@ -277,14 +318,22 @@ public class BybitTransferContinuityRepairService {
                 changed = true;
             }
         }
-        if (changed && shouldRequeueContinuityInboundPricing(bybit)) {
-            bybit.setStatus(NormalizedTransactionStatus.PENDING_PRICE);
-            bybit.setConfirmedAt(null);
+        if (changed && shouldRequeueContinuityInboundPricing(cex)) {
+            cex.setStatus(NormalizedTransactionStatus.PENDING_PRICE);
+            cex.setConfirmedAt(null);
         }
         if (changed) {
-            bybit.setUpdatedAt(now);
+            cex.setUpdatedAt(now);
         }
         return changed;
+    }
+
+    /**
+     * Cycle/5 N18: strip priced semantics from the Bybit FH-anchor principal flow once the cross-wallet
+     * continuity pair is established. Mirrors {@link #retagOnChainPrincipalFlowsForContinuity}.
+     */
+    private boolean retagBybitPrincipalFlowsForContinuity(NormalizedTransaction bybit, Instant now) {
+        return retagCexPrincipalFlowsForContinuity(bybit, now);
     }
 
     /**
@@ -362,7 +411,7 @@ public class BybitTransferContinuityRepairService {
                 Criteria.where("matchedCounterparty").exists(false),
                 Criteria.where("matchedCounterparty").is(null),
                 Criteria.where("matchedCounterparty").is(""),
-                Criteria.where("matchedCounterparty").not().regex("^BYBIT:")
+                Criteria.where("matchedCounterparty").not().regex("^" + CorrelationContract.VENUE_BYBIT + ":")
         );
     }
 
@@ -378,73 +427,92 @@ public class BybitTransferContinuityRepairService {
                 && principalFlows(transaction).size() == 1;
     }
 
-    private boolean isRepairableExcludedBybitLeg(NormalizedTransaction bybit) {
-        if (bybit == null || !Boolean.TRUE.equals(bybit.getExcludedFromAccounting())) {
+    private boolean isRepairableExcludedCexLeg(NormalizedTransaction cex) {
+        if (cex == null || !Boolean.TRUE.equals(cex.getExcludedFromAccounting())) {
             return true;
         }
-        String reason = bybit.getAccountingExclusionReason();
+        String reason = cex.getAccountingExclusionReason();
         if (EXTERNAL_CUSTODY_UNTRACKED_VENUE.equals(reason)) {
             return true;
         }
-        if (hasBybitCorridorCorrelation(bybit.getCorrelationId())) {
+        if (hasBybitCorridorCorrelation(cex.getCorrelationId())) {
             return true;
         }
-        // B-ZERO-3: same-sign mirror demotion runs after FA-001 pairing in linking; allow re-pair
-        // when the Bybit FH withdraw anchor shares the on-chain txHash.
+        if (cex.getSource() != NormalizedTransactionSource.BYBIT) {
+            return false;
+        }
         return BybitInternalTransferPairer.SAME_SIGN_MIRROR_REASON.equals(reason)
-                && !blank(bybit.getTxHash());
+                && !blank(cex.getTxHash());
+    }
+
+    private boolean isRepairableExcludedBybitLeg(NormalizedTransaction bybit) {
+        return isRepairableExcludedCexLeg(bybit);
     }
 
     private boolean isPairable(
             NormalizedTransaction onChain,
-            NormalizedTransaction bybit
+            NormalizedTransaction cex
     ) {
-        if (bybit == null
-                || bybit.getSource() != NormalizedTransactionSource.BYBIT
-                || !isRepairableBybitStatus(bybit)
-                || !hasBybitRef(bybit.getWalletAddress())
-                || bybit.getNetworkId() != onChain.getNetworkId()
-                || !NetworkAddressFormat.txHashesEqual(onChain.getNetworkId(), bybit.getTxHash(), onChain.getTxHash())
-                || !directionCompatible(onChain, bybit)
-                || !accountingUniverseService.shareUniverseMembers(onChain.getWalletAddress(), bybit.getWalletAddress())
-                || principalFlows(bybit).size() != 1) {
+        if (cex == null
+                || !isVenueCexSource(cex.getSource())
+                || !isRepairableCexStatus(cex)
+                || !hasCexRef(cex.getWalletAddress(), cex.getSource())
+                || !networkCompatible(onChain, cex)
+                || !NetworkAddressFormat.txHashesEqual(onChain.getNetworkId(), cex.getTxHash(), onChain.getTxHash())
+                || !directionCompatible(onChain, cex)
+                || !accountingUniverseService.shareUniverseMembers(onChain.getWalletAddress(), cex.getWalletAddress())
+                || principalFlows(cex).size() != 1) {
             return false;
         }
-        if (Boolean.TRUE.equals(bybit.getExcludedFromAccounting())
-                && !isRepairableExcludedBybitLeg(bybit)) {
+        if (Boolean.TRUE.equals(cex.getExcludedFromAccounting())
+                && !isRepairableExcludedCexLeg(cex)) {
             return false;
         }
-        if (!blank(bybit.getMatchedCounterparty())
-                && !sameText(bybit.getMatchedCounterparty(), onChain.getWalletAddress())) {
+        if (!blank(cex.getMatchedCounterparty())
+                && !sameText(cex.getMatchedCounterparty(), onChain.getWalletAddress())) {
             return false;
         }
 
         NormalizedTransaction.Flow onChainPrincipal = principalFlows(onChain).getFirst();
-        NormalizedTransaction.Flow bybitPrincipal = principalFlows(bybit).getFirst();
+        NormalizedTransaction.Flow cexPrincipal = principalFlows(cex).getFirst();
         String onChainFamily = AccountingAssetFamilySupport.continuityIdentity(onChainPrincipal);
-        String bybitFamily = AccountingAssetFamilySupport.continuityIdentity(bybitPrincipal);
-        if (onChainFamily == null || !Objects.equals(onChainFamily, bybitFamily)) {
+        String cexFamily = AccountingAssetFamilySupport.continuityIdentity(cexPrincipal);
+        if (onChainFamily == null || !Objects.equals(onChainFamily, cexFamily)) {
             return false;
         }
-        if (walletEndpointMatches(onChain, bybit)) {
+        if (walletEndpointMatches(onChain, cex)) {
+            return true;
+        }
+        // Dzengi records the gross withdrawal amount; on-chain receipt is net after the transfer fee
+        // (e.g. Dzengi shows 10 USDT sent, chain shows 8.6 USDT received). The txHash is already
+        // verified equal above, so when the asset family matches we trust the txHash pairing and
+        // skip the tight quantity check that would otherwise reject the ~14% gap.
+        if (cex.getSource() == NormalizedTransactionSource.DZENGI) {
             return true;
         }
         return quantitiesCompatible(
                 onChainPrincipal.getQuantityDelta().abs(),
-                bybitPrincipal.getQuantityDelta().abs()
+                cexPrincipal.getQuantityDelta().abs()
         );
+    }
+
+    private static boolean networkCompatible(NormalizedTransaction onChain, NormalizedTransaction cex) {
+        if (cex.getSource() == NormalizedTransactionSource.DZENGI) {
+            return cex.getNetworkId() == null || cex.getNetworkId() == onChain.getNetworkId();
+        }
+        return cex.getNetworkId() == onChain.getNetworkId();
     }
 
     /**
      * FA-001 R10: when Bybit raw extract already stamped the on-chain wallet endpoint on
      * {@code counterpartyAddress}, pairing must not fail on withdrawal-fee quantity drift.
      */
-    private boolean walletEndpointMatches(NormalizedTransaction onChain, NormalizedTransaction bybit) {
-        if (onChain == null || bybit == null || blank(bybit.getCounterpartyAddress())) {
+    private boolean walletEndpointMatches(NormalizedTransaction onChain, NormalizedTransaction cex) {
+        if (onChain == null || cex == null || blank(cex.getCounterpartyAddress())) {
             return false;
         }
-        String counterparty = bybit.getCounterpartyAddress().trim();
-        if (counterparty.regionMatches(true, 0, "BYBIT:", 0, "BYBIT:".length())) {
+        String counterparty = cex.getCounterpartyAddress().trim();
+        if (WalletRef.parse(counterparty).domain() == WalletDomainKind.CEX) {
             return false;
         }
         if (!hasOnChainWalletShape(counterparty, onChain.getNetworkId())) {
@@ -453,27 +521,45 @@ public class BybitTransferContinuityRepairService {
         return sameText(counterparty, onChain.getWalletAddress());
     }
 
-    /**
-     * RC-9 D1: deterministic canonical-leg selector. Among all Bybit rows compatible with the
-     * on-chain leg, prefer the wallet-endpoint-matching FUND deposit anchor, then break remaining
-     * ties by lowest {@code _id}. Pure and order-stable: the same candidate set always yields the
-     * same leg regardless of DB iteration order or row materialisation timing.
-     */
-    private NormalizedTransaction selectCanonicalBybitLeg(
+    private NormalizedTransaction selectCanonicalCexLeg(
             NormalizedTransaction onChain,
-            List<NormalizedTransaction> compatibleBybitRows
+            List<NormalizedTransaction> compatibleCexRows
     ) {
-        if (compatibleBybitRows.isEmpty()) {
+        if (compatibleCexRows.isEmpty()) {
             return null;
         }
-        if (compatibleBybitRows.size() == 1) {
-            return compatibleBybitRows.getFirst();
+        if (compatibleCexRows.size() == 1) {
+            return compatibleCexRows.getFirst();
         }
-        return compatibleBybitRows.stream()
+        return compatibleCexRows.stream()
                 .min(java.util.Comparator
                         .comparingInt((NormalizedTransaction row) -> walletEndpointMatches(onChain, row) ? 0 : 1)
                         .thenComparing(row -> row.getId() == null ? "" : row.getId()))
                 .orElse(null);
+    }
+
+    private NormalizedTransaction selectCanonicalBybitLeg(
+            NormalizedTransaction onChain,
+            List<NormalizedTransaction> compatibleBybitRows
+    ) {
+        return selectCanonicalCexLeg(onChain, compatibleBybitRows);
+    }
+
+    private List<NormalizedTransaction> selectOnChainPartnersForCex(NormalizedTransaction cex) {
+        List<NormalizedTransaction> candidates;
+        if (cex.getNetworkId() != null) {
+            candidates = normalizedTransactionRepository.findAllByTxHashAndNetworkIdAndSource(
+                    cex.getTxHash(),
+                    cex.getNetworkId(),
+                    NormalizedTransactionSource.ON_CHAIN
+            );
+        } else {
+            candidates = normalizedTransactionRepository.findAllByTxHashAndSource(
+                    cex.getTxHash(),
+                    NormalizedTransactionSource.ON_CHAIN
+            );
+        }
+        return selectOnChainPartnersFromCandidates(cex, candidates);
     }
 
     private List<NormalizedTransaction> selectOnChainPartners(NormalizedTransaction bybit) {
@@ -482,32 +568,40 @@ public class BybitTransferContinuityRepairService {
                         bybit.getTxHash(),
                         bybit.getNetworkId(),
                         NormalizedTransactionSource.ON_CHAIN
-                ).stream()
+                );
+        return selectOnChainPartnersFromCandidates(bybit, candidates);
+    }
+
+    private List<NormalizedTransaction> selectOnChainPartnersFromCandidates(
+            NormalizedTransaction cex,
+            List<NormalizedTransaction> candidates
+    ) {
+        List<NormalizedTransaction> filtered = candidates.stream()
                 .filter(this::isFa001OnChainPartner)
-                .filter(onChain -> isPairable(onChain, bybit))
+                .filter(onChain -> isPairable(onChain, cex))
                 .toList();
-        if (candidates.isEmpty()) {
+        if (filtered.isEmpty()) {
             return List.of();
         }
-        if (candidates.size() == 1) {
-            return candidates;
+        if (filtered.size() == 1) {
+            return filtered;
         }
-        List<NormalizedTransaction> endpointMatches = candidates.stream()
-                .filter(onChain -> walletEndpointMatches(onChain, bybit))
+        List<NormalizedTransaction> endpointMatches = filtered.stream()
+                .filter(onChain -> walletEndpointMatches(onChain, cex))
                 .toList();
         if (endpointMatches.size() == 1) {
             return endpointMatches;
         }
-        List<NormalizedTransaction> tiebreakPool = endpointMatches.size() > 1 ? endpointMatches : candidates;
-        if (principalFlows(bybit).isEmpty()) {
+        List<NormalizedTransaction> tiebreakPool = endpointMatches.size() > 1 ? endpointMatches : filtered;
+        if (principalFlows(cex).isEmpty()) {
             return List.of();
         }
-        BigDecimal bybitQty = principalFlows(bybit).getFirst().getQuantityDelta().abs();
+        BigDecimal cexQty = principalFlows(cex).getFirst().getQuantityDelta().abs();
         NormalizedTransaction best = null;
         BigDecimal bestDrift = null;
         int bestCount = 0;
         for (NormalizedTransaction onChain : tiebreakPool) {
-            BigDecimal drift = quantityDrift(onChain, bybitQty);
+            BigDecimal drift = quantityDrift(onChain, cexQty);
             if (drift == null) {
                 continue;
             }
@@ -540,14 +634,14 @@ public class BybitTransferContinuityRepairService {
      */
     private boolean rewriteOnChainLegAsInternalCexTransfer(
             NormalizedTransaction onChain,
-            NormalizedTransaction bybit,
+            NormalizedTransaction cex,
             Instant now
     ) {
-        if (onChain == null || bybit == null) {
+        if (onChain == null || cex == null) {
             return false;
         }
-        String bybitSubAccountRef = resolveBybitSubAccountRef(bybit.getWalletAddress());
-        if (bybitSubAccountRef == null) {
+        String cexSubAccountRef = resolveCexSubAccountEndpoint(cex);
+        if (cexSubAccountRef == null) {
             return false;
         }
         boolean changed = false;
@@ -555,8 +649,8 @@ public class BybitTransferContinuityRepairService {
             onChain.setType(NormalizedTransactionType.INTERNAL_TRANSFER);
             changed = true;
         }
-        if (!sameText(onChain.getCounterpartyAddress(), bybitSubAccountRef)) {
-            onChain.setCounterpartyAddress(bybitSubAccountRef);
+        if (!sameText(onChain.getCounterpartyAddress(), cexSubAccountRef)) {
+            onChain.setCounterpartyAddress(cexSubAccountRef);
             changed = true;
         }
         if (onChain.getCounterpartyType() != CounterpartyType.CEX) {
@@ -568,8 +662,8 @@ public class BybitTransferContinuityRepairService {
                 if (flow == null || flow.getRole() == NormalizedLegRole.FEE) {
                     continue;
                 }
-                if (!sameText(flow.getCounterpartyAddress(), bybitSubAccountRef)) {
-                    flow.setCounterpartyAddress(bybitSubAccountRef);
+                if (!sameText(flow.getCounterpartyAddress(), cexSubAccountRef)) {
+                    flow.setCounterpartyAddress(cexSubAccountRef);
                     changed = true;
                 }
                 if (flow.getCounterpartyType() != CounterpartyType.CEX) {
@@ -582,6 +676,28 @@ public class BybitTransferContinuityRepairService {
             onChain.setUpdatedAt(now);
         }
         return changed;
+    }
+
+    private String resolveCexSubAccountEndpoint(NormalizedTransaction cex) {
+        if (cex == null || cex.getSource() == null) {
+            return null;
+        }
+        return switch (cex.getSource()) {
+            case BYBIT -> CorridorCorrelationKeyFactory.bybitSubAccountEndpoint(cex.getWalletAddress());
+            case DZENGI -> resolveDzengiEndpoint(cex.getWalletAddress());
+            default -> null;
+        };
+    }
+
+    private static String resolveDzengiEndpoint(String walletRef) {
+        if (walletRef == null || walletRef.isBlank()) {
+            return null;
+        }
+        WalletRef ref = WalletRef.parse(walletRef.trim());
+        if (ref.domain() != WalletDomainKind.CEX || !"dzengi".equals(ref.venueId())) {
+            return null;
+        }
+        return ref.canonicalRef();
     }
 
     /**
@@ -687,17 +803,14 @@ public class BybitTransferContinuityRepairService {
         return changed;
     }
 
-    private boolean isRepairableBybitStatus(NormalizedTransaction transaction) {
-        // Cycle/5 N18: after N17 the basis-acquiring Bybit anchor (FH/Deposit / FH/Withdraw) is
-        // assigned the BUY/SELL role at the canonical builder, which the PriceableFlowPolicy then
-        // pins to PENDING_PRICE until pricing runs. The linking stage executes BEFORE pricing, so
-        // every FH-anchor we want to link starts in PENDING_PRICE. The matcher must accept it
-        // alongside CONFIRMED/NEEDS_REVIEW; otherwise continuity is never established and the
-        // pricing job later crystallises a fresh market-priced acquisition (the exact double-step-up
-        // we are trying to eliminate).
+    private boolean isRepairableCexStatus(NormalizedTransaction transaction) {
         return transaction.getStatus() == NormalizedTransactionStatus.CONFIRMED
                 || transaction.getStatus() == NormalizedTransactionStatus.NEEDS_REVIEW
                 || transaction.getStatus() == NormalizedTransactionStatus.PENDING_PRICE;
+    }
+
+    private boolean isRepairableBybitStatus(NormalizedTransaction transaction) {
+        return isRepairableCexStatus(transaction);
     }
 
     private boolean removeMissingReason(NormalizedTransaction transaction, String reason) {
@@ -778,9 +891,13 @@ public class BybitTransferContinuityRepairService {
                 && hasBybitCorridorCorrelation(transaction.getCorrelationId());
     }
 
-    private static boolean isRepairableBybitExternalType(NormalizedTransactionType type) {
+    private static boolean isRepairableCexExternalType(NormalizedTransactionType type) {
         return type == NormalizedTransactionType.EXTERNAL_TRANSFER_IN
                 || type == NormalizedTransactionType.EXTERNAL_TRANSFER_OUT;
+    }
+
+    private static boolean isRepairableBybitExternalType(NormalizedTransactionType type) {
+        return isRepairableCexExternalType(type);
     }
 
     private static boolean isFa001BybitDepositAnchor(NormalizedTransaction transaction) {
@@ -795,7 +912,7 @@ public class BybitTransferContinuityRepairService {
     }
 
     private static boolean hasBybitCorridorCorrelation(String correlationId) {
-        return correlationId != null && correlationId.startsWith("BYBIT-CORRIDOR:");
+        return correlationId != null && correlationId.startsWith(CorrelationContract.BYBIT_CORRIDOR_PREFIX);
     }
 
     private List<NormalizedTransaction.Flow> principalFlows(NormalizedTransaction transaction) {
@@ -846,7 +963,7 @@ public class BybitTransferContinuityRepairService {
                     && trimmed.length() <= 64
                     && !trimmed.contains(" ")
                     && !trimmed.startsWith("0x")
-                    && !trimmed.startsWith("BYBIT:");
+                    && WalletRef.parse(trimmed).domain() != WalletDomainKind.CEX;
         }
         if (networkId == NetworkId.TON) {
             return com.walletradar.domain.common.ton.TonAddressCanonicalizer.looksLikeTon(value);
@@ -854,8 +971,23 @@ public class BybitTransferContinuityRepairService {
         return EVM_HEX_ADDRESS.matcher(value).matches();
     }
 
+    private static boolean isVenueCexSource(NormalizedTransactionSource source) {
+        return source == NormalizedTransactionSource.BYBIT || source == NormalizedTransactionSource.DZENGI;
+    }
+
+    private boolean hasCexRef(String value, NormalizedTransactionSource source) {
+        if (blank(value) || source == null) {
+            return false;
+        }
+        return switch (source) {
+            case BYBIT -> BYBIT_REF.matcher(value).matches();
+            case DZENGI -> DZENGI_REF.matcher(value).matches();
+            default -> false;
+        };
+    }
+
     private boolean hasBybitRef(String value) {
-        return !blank(value) && BYBIT_REF.matcher(value).matches();
+        return hasCexRef(value, NormalizedTransactionSource.BYBIT);
     }
 
     private boolean sameText(String left, String right) {

@@ -167,6 +167,49 @@ class BridgeStartClassifierLiFiFacetTest {
         );
     }
 
+    @Test
+    @DisplayName("NEW-08: callDiamondWithEIP2612Signature to UNICHAIN LI.FI Permit2Proxy (0x1bcd304f) → BRIDGE_OUT / LI.FI")
+    void callDiamondWithEip2612_unichainKnownProxy_bridgeOut() {
+        String unichainDiamond = "0x1bcd304fdad1d1d66529159b1bc8d13c9158d586";
+        when(protocolRegistryService.lookup(NetworkId.UNICHAIN, unichainDiamond))
+                .thenReturn(Optional.of(lifiEntry(unichainDiamond)));
+
+        OnChainClassificationContext ctx = buildContext(
+                NetworkId.UNICHAIN,
+                unichainDiamond,
+                "0xd7a08473",  // callDiamondWithEIP2612Signature
+                null,
+                lifiInputDataWithRouteTag("gaszip"),
+                List.of(RawLeg.asset("0x078d782b760474a361dda0af3839290b0ef57ad6", "USDC", new BigDecimal("-2050.040045")))
+        );
+
+        Optional<ClassificationDecision> result = classifier.classify(ctx);
+
+        assertThat(result).isPresent();
+        assertThat(result.get().type()).isEqualTo(NormalizedTransactionType.BRIDGE_OUT);
+        assertThat(result.get().protocolName()).isEqualTo("LI.FI");
+    }
+
+    @Test
+    @DisplayName("NEW-08: callDiamondWithEIP2612Signature to an UNREGISTERED address → NOT classified as LI.FI (address-anchor)")
+    void callDiamondWithEip2612_unknownAddress_notClassified() {
+        when(protocolRegistryService.lookup(any(), any())).thenReturn(Optional.empty());
+
+        OnChainClassificationContext ctx = buildContext(
+                NetworkId.UNICHAIN,
+                UNKNOWN_ADDRESS,
+                "0xd7a08473",
+                null,
+                lifiInputDataWithRouteTag("gaszip"),
+                List.of(RawLeg.asset("0x078d782b760474a361dda0af3839290b0ef57ad6", "USDC", new BigDecimal("-2050.040045")))
+        );
+
+        Optional<ClassificationDecision> result = classifier.classify(ctx);
+
+        result.ifPresent(decision ->
+                assertThat(decision.protocolName()).as("callDiamond* to unknown address must not attribute LI.FI").isNotEqualTo("LI.FI"));
+    }
+
     // ---------- helpers ----------
 
     private OnChainClassificationContext buildContext(

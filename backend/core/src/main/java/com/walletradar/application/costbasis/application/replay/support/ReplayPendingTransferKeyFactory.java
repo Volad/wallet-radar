@@ -1,5 +1,6 @@
 package com.walletradar.application.costbasis.application.replay.support;
 
+import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
 import com.walletradar.application.costbasis.support.BridgeAssetFamilySupport;
 import com.walletradar.canonical.correlation.CorrelationContract;
 import com.walletradar.application.costbasis.application.replay.model.BridgePendingKey;
@@ -10,6 +11,8 @@ import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.domain.wallet.WalletDomainKind;
+import com.walletradar.domain.wallet.WalletRef;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -95,7 +98,7 @@ public class ReplayPendingTransferKeyFactory {
             return false;
         }
         String corrId = transaction.getCorrelationId();
-        if (corrId != null && corrId.startsWith("BYBIT-CORRIDOR:")) {
+        if (corrId != null && corrId.startsWith(CorrelationContract.BYBIT_CORRIDOR_PREFIX)) {
             return false;
         }
         return sharesBybitUidWithCounterparty(transaction);
@@ -164,9 +167,9 @@ public class ReplayPendingTransferKeyFactory {
             return false;
         }
         String corrId = transaction.getCorrelationId();
-        if (corrId != null && (corrId.startsWith("BYBIT-CORRIDOR:")
-                || corrId.startsWith("bybit-it-bundle-v1:")
-                || corrId.startsWith("bybit-collapsed-v1:"))) {
+        if (corrId != null && (corrId.startsWith(CorrelationContract.BYBIT_CORRIDOR_PREFIX)
+                || corrId.startsWith(CorrelationContract.BYBIT_IT_BUNDLE_V1_PREFIX)
+                || corrId.startsWith(CorrelationContract.BYBIT_COLLAPSED_V1_PREFIX))) {
             return false;
         }
         String wallet = transaction.getWalletAddress();
@@ -174,8 +177,8 @@ public class ReplayPendingTransferKeyFactory {
         if (counterparty == null || counterparty.isBlank()) {
             counterparty = transaction.getCounterpartyAddress();
         }
-        boolean walletIsEarn = wallet != null && wallet.endsWith(":EARN");
-        boolean cpIsEarn = counterparty != null && counterparty.endsWith(":EARN");
+        boolean walletIsEarn = wallet != null && wallet.endsWith(CorrelationContract.WALLET_SUFFIX_EARN);
+        boolean cpIsEarn = counterparty != null && counterparty.endsWith(CorrelationContract.WALLET_SUFFIX_EARN);
         if (!walletIsEarn && !cpIsEarn) {
             return false;
         }
@@ -194,10 +197,11 @@ public class ReplayPendingTransferKeyFactory {
         if (counterparty == null || counterparty.isBlank()) {
             return true;
         }
-        if (!counterparty.toUpperCase(java.util.Locale.ROOT).startsWith("BYBIT:")) {
+        WalletRef cpRef = WalletRef.parse(counterparty);
+        if (cpRef.domain() != WalletDomainKind.CEX || !CorrelationContract.VENUE_BYBIT.equalsIgnoreCase(cpRef.venueId())) {
             return false;
         }
-        return walletUid.equals(extractBybitUid(counterparty));
+        return walletUid.equals(cpRef.uid());
     }
 
     /**
@@ -214,7 +218,7 @@ public class ReplayPendingTransferKeyFactory {
             return false;
         }
         String corrId = transaction.getCorrelationId();
-        if (corrId != null && corrId.startsWith("BYBIT-CORRIDOR:")) {
+        if (corrId != null && corrId.startsWith(CorrelationContract.BYBIT_CORRIDOR_PREFIX)) {
             return false;
         }
         // bybit-collapsed-v1: pairs are cross-account carries (UTA↔FUND) and must use
@@ -222,7 +226,7 @@ public class ReplayPendingTransferKeyFactory {
         // route to corr-family: via the continuityCandidate path in transferKey(); routing
         // them through the bybit-earn-carry FIFO queue causes FUND inbounds (which replay
         // first due to .000Z timestamps) to fail enqueue when no market price is available.
-        if (corrId != null && corrId.startsWith("bybit-collapsed-v1:")) {
+        if (corrId != null && corrId.startsWith(CorrelationContract.BYBIT_COLLAPSED_V1_PREFIX)) {
             return false;
         }
         // RC-C (ADR-043): a non-EARN wallet → EARN INTERNAL_TRANSFER that was NOT confirmed
@@ -235,8 +239,8 @@ public class ReplayPendingTransferKeyFactory {
         if (cpRaw == null || cpRaw.isBlank()) {
             cpRaw = transaction.getCounterpartyAddress();
         }
-        boolean walletIsEarn = wallet != null && wallet.endsWith(":EARN");
-        boolean cpIsEarn = cpRaw != null && cpRaw.endsWith(":EARN");
+        boolean walletIsEarn = wallet != null && wallet.endsWith(CorrelationContract.WALLET_SUFFIX_EARN);
+        boolean cpIsEarn = cpRaw != null && cpRaw.endsWith(CorrelationContract.WALLET_SUFFIX_EARN);
         if (!walletIsEarn && cpIsEarn
                 && !Boolean.TRUE.equals(transaction.getContinuityCandidate())
                 && (corrId == null || corrId.isBlank())) {
@@ -259,19 +263,19 @@ public class ReplayPendingTransferKeyFactory {
         if (counterparty == null || counterparty.isBlank()) {
             return false;
         }
-        if (!counterparty.toUpperCase(java.util.Locale.ROOT).startsWith("BYBIT:")) {
+        WalletRef cpRef = WalletRef.parse(counterparty);
+        if (cpRef.domain() != WalletDomainKind.CEX || !CorrelationContract.VENUE_BYBIT.equalsIgnoreCase(cpRef.venueId())) {
             return false;
         }
-        return walletUid.equals(extractBybitUid(counterparty));
+        return walletUid.equals(cpRef.uid());
     }
 
     private static String extractBybitUid(String walletAddress) {
-        if (walletAddress == null || !walletAddress.startsWith("BYBIT:")) {
+        WalletRef ref = WalletRef.parse(walletAddress);
+        if (ref.domain() != WalletDomainKind.CEX || ref.uid().isBlank()) {
             return "unknown";
         }
-        String withoutPrefix = walletAddress.substring("BYBIT:".length());
-        int colonPos = withoutPrefix.indexOf(':');
-        return colonPos > 0 ? withoutPrefix.substring(0, colonPos) : withoutPrefix;
+        return ref.uid();
     }
 
     /**
@@ -435,6 +439,16 @@ public class ReplayPendingTransferKeyFactory {
         // Cycle/17 R7: gauge↔LP round-trip must reuse the same bucket key as stake. Stake deposits
         // into {@code wrapper:<gauge>} via LENDING_DEPOSIT; misclassified unstake as LP_EXIT used
         // to route through {@code lp:<lpToken>} and read an empty bucket (AAVE GHO gauge cov=0%).
+        // B-ETH-02: a linked lending loop parks/restores its collateral principal in a
+        // NETWORK-AGNOSTIC bucket anchored on the shared {@code lending-loop:{openTxHash}}
+        // correlation (+ collateral asset identity), NOT on (wallet, network). Loops may open on
+        // one network and close on another, so a (wallet, network)-keyed bucket would strand the
+        // parked basis. The correlation id is unique per OPEN instance, so a reopened position gets
+        // a fresh bucket and basis never bleeds across loop lifecycles.
+        ContinuityKey lendingLoopKey = lendingLoopContinuityKey(transaction, flow);
+        if (lendingLoopKey != null) {
+            return lendingLoopKey;
+        }
         String wrapperCompositeIdentity = wrapperCompositeBucketIdentity(transaction);
         String lpCompositeIdentity = lpCompositeBucketIdentity(transaction);
         if (wrapperCompositeIdentity != null && lpCompositeIdentity != null) {
@@ -463,6 +477,38 @@ public class ReplayPendingTransferKeyFactory {
                 transaction.getNetworkId(),
                 assetSupport.continuityIdentity(transaction, flow)
         );
+    }
+
+    /**
+     * B-ETH-02: network-agnostic continuity key for a linked lending-loop collateral principal, or
+     * {@code null} when {@code transaction} is not a lending-loop OPEN/DECREASE/CLOSE carrying a
+     * {@code lending-loop:} correlation. The continuity identity is
+     * {@code {correlationId}:{collateralAssetIdentity}} — the correlation id already carries the
+     * {@code lending-loop:} prefix, so the guarded {@code lending-loop:} bucket namespace is
+     * preserved while remaining unique per OPEN instance and independent of wallet/network.
+     */
+    ContinuityKey lendingLoopContinuityKey(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        if (transaction == null || flow == null) {
+            return null;
+        }
+        NormalizedTransactionType type = transaction.getType();
+        if (type != NormalizedTransactionType.LENDING_LOOP_OPEN
+                && type != NormalizedTransactionType.LENDING_LOOP_DECREASE
+                && type != NormalizedTransactionType.LENDING_LOOP_CLOSE) {
+            return null;
+        }
+        String correlationId = transaction.getCorrelationId();
+        if (correlationId == null || !correlationId.startsWith(CorrelationContract.LENDING_LOOP_PREFIX)) {
+            return null;
+        }
+        String collateralIdentity = assetSupport.continuityIdentity(transaction, flow);
+        if (collateralIdentity == null || collateralIdentity.isBlank()) {
+            return null;
+        }
+        return new ContinuityKey(null, null, correlationId + ":" + collateralIdentity);
     }
 
     /**
@@ -511,6 +557,25 @@ public class ReplayPendingTransferKeyFactory {
         boolean exitShape = isExplicitExit || isImplicitExit;
         if (!entryShape && !exitShape) {
             return null;
+        }
+
+        // LP-RECEIPT burns are the authoritative position marker for explicit LP exits.
+        // AccountingAssetFamilySupport.continuityIdentity maps LP-RECEIPT tokens to
+        // "FAMILY:LP-RECEIPT", which is then filtered out by dominantNonFamilyReceipt (it
+        // excludes all "FAMILY:" identities). To avoid picking a wrong receipt (e.g. GHO
+        // contract address) that would break shouldIgnoreLpReceiptMarker, detect the
+        // burned LP-RECEIPT leg directly via its assetIdentity before falling through.
+        if (isExplicitExit) {
+            for (NormalizedTransaction.Flow candidate : transaction.getFlows()) {
+                if (candidate == null || candidate.getQuantityDelta() == null
+                        || candidate.getQuantityDelta().signum() >= 0
+                        || candidate.getRole() == NormalizedLegRole.FEE) {
+                    continue;
+                }
+                if (AccountingAssetFamilySupport.isLpReceiptSymbol(candidate.getAssetSymbol())) {
+                    return assetSupport.assetIdentity(transaction, candidate);
+                }
+            }
         }
 
         NonFamilyReceiptCandidate positiveReceipt = dominantNonFamilyReceipt(transaction, 1, assetSupport);
@@ -633,6 +698,13 @@ public class ReplayPendingTransferKeyFactory {
         int receiptSign = depositShape ? 1 : -1;
         int counterpartySign = -receiptSign;
 
+        // LP_POSITION_STAKE / UNSTAKE may carry extra reward TRANSFER flows (e.g. BAL accrual)
+        // alongside the principal GAUGE↔LP-RECEIPT pair. These rewards must not be counted as
+        // principal legs or they will prevent wrapper-composite detection (principalLegs != 2).
+        boolean isLpPositionStakeOrUnstake =
+                type == NormalizedTransactionType.LP_POSITION_STAKE
+                        || type == NormalizedTransactionType.LP_POSITION_UNSTAKE;
+
         String receiptIdentity = null;
         int principalLegs = 0;
         for (NormalizedTransaction.Flow candidate : transaction.getFlows()) {
@@ -652,6 +724,16 @@ public class ReplayPendingTransferKeyFactory {
                 }
                 return null;
             }
+            // For LP_POSITION_UNSTAKE: skip positive TRANSFER flows that are not LP-RECEIPT
+            // markers. These are gauge rewards (e.g. BAL) credited in the same transaction;
+            // they are not part of the 2-leg GAUGE→LP-RECEIPT unwrap and must not inflate
+            // principalLegs beyond 2. The reward flows are handled by the generic ACQUIRE path.
+            if (isLpPositionStakeOrUnstake
+                    && withdrawShape
+                    && candidate.getQuantityDelta().signum() > 0
+                    && !isLpReceiptSymbol(candidate.getAssetSymbol())) {
+                continue;
+            }
             principalLegs++;
             int sign = candidate.getQuantityDelta().signum();
             if (sign != receiptSign) {
@@ -667,6 +749,13 @@ public class ReplayPendingTransferKeyFactory {
             return null;
         }
         return receiptIdentity;
+    }
+
+    private static boolean isLpReceiptSymbol(String symbol) {
+        if (symbol == null) {
+            return false;
+        }
+        return symbol.trim().toUpperCase(Locale.ROOT).startsWith("LP-RECEIPT:");
     }
 
     private boolean hasSinglePrincipalTransferFlow(NormalizedTransaction transaction) {

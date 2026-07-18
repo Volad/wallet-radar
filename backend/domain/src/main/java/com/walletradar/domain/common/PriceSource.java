@@ -9,6 +9,10 @@ public enum PriceSource {
     SWAP_DERIVED,
     WRAPPER,
     ECB,
+    /** Dzengi venue-native fiat FX and klines (e.g. USD/BYN). */
+    DZENGI,
+    /** Yahoo Finance unofficial v8 API — fallback for US equities not in Dzengi klines. */
+    YAHOO_FINANCE,
     BYBIT,
     BINANCE,
     COINGECKO,

@@ -126,6 +126,20 @@ final class BybitInternalTransferPairingPrimitives {
         if (right.getMatchedCounterparty() == null) {
             right.setMatchedCounterparty(left.getWalletAddress());
         }
+        // R-ORDER: rekeyed-v1 pairs (FUND→UTA internal moves) must process AFTER
+        // BYBIT-CORRIDOR events at the same blockTimestamp. The corridor FUND credit
+        // carries the on-chain transactionIndex (e.g. 1), while rekeyed legs carry the
+        // synthetic default (0 or null). With sort "blockTimestamp → transactionIndex → _id",
+        // the rekeyed FUND debit (transactionIndex=0) would otherwise precede the corridor
+        // FUND credit (transactionIndex=1), draining an empty FUND position and losing the
+        // $3945 basis. Setting MAX_VALUE on rekeyed legs guarantees they always follow
+        // all same-timestamp corridor events regardless of their on-chain transactionIndex.
+        if (left.getTransactionIndex() == null || left.getTransactionIndex() == 0) {
+            left.setTransactionIndex(Integer.MAX_VALUE);
+        }
+        if (right.getTransactionIndex() == null || right.getTransactionIndex() == 0) {
+            right.setTransactionIndex(Integer.MAX_VALUE);
+        }
         BybitCarryContinuitySupport.stamp(left);
         BybitCarryContinuitySupport.stamp(right);
         left.setUpdatedAt(now);

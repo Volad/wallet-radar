@@ -381,6 +381,7 @@ describe('WalletApiService', () => {
           status: 'READY',
           displayName: 'Bybit main',
           accountRef: 'BYBIT:33625378',
+          color: null,
           maskedKey: 'abcd...1234',
           readOnly: true,
           capabilities: ['ASSET'],

@@ -30,7 +30,6 @@ public class OnChainNormalizationJob {
 
     private static final String STAGE_NAME = "on-chain-normalization";
     private static final Logger log = LoggerFactory.getLogger(OnChainNormalizationJob.class);
-    private static final Duration HEARTBEAT_INTERVAL = Duration.ofSeconds(30);
 
     private final AtomicBoolean running = new AtomicBoolean(false);
 

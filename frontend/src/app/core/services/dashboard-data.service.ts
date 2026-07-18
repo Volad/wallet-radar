@@ -1,6 +1,7 @@
 import { Injectable } from '@angular/core';
 import { Observable, of } from 'rxjs';
 import { map } from 'rxjs/operators';
+import { smartFormatUsd } from '../utils/amount.util';
 
 import {
   COLORS,
@@ -14,6 +15,7 @@ import {
   NetworkInfo,
   PortfolioMetric,
   PriceSource,
+  WalletDomain,
   WalletInfo,
 } from '../models/dashboard.models';
 import { EvmNetworkId, SessionDashboardResponse } from '../models/wallet-api.models';
@@ -105,12 +107,19 @@ export class DashboardDataService {
         unrealizedPnlPct: position.unrealizedPnlPct,
         unrealizedPnlUsd: position.unrealizedPnlUsd,
         realizedPnlUsd: position.realizedPnlUsd,
+        breakEvenUsd: position.breakEvenUsd ?? null,
+        lockedSurplusUsd: position.lockedSurplusUsd ?? 0,
+        incomeReceivedUsd: position.incomeReceivedUsd ?? 0,
+        attributionTargetFamily: position.attributionTargetFamily ?? null,
         networkId: position.networkId,
         walletId: position.walletAddress.toLowerCase(),
         issue: this.toIssueCode(position.issue),
         valuationModel: position.valuationModel,
         valuationUnderlyingSymbol: position.valuationUnderlyingSymbol,
         unsupportedValuationReason: position.unsupportedValuationReason,
+        domain: (position.domain as WalletDomain) ?? null,
+        venueId: position.venueId ?? null,
+        subAccount: position.subAccount ?? null,
       })),
       lpPositions: [],
       lendingPositions: [],
@@ -119,9 +128,7 @@ export class DashboardDataService {
   }
 
   private formatUsd(value: number): string {
-    const absolute = Math.abs(value);
-    const compact = absolute >= 1000 ? `$${(absolute / 1000).toFixed(1)}k` : `$${absolute.toFixed(2)}`;
-    return value < 0 ? `-${compact}` : compact;
+    return smartFormatUsd(value);
   }
 
   private formatPercent(value: number): string {
@@ -154,6 +161,8 @@ export class DashboardDataService {
       priceSource === 'UNKNOWN' ||
       priceSource === 'BYBIT' ||
       priceSource === 'BINANCE' ||
+      priceSource === 'DZENGI' ||
+      priceSource === 'YAHOO_FINANCE' ||
       priceSource === 'ECB' ||
       priceSource === 'EXECUTION' ||
       priceSource === 'WRAPPER' ||

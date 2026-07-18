@@ -1,6 +1,6 @@
 # Linking — Rules and Repairs
 
-> **Last updated:** 2026-06-05  
+> **Last updated:** 2026-07-16  
 > **Pipeline stage:** `LINKING`
 
 This document describes the deterministic passes executed by `LinkingBatchProcessor` and the metadata contract they enforce. Pass order matters: later passes assume earlier pairing context exists.
@@ -41,18 +41,28 @@ flowchart TD
 | 13 | `AddressPoisoningDetector` | Exclude vanity-prefix dust IN |
 | 14 | `ScamDisperseClonePhishingTagger` | Tag known phishing OUT |
 | 15 | `GmxV2RefundClassifier` | GMX execution-fee refund attribution |
-| 16 | `EtherFiOftBridgeInClassifier` | weETH OFT mint → `BRIDGE_IN` |
-| 17 | `NftMintRetagger` | NFT mint OUT reclassification |
-| 18 | `UnmatchedBridgeInboundPricingFallbackService` | Reprice unsupported OUT; demote orphan IN to ACQUIRE |
-| 19 | `BybitInternalTransferPairer.repairAll()` | Second Bybit internal pairing pass |
-| 20 | `BybitTransferContinuityRepairService` | Re-run after internal pairer (corridor anchor preservation) |
-| 21 | `BybitOnChainEarnOrphanRepairService` | Synthesize missing Earn subscription inflow |
-| 22 | `BybitInternalTransferOrphanFallbackService` | Demote singleton internals |
-| 23 | `BybitInternalTransferPairer.pairDemotedEconOrphans()` | Pair demoted econ orphans |
-| 24 | `UnmatchedExternalTransferInPricingFallbackService` | Orphan IN when OUT outside session |
-| 25 | `BridgePairContinuityRepairService` | Legacy sealed pairs; inbound counterparty; sealed inbounds |
-| 26 | `OnChainInternalTransferPairRepairService` | Same-tx internal orphans across session wallets |
-| 27 | `TurtleVaultBurnRepairService` | Synthesize missing ERC-4626 burn on vault withdraw |
+| 16 | `GmxWithdrawalSettlementLinkService` | **NEW-09** — pair GMX GLV/GM keeper ETH inflow to open `gmx-lp:*` `LP_EXIT_REQUEST` → reclassify `LP_EXIT_SETTLEMENT`, set `correlationId`, reshape `BUY`→`TRANSFER` for REALLOCATE carry; runs **immediately after** `gmxV2RefundClassifier` so fee-refund candidates are already stamped |
+| 17 | `GmxExecutionFeeRefundBasisNeutralService` | **NEW-13** — residual GMX execution-fee refund with **no** matching open `LP_EXIT_REQUEST` → basis-neutral `SPONSORED_GAS_IN` (`GAS_ONLY`); runs **strictly after** `gmxWithdrawalSettlementLink` so genuine GLV/GM settlements are excluded |
+| 18 | `EtherFiOftBridgeInClassifier` | weETH OFT mint → `BRIDGE_IN` |
+| 19 | `NftMintRetagger` | NFT mint OUT reclassification |
+| 20 | `UnmatchedBridgeInboundPricingFallbackService` | Reprice unsupported OUT; demote orphan IN to ACQUIRE |
+| 21 | `BybitInternalTransferPairer.repairAll()` | Second Bybit internal pairing pass |
+| 22 | `BybitTransferContinuityRepairService` | Re-run after internal pairer (corridor anchor preservation) |
+| 23 | `BybitOnChainEarnOrphanRepairService` | Synthesize missing Earn subscription inflow |
+| 24 | `BybitInternalTransferOrphanFallbackService` | Demote singleton internals |
+| 25 | `BybitInternalTransferPairer.pairDemotedEconOrphans()` | Pair demoted econ orphans |
+| 26 | `UnmatchedExternalTransferInPricingFallbackService` | Orphan IN when OUT outside session |
+| 27 | `BridgePairContinuityRepairService` | Legacy sealed pairs; inbound counterparty; sealed inbounds |
+| 28 | `OnChainInternalTransferPairRepairService` | Same-tx internal orphans across session wallets |
+| 29 | `TurtleVaultBurnRepairService` | Synthesize missing ERC-4626 burn on vault withdraw |
+
+> **GMX keeper withdrawal settlements (NEW-09 / NEW-13).** GMX GLV/GM withdrawals settle as an
+> internal-transfer-only native ETH payout from a GMX handler/keeper — there is no wallet-signed
+> settlement tx. `GmxWithdrawalSettlementLinkService` links that inflow to the open `gmx-lp:*`
+> `LP_EXIT_REQUEST` and reshapes the `BUY` into a `TRANSFER` so replay reuses the REALLOCATE carry
+> (basis carried, not a fabricated market ACQUIRE). Any refund left without an open exit request is
+> return-of-capital gas dust and is demoted to basis-neutral `SPONSORED_GAS_IN` by
+> `GmxExecutionFeeRefundBasisNeutralService`. Ordering is load-bearing: NEW-13 must run after NEW-09.
 
 ## Bybit ↔ on-chain corridor
 
@@ -82,13 +92,24 @@ Routed bridge pairs require protocol-backed evidence — not loose time proximit
 
 | Bridge family | Pairing service | Evidence required |
 |---------------|-----------------|-------------------|
-| LI.FI / Jumper | `LiFiBridgePairLinkService` | Route-tagged source + registry settlement sender |
+| LI.FI / Jumper | `LiFiBridgePairLinkService` | Route-tagged source + registry settlement sender (incl. LiFi `GAS_PAYER` relayer) |
 | Mayan / CCTP | `MayanCctpBridgePairLinkService` | Terminal Mayan status + receiving tx hash |
 | Across | `AcrossBridgePairLinkService` | `depositV3` calldata + unique bounded destination |
-| Relay fallback | `CrossNetworkBridgePairFallbackService` | LI.FI Diamond source + Relay infrastructure sender |
+| Relay fallback | `CrossNetworkBridgePairFallbackService` | LI.FI Diamond source + Relay infrastructure sender (registry `GAS_PAYER`/solver) |
 | EtherFi OFT | `EtherFiOftBridgeInClassifier` | Cross-chain mint proof |
 
 LI.FI status rows where `sendingTxHash == receivingTxHash` are status echoes — never self-linked bridge continuity.
+
+> **Cross-asset bridge correlation (NEW-08).** `LiFiBridgePairLinkService` accepts a LiFi `GAS_PAYER`
+> relayer as trusted destination evidence and pairs **cross-asset** routes (e.g. `USDC` → `ETH`) by
+> USD-value proximity, not same-symbol match. `CrossNetworkBridgePairFallbackService` accepts a
+> cross-asset orphan `BRIDGE_IN`/`BRIDGE_OUT` pair within a tight time window plus USD proximity. Such
+> pairs keep `continuityCandidate = false` and settle via the asset-changing REALLOCATE path (no plain
+> carry). The UNICHAIN LI.FI Permit2Proxy `0x1bcd304f…` is registered as `BRIDGE`/`BRIDGE_ENTRY`.
+>
+> **Relay bridge inbounds (NEW-11).** The ARBITRUM Relay `GAS_PAYER` `0x1619de6b…` is registered and
+> ZKSYNC is added to the Relay solver `0x91604f59…` network set, so registry-backed Relay inbounds
+> classify as `BRIDGE_IN` (including the same-asset ZKSYNC → ARBITRUM ETH bridge fix).
 
 ## Internal transfer pairing (FA-001)
 
@@ -154,7 +175,7 @@ Detailed linking actions per canonical type:
 | `VAULT_WITHDRAW` (Turtle) | Synthetic burn flow | `TurtleVaultBurnRepairService` |
 | `EXTERNAL_TRANSFER_IN` (poisoning) | `excludedFromAccounting` | `AddressPoisoningDetector` |
 | `EXTERNAL_TRANSFER_OUT` (phishing) | Review / exclusion tags | `ScamDisperseClonePhishingTagger` |
-| GMX refund rows | `protocolName` / attribution | `GmxV2RefundClassifier` |
+| GMX refund rows | `protocolName` / attribution; GLV/GM settlement link or basis-neutral demotion | `GmxV2RefundClassifier`, `GmxWithdrawalSettlementLinkService` (NEW-09), `GmxExecutionFeeRefundBasisNeutralService` (NEW-13) |
 | NFT mint OUT | Non-economic retag | `NftMintRetagger` |
 | Bybit Earn subscription | Synthetic matching EARN inflow | `BybitOnChainEarnOrphanRepairService` |
 | Bybit `INTERNAL_TRANSFER` orphan | Demote or re-pair | `BybitInternalTransferOrphanFallbackService`, `BybitInternalTransferPairer` |

@@ -230,7 +230,10 @@ $ROW_COLS: minmax(0, 1fr) 6.5rem 7rem 7.5rem 5.5rem 2rem;
   gap: 8px;
   padding: 0.26rem 0.875rem;
   border-bottom: 1px solid var(--wr-border);
-  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--wr-surface);
 }
 
 .col-label {

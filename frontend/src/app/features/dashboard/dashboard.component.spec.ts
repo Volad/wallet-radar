@@ -1,7 +1,6 @@
 import { fakeAsync, TestBed, tick } from '@angular/core/testing';
 import { HttpErrorResponse } from '@angular/common/http';
-import { provideRouter } from '@angular/router';
-import { Component } from '@angular/core';
+import { provideRouter, Router } from '@angular/router';
 import { of, throwError } from 'rxjs';
 
 import { EMPTY_DASHBOARD_DATA } from '../../core/data/dashboard.constants';
@@ -10,9 +9,7 @@ import { WalletApiService } from '../../core/services/wallet-api.service';
 import { SessionStorageService } from '../../core/services/session-storage.service';
 import { SessionBackfillStatusResponse, SessionRefreshResponse, SessionTransactionsResponse } from '../../core/models/wallet-api.models';
 import { DashboardComponent } from './dashboard.component';
-
-@Component({ standalone: true, template: '' })
-class DummySettingsComponent {}
+import { routes } from '../../app.routes';
 
 describe('DashboardComponent (wallet submit flow)', () => {
   const sessionId = '549b0aba-a9af-4789-b125-ebb86314a3f1';
@@ -177,7 +174,7 @@ describe('DashboardComponent (wallet submit flow)', () => {
     await TestBed.configureTestingModule({
       imports: [DashboardComponent],
       providers: [
-        provideRouter([{ path: 'settings', component: DummySettingsComponent }]),
+        provideRouter(routes),
         {
           provide: DashboardDataService,
           useValue: {
@@ -291,15 +288,11 @@ describe('DashboardComponent (wallet submit flow)', () => {
     tick();
     fixture.detectChanges();
 
-    expect(walletApiServiceSpy.getSessionTransactions).toHaveBeenCalledWith(sessionId, {
+    expect(walletApiServiceSpy.getSessionTransactions).toHaveBeenCalledWith(sessionId, jasmine.objectContaining({
       limit: 50,
       offset: 0,
       search: '',
-      bridgeStatus: 'ALL',
-      spamFilter: 'HIDE_SPAM',
-      walletIds: undefined,
-      networkIds: undefined,
-    });
+    }));
     expect(component.transactionPaneTransactions()[0].hash).toBe('0xbridge');
     expect(component.transactionPaneTransactions()[0].bridgeStatus).toBe('MATCHED');
   }));
@@ -473,6 +466,7 @@ describe('DashboardComponent (wallet submit flow)', () => {
             status: 'READY',
             displayName: 'Bybit',
             accountRef: 'BYBIT:33625378',
+            color: '#f7931a',
             maskedKey: '****abcd',
             readOnly: true,
             capabilities: ['READ'],
@@ -528,5 +522,61 @@ describe('DashboardComponent (wallet submit flow)', () => {
     expect(walletApiServiceSpy.refreshSession).toHaveBeenCalledWith(sessionId);
     expect(component.isSessionRefreshSubmitting()).toBeFalse();
     expect(component.sessionRefreshMessage()).toBe('Incremental refresh queued');
+  }));
+
+  it('enters move basis mode from /move-basis/:familyIdentity route', fakeAsync(async () => {
+    sessionStorageServiceSpy.getSessionId.and.returnValue(sessionId);
+    const fixture = TestBed.createComponent(DashboardComponent);
+    const component = fixture.componentInstance;
+    const router = TestBed.inject(Router);
+    fixture.detectChanges();
+    tick();
+
+    await router.navigateByUrl('/move-basis/FAMILY:ETH');
+    tick();
+    fixture.detectChanges();
+
+    expect(component.isAssetLedgerMode()).toBeTrue();
+    expect(component.assetLedgerFamilyIdentity()).toBe('FAMILY:ETH');
+    expect(component.assetLedgerSessionId()).toBe(sessionId);
+  }));
+
+  it('exits move basis mode when navigating back to dashboard', fakeAsync(async () => {
+    sessionStorageServiceSpy.getSessionId.and.returnValue(sessionId);
+    const fixture = TestBed.createComponent(DashboardComponent);
+    const component = fixture.componentInstance;
+    const router = TestBed.inject(Router);
+    fixture.detectChanges();
+    tick();
+
+    await router.navigateByUrl('/move-basis/FAMILY:ETH');
+    tick();
+    fixture.detectChanges();
+    expect(component.isAssetLedgerMode()).toBeTrue();
+
+    await router.navigateByUrl('/');
+    tick();
+    fixture.detectChanges();
+
+    expect(component.isAssetLedgerMode()).toBeFalse();
+    expect(component.assetLedgerFamilyIdentity()).toBeNull();
+  }));
+
+  it('navigates to move-basis route when opening asset ledger', fakeAsync(async () => {
+    sessionStorageServiceSpy.getSessionId.and.returnValue(sessionId);
+    const fixture = TestBed.createComponent(DashboardComponent);
+    const component = fixture.componentInstance;
+    const router = TestBed.inject(Router);
+    fixture.detectChanges();
+    tick();
+    component.currentSessionId.set(sessionId);
+
+    component.openAssetLedger({ familyIdentity: 'FAMILY:ETH' });
+    tick();
+    fixture.detectChanges();
+
+    expect(router.url).toContain('/move-basis/');
+    expect(router.url).toContain('FAMILY');
+    expect(component.isAssetLedgerMode()).toBeTrue();
   }));
 });

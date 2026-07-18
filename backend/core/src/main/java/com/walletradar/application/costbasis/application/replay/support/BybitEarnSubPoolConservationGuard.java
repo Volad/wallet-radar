@@ -2,6 +2,8 @@ package com.walletradar.application.costbasis.application.replay.support;
 
 import com.walletradar.application.costbasis.application.port.BybitLiveBalanceReadPort;
 import com.walletradar.application.costbasis.domain.AssetLedgerPoint;
+import com.walletradar.domain.wallet.WalletDomainKind;
+import com.walletradar.domain.wallet.WalletRef;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -107,10 +109,10 @@ public class BybitEarnSubPoolConservationGuard {
             if (point.getWalletAddress() == null || point.getAssetSymbol() == null) {
                 continue;
             }
-            String walletUpper = point.getWalletAddress().toUpperCase(Locale.ROOT);
-            if (!walletUpper.startsWith("BYBIT:")) {
+            if (WalletRef.parse(point.getWalletAddress()).domain() != WalletDomainKind.CEX) {
                 continue;
             }
+            String walletUpper = point.getWalletAddress().toUpperCase(Locale.ROOT);
             String key = walletUpper + "|" + point.getAssetSymbol().toUpperCase(Locale.ROOT);
             latestByWallet.merge(key, point, (left, right) ->
                     left.getReplaySequence() >= right.getReplaySequence() ? left : right);
@@ -127,9 +129,11 @@ public class BybitEarnSubPoolConservationGuard {
             String assetKey = uid + "|" + symbol;
             combined.merge(assetKey, zeroIfNull(point.getQuantityAfter()), (a, b) -> a.add(b, MC));
 
+            WalletRef pointRef = WalletRef.parse(point.getWalletAddress());
             String walletUpper = point.getWalletAddress().toUpperCase(Locale.ROOT);
-            if (walletUpper.endsWith(":FUND") || walletUpper.endsWith(":EARN")) {
-                String subPoolName = walletUpper.endsWith(":FUND") ? "FUND" : "EARN";
+            String pointSubAccount = pointRef.subAccount() != null ? pointRef.subAccount().toUpperCase(Locale.ROOT) : null;
+            if ("FUND".equals(pointSubAccount) || "EARN".equals(pointSubAccount)) {
+                String subPoolName = "FUND".equals(pointSubAccount) ? "FUND" : "EARN";
                 subPool.put(assetKey + "|" + subPoolName, new SubPoolTotals(
                         zeroIfNull(point.getQuantityAfter()),
                         zeroIfNull(point.getTotalCostBasisAfterUsd())
@@ -152,7 +156,7 @@ public class BybitEarnSubPoolConservationGuard {
             if (point.getWalletAddress() == null || point.getAssetSymbol() == null) {
                 continue;
             }
-            if (!point.getWalletAddress().toUpperCase(Locale.ROOT).startsWith("BYBIT:")) {
+            if (WalletRef.parse(point.getWalletAddress()).domain() != WalletDomainKind.CEX) {
                 continue;
             }
             if (point.getNormalizedType() == null
@@ -225,10 +229,12 @@ public class BybitEarnSubPoolConservationGuard {
     }
 
     private static String extractUidFromIntegrationId(String integrationId) {
-        if (integrationId == null || !integrationId.startsWith("BYBIT-")) {
+        // Integration IDs use "BYBIT-{uid}" format (hyphen separator, not colon).
+        String prefix = "BYBIT-";
+        if (integrationId == null || !integrationId.startsWith(prefix)) {
             return null;
         }
-        return integrationId.substring("BYBIT-".length());
+        return integrationId.substring(prefix.length());
     }
 
     /**
@@ -246,12 +252,14 @@ public class BybitEarnSubPoolConservationGuard {
     }
 
     private static String extractUidFromWallet(String wallet) {
-        if (wallet == null || !wallet.toUpperCase(Locale.ROOT).startsWith("BYBIT:")) {
+        if (wallet == null) {
             return null;
         }
-        String without = wallet.substring("BYBIT:".length());
-        int colon = without.indexOf(':');
-        return colon > 0 ? without.substring(0, colon) : without;
+        WalletRef ref = WalletRef.parse(wallet);
+        if (ref.domain() != WalletDomainKind.CEX || ref.uid().isBlank()) {
+            return null;
+        }
+        return ref.uid();
     }
 
     private static BigDecimal zeroIfNull(BigDecimal value) {

@@ -20,7 +20,7 @@ import com.walletradar.application.liquiditypools.persistence.LpPositionSnapshot
 import com.walletradar.application.pricing.domain.CanonicalAssetCatalog;
 import com.walletradar.application.pricing.domain.PriceQuote;
 import com.walletradar.application.pricing.domain.PriceRequest;
-import com.walletradar.application.pricing.persistence.CurrentPriceQuoteDocument;
+import com.walletradar.application.pricing.latest.CurrentPriceReadService;
 import com.walletradar.application.pricing.persistence.HistoricalPriceCacheService;
 import com.walletradar.application.pricing.resolver.external.PriceExternalSourceOrchestrator;
 import com.walletradar.application.session.application.AccountingUniverseService;
@@ -86,6 +86,7 @@ public class SessionLpQueryService {
     private final HistoricalPriceCacheService historicalPriceCacheService;
     private final PriceExternalSourceOrchestrator priceExternalSourceOrchestrator;
     private final LiquidityPoolsProperties properties;
+    private final CurrentPriceReadService currentPriceReadService;
     private final Cache<String, SessionLpView> sessionLpCache = Caffeine.newBuilder()
             .maximumSize(64)
             .expireAfterWrite(45, TimeUnit.SECONDS)
@@ -543,6 +544,16 @@ public class SessionLpQueryService {
         // a false positive "closed".
         if (snapshot != null
                 && ("in_range".equals(snapshot.getStatus()) || "out_of_range".equals(snapshot.getStatus()))) {
+            return false;
+        }
+        // For single-receipt protocols (GMX, Pendle) with no snapshot:
+        // - If the cost-basis pipeline already computed a basis pool record we can trust
+        //   fullyExited(), because it checks totalLpReceiptQtyHeld == 0 which is authoritative.
+        // - If no basis pool record exists the heuristic is unreliable: LP_EXIT_SETTLEMENT
+        //   returns underlying tokens as positive inflows, confusing net-qty into a false
+        //   "fully exited". Without a snapshot or a basis pool, assume the position is open
+        //   so the user can see it and trigger a manual Refresh.
+        if (acc.singleReceiptFamily() && snapshot == null && acc.basisPoolCount() == 0) {
             return false;
         }
         return acc.fullyExited();
@@ -1031,22 +1042,18 @@ public class SessionLpQueryService {
         if (lookupSymbols.isEmpty()) {
             return Map.of();
         }
-        Query query = new Query(Criteria.where("symbol").in(lookupSymbols));
-        Map<String, BigDecimal> raw = mongoOperations.find(query, CurrentPriceQuoteDocument.class).stream()
-                .collect(Collectors.toMap(
-                        q -> q.getSymbol().toUpperCase(Locale.ROOT),
-                        CurrentPriceQuoteDocument::getPriceUsd,
-                        (a, b) -> a,
-                        LinkedHashMap::new
-                ));
-        Map<String, BigDecimal> resolved = new LinkedHashMap<>();
+        Map<String, BigDecimal> raw = new LinkedHashMap<>();
+        currentPriceReadService.resolveLatest(lookupSymbols).forEach((sym, resolved) ->
+                raw.put(sym.toUpperCase(Locale.ROOT), resolved.priceUsd())
+        );
+        Map<String, BigDecimal> result = new LinkedHashMap<>();
         for (String sym : symbols) {
             BigDecimal price = priceLookup(sym, raw);
             if (price != null) {
-                resolved.put(sym.toUpperCase(Locale.ROOT), price);
+                result.put(sym.toUpperCase(Locale.ROOT), price);
             }
         }
-        return resolved;
+        return result;
     }
 
     private static void addSymbol(Set<String> symbols, String symbol) {
@@ -1448,6 +1455,8 @@ public class SessionLpQueryService {
         BigDecimal realizedPnlUsd() { return realizedPnlUsd; }
         BigDecimal withdrawnUsd() { return withdrawnUsd; }
         BigDecimal depositedMarketUsd() { return depositedMarketUsd; }
+        int basisPoolCount() { return basisPoolCount; }
+        BigDecimal totalLpReceiptQtyHeld() { return totalLpReceiptQtyHeld; }
         List<NormalizedTransaction> txns() {
             return txns.stream()
                     .sorted(Comparator.comparing(NormalizedTransaction::getBlockTimestamp, Comparator.nullsLast(Comparator.naturalOrder())))

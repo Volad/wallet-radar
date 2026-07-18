@@ -18,6 +18,9 @@ import com.walletradar.application.costbasis.application.replay.support.Transfer
 import com.walletradar.application.pricing.domain.CanonicalAssetCatalog;
 import com.walletradar.application.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.canonical.correlation.CorrelationContract;
+import com.walletradar.domain.wallet.WalletDomainKind;
+import com.walletradar.domain.wallet.WalletRef;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -460,7 +463,7 @@ public class EarnBundleTransferReplaySupport {
                     String uid = extractBybitUid(wallet);
                     if (uid != null) {
                         AssetKey umbrellaKey = new AssetKey(
-                                "BYBIT:" + uid,
+                                CorrelationContract.VENUE_BYBIT + ":" + uid,
                                 flowKey.networkId(),
                                 flowKey.assetContract(),
                                 flowKey.assetSymbol(),
@@ -471,7 +474,7 @@ public class EarnBundleTransferReplaySupport {
                             return avco;
                         }
                         AssetKey earnKey = new AssetKey(
-                                "BYBIT:" + uid + ":EARN",
+                                CorrelationContract.VENUE_BYBIT + ":" + uid + CorrelationContract.WALLET_SUFFIX_EARN,
                                 flowKey.networkId(),
                                 flowKey.assetContract(),
                                 flowKey.assetSymbol(),
@@ -482,7 +485,7 @@ public class EarnBundleTransferReplaySupport {
                             return avco;
                         }
                         AssetKey fundKey = new AssetKey(
-                                "BYBIT:" + uid + ":FUND",
+                                CorrelationContract.VENUE_BYBIT + ":" + uid + CorrelationContract.WALLET_SUFFIX_FUND,
                                 flowKey.networkId(),
                                 flowKey.assetContract(),
                                 flowKey.assetSymbol(),
@@ -520,10 +523,10 @@ public class EarnBundleTransferReplaySupport {
         if (uid == null) {
             return null;
         }
-        String[] walletSuffixes = {"", ":UTA", ":FUND"};
+        String[] walletSuffixes = {"", CorrelationContract.WALLET_SUFFIX_UTA, CorrelationContract.WALLET_SUFFIX_FUND};
         String[] symbols = {"ETH", "WETH"};
         for (String suffix : walletSuffixes) {
-            String wallet = "BYBIT:" + uid + suffix;
+            String wallet = CorrelationContract.VENUE_BYBIT + ":" + uid + suffix;
             for (String symbol : symbols) {
                 AssetKey symbolKey = new AssetKey(wallet, null, null, symbol, "SYMBOL:" + symbol);
                 BigDecimal avco = firstPositiveAvco(replayState.position(symbolKey));
@@ -544,11 +547,13 @@ public class EarnBundleTransferReplaySupport {
     }
 
     private static String extractBybitUid(String walletAddress) {
-        if (walletAddress == null || !walletAddress.toUpperCase(Locale.ROOT).startsWith("BYBIT:")) {
+        if (walletAddress == null) {
             return null;
         }
-        String without = walletAddress.substring("BYBIT:".length());
-        int colon = without.indexOf(':');
-        return colon > 0 ? without.substring(0, colon) : without;
+        WalletRef ref = WalletRef.parse(walletAddress);
+        if (ref.domain() != WalletDomainKind.CEX || ref.uid().isBlank()) {
+            return null;
+        }
+        return ref.uid();
     }
 }

@@ -11,12 +11,10 @@ export type EvmNetworkId =
   | 'UNICHAIN'
   | 'ZKSYNC'
   | 'KATANA'
-  | 'PLASMA'
-  /** Exchange custody bucket (dashboard / allocation); not an EVM chain. */
-  | 'BYBIT';
+  | 'PLASMA';
 
 /** On-chain wallet networks selectable in session settings (EVM chains + non-EVM tracking-only). */
-export type OnChainWalletNetworkId = Exclude<EvmNetworkId, 'BYBIT'> | 'SOLANA' | 'TON';
+export type OnChainWalletNetworkId = EvmNetworkId | 'SOLANA' | 'TON';
 
 export type SessionBackfillAggregateStatus =
   | 'PENDING'
@@ -128,6 +126,22 @@ export interface PutSessionSettingsRequest {
   readonly showReconciliationWarnings: boolean;
 }
 
+export type IntegrationProviderId = 'BYBIT' | 'DZENGI' | 'BINANCE' | 'OKX';
+
+export interface TestIntegrationConnectionRequest {
+  readonly provider: string;
+  readonly apiKey: string;
+  readonly apiSecret: string;
+}
+
+export interface TestIntegrationConnectionResponse {
+  readonly provider: string;
+  readonly accountRef: string;
+  readonly maskedKey: string;
+  readonly readOnly: boolean;
+  readonly message: string;
+}
+
 export interface UpsertBybitIntegrationRequest {
   readonly displayName: string;
   readonly apiKey: string;
@@ -135,6 +149,22 @@ export interface UpsertBybitIntegrationRequest {
 }
 
 export interface UpsertBybitIntegrationResponse {
+  readonly integrationId: string;
+  readonly provider: string;
+  readonly status: string;
+  readonly displayName: string;
+  readonly accountRef: string;
+  readonly maskedKey: string;
+  readonly message: string;
+}
+
+export interface UpsertDzengiIntegrationRequest {
+  readonly displayName: string;
+  readonly apiKey: string;
+  readonly apiSecret: string;
+}
+
+export interface UpsertDzengiIntegrationResponse {
   readonly integrationId: string;
   readonly provider: string;
   readonly status: string;
@@ -207,7 +237,8 @@ export interface SessionTransactionItemResponse {
   readonly id: string;
   readonly sourceType: SessionTransactionSourceType | null;
   readonly txHash: string | null;
-  readonly networkId: EvmNetworkId | null;
+  /** On-chain chain ID (e.g. 'ETHEREUM') or null for CEX transactions. */
+  readonly networkId: string | null;
   readonly walletAddress: string | null;
   readonly matchedCounterparty: string | null;
   readonly blockTimestamp: string | null;
@@ -235,7 +266,8 @@ export interface GetSessionTransactionsRequest {
   readonly search?: string | null;
   readonly categories?: ReadonlyArray<string> | null;
   readonly walletIds?: ReadonlyArray<string>;
-  readonly networkIds?: ReadonlyArray<EvmNetworkId>;
+  /** On-chain chain IDs to filter by; CEX venue IDs should be excluded (CEX transactions always appear). */
+  readonly networkIds?: ReadonlyArray<string>;
 }
 
 export interface RebuildSessionTransactionsResponse {
@@ -255,6 +287,16 @@ export interface SessionAssetLedgerCurrentResponse {
   readonly realisedPnlUsd: number | null;
   readonly netRealisedPnlUsd: number | null;
   readonly gasPaidUsd: number | null;
+  /** ADR-062 break-even (effective-cost) metric. Effective per-unit cost after crediting realized trading P&L; null when no covered qty. */
+  readonly breakEvenUsd: number | null;
+  /** ADR-062: realized profit beyond remaining basis (>0 means already past break-even). */
+  readonly lockedSurplusUsd: number;
+  /** ADR-062: zero-basis income (yield/rewards/funding) booked to this family's cluster; informational. */
+  readonly incomeReceivedUsd: number;
+  /** ADR-062: when non-null, this family's realized P&L is credited to that parent family (e.g. FAMILY:ETH). */
+  readonly attributionTargetFamily: string | null;
+  /** ADR-062: real member asset symbols of this family present in the ledger (e.g. ['ETH','WETH','WSTETH']). */
+  readonly familyMemberSymbols: ReadonlyArray<string>;
 }
 
 export interface SessionAssetLedgerFullSessionCurrentResponse {
@@ -297,6 +339,27 @@ export interface SessionAssetLedgerTimelineEntryResponse {
    * FAMILY_ROLLUP is never emitted.
    */
   readonly avcoKind: string | null;
+  /**
+   * Blended total-exposure AVCO series (RC-E3 / ADR-061). Re-includes ETH-origin basis parked in
+   * basis-conserving receipt corridors (LP/lending/GLV). All fields nullable → additive/backward-compatible;
+   * the ADR-045 spot-family lines are unchanged. Backend owns before/after chaining.
+   */
+  readonly blendedAvcoBeforeUsd: number | null;
+  readonly blendedAvcoAfterUsd: number | null;
+  readonly blendedNetAvcoBeforeUsd: number | null;
+  readonly blendedNetAvcoAfterUsd: number | null;
+  /** Total-exposure covered quantity backing the blended AVCO; blended line breaks when this <= epsilon. */
+  readonly blendedCoveredQuantityAfter: number | null;
+  /** Liquid (spot-family) quantity after the event; drives pool≈0 markers. */
+  readonly liquidQuantityAfter: number | null;
+  /** PRIMARY_FLOW = blended covered-weighted AVCO; UNAVAILABLE = total exposure drained (line breaks). */
+  readonly blendedAvcoKind: string | null;
+  /**
+   * ADR-062: effective-cost per remaining unit at this timeline point for the viewed family
+   * (`max(marketBasis(t) − max(cumulativeAttributedMarketPnl(t), 0), 0) / coveredQty(t)`). Null when
+   * covered qty is ~0 → the effective-cost line breaks. Terminal value reconciles with `current.breakEvenUsd`.
+   */
+  readonly effectiveCostAfterUsd: number | null;
   readonly fromAddress: string | null;
   readonly toAddress: string | null;
   readonly memberNormalizedTransactionIds: ReadonlyArray<string>;
@@ -415,12 +478,27 @@ export interface SessionDashboardTokenPositionResponse {
   readonly unrealizedPnlPct: number;
   readonly unrealizedPnlUsd: number;
   readonly realizedPnlUsd: number;
-  readonly networkId: EvmNetworkId;
+  /** ADR-062 break-even (effective-cost) metric. Effective per-unit cost after crediting realized trading P&L; null when no covered qty. */
+  readonly breakEvenUsd: number | null;
+  /** ADR-062: realized profit beyond remaining basis (>0 means already past break-even). */
+  readonly lockedSurplusUsd: number;
+  /** ADR-062: zero-basis income (yield/rewards/funding) booked to this family's cluster; informational. */
+  readonly incomeReceivedUsd: number;
+  /** ADR-062: when non-null, this family's realized P&L is credited to that parent family (e.g. FAMILY:ETH). */
+  readonly attributionTargetFamily: string | null;
+  /** On-chain chain ID (e.g. 'ETHEREUM') or CEX venue ID (e.g. 'BYBIT'). Use `domain` field to distinguish. */
+  readonly networkId: string;
   readonly walletAddress: string;
   readonly issue: string | null;
   readonly valuationModel: string | null;
   readonly valuationUnderlyingSymbol: string | null;
   readonly unsupportedValuationReason: string | null;
+  /** Wallet domain: EVM, SOLANA, TON, or CEX. */
+  readonly domain: string | null;
+  /** CEX venue id (e.g. 'bybit', 'dzengi'); null for on-chain wallets. */
+  readonly venueId: string | null;
+  /** CEX sub-account kind (e.g. 'FUND', 'UTA', 'EARN'); null if not applicable. */
+  readonly subAccount: string | null;
 }
 
 export interface SessionDashboardResponse {
