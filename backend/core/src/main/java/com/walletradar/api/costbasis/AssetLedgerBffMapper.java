@@ -56,10 +56,21 @@ public class AssetLedgerBffMapper {
                                 ))
                                 .toList(),
                         view.current().breakEvenUsd(),
+                        view.current().averageCostUsd(),
                         view.current().lockedSurplusUsd(),
                         view.current().incomeReceivedUsd(),
                         view.current().attributionTargetFamily(),
-                        view.current().familyMemberSymbols()
+                        view.current().familyMemberSymbols(),
+                        view.current().coveredRatio(),
+                        view.current().breakEvenSuppressed(),
+                        view.current().details() == null
+                                ? null
+                                : new SessionAssetLedgerResponse.DiagnosticLanes(
+                                        view.current().details().balanceAvcoUsd(),
+                                        view.current().details().balanceNetAvcoUsd(),
+                                        view.current().details().blendedAvcoUsd(),
+                                        view.current().details().blendedNetAvcoUsd()
+                                )
                 ),
                 new SessionAssetLedgerResponse.FullSessionCurrent(
                         view.fullSessionCurrent().quantity(),
@@ -105,7 +116,8 @@ public class AssetLedgerBffMapper {
                                 entry.blendedCoveredQuantityAfter(),
                                 entry.liquidQuantityAfter(),
                                 entry.blendedAvcoKind(),
-                                entry.effectiveCostAfterUsd()
+                                entry.effectiveCostAfterUsd(),
+                                entry.subjectUnitPriceUsd()
                         ))
                         .toList(),
                 view.events().stream()

@@ -43,7 +43,19 @@ public class LendingMarketKeyResolver {
             return receiptMarketAsset.get();
         }
         if (transaction.getType() != null && transaction.getType().name().startsWith("LENDING_LOOP")) {
-            return normalizedProtocol.startsWith("EULER") ? "evk-loop-account" : "loop-account";
+            if (normalizedProtocol.startsWith("EULER")) {
+                return "evk-loop-account";
+            }
+            // Receipt-less single-vault lending (Solana Jupiter Lend / Kamino, TON) exposes ONE vault
+            // position per wallet. Routing LENDING_LOOP_* to a separate "loop-account" market split the
+            // same position into two cycles; the live-collateral single-authority true-up then
+            // synthesized the FULL collateral into EACH cycle (e.g. 5.42 SOL shown twice → supplyUsd
+            // doubled). Keep receipt-less loop legs in the default market so the whole vault is one
+            // cycle. Detected via the WS-8 capability flag (ADR-073), never a hardcoded network gate.
+            if (Boolean.FALSE.equals(transaction.getReceiptBearingCollateral())) {
+                return defaultMarketAsset(normalizedProtocol);
+            }
+            return "loop-account";
         }
         return defaultMarketAsset(normalizedProtocol);
     }

@@ -36,6 +36,19 @@ public final class CorrelationContract {
      */
     public static final String LENDING_LOOP_PREFIX = "lending-loop:";
 
+    /**
+     * B2a: shared correlation prefix stamped on a same-network {@code BRIDGE_OUT} and its later
+     * {@code BRIDGE_IN} return leg that together form a custody/parking round-trip through the same
+     * protocol vault/router addresses (funds deposited into a protocol and withdrawn later, possibly
+     * with an internally-rebalanced asset composition). The full correlation id is
+     * {@code bridge:custody-roundtrip:{outTxHash}} — unique per OUT instance. The {@code bridge:}
+     * namespace makes replay route each principal leg through the per-family bridge continuity queue
+     * ({@code ReplayPendingTransferKeyFactory#bridgeTransferKey}), so the carried-out basis is
+     * inherited on the return leg per asset family instead of being re-priced at market — preserving
+     * system-wide basis conservation with {@code realisedPnl = 0}.
+     */
+    public static final String BRIDGE_CUSTODY_ROUNDTRIP_PREFIX = "bridge:custody-roundtrip:";
+
     public static final String WALLET_SUFFIX_FUND = ":FUND";
     public static final String WALLET_SUFFIX_UTA = ":UTA";
     public static final String WALLET_SUFFIX_EARN = ":EARN";

@@ -125,7 +125,8 @@ spot-style liquidity protocols and pool products.
 |---|---|---|---|
 | **A — NFT CL** | PancakeSwap, Uniswap, Velodrome Slipstream, Aerodrome | `lp-position:{network}:{protocol-slug}:{tokenId}` | `LpNftClFlowMaterializer`: inbound/outbound `LP-RECEIPT:*` from ERC721 logs + ERC20 principal legs |
 | **B — GMX async** | GMX V2 GM/GLV markets | `gmx-lp:{network}:{market-slug}` from settlement share symbol (e.g. `GM: ETH/USD [WETH-USDC]`) | GM/GLV share legs only; async request/settlement lifecycle |
-| **C — Pendle** | Pendle PT/LPT markets | `pendle-lp:{network}:{market-id}` | Actual `PENDLE-LPT` / PT legs; no NFT receipt pool |
+| **C — Pendle (+ Equilibria/Penpie wrappers)** | Pendle PT/LPT markets; `eqb`/`pnp` staked wrappers | `pendle-lp:{network}:{marketOrSyAddress}:{walletLower}` (ADR-081, per market + per wallet; **supersedes** the ADR-023 D3 symbol-only key) | Actual `PENDLE-LPT` / PT legs as **non-priced TRANSFER** receipts; `eqb<X>`/`pnp<X>` map to base `<X>`; no NFT receipt pool |
+| **C' — Meteora DAMM (MLP)** | Meteora Dynamic AMM (Solana) | `lp-position:solana:meteora-damm:{poolAddress}:{walletLower}` (ADR-081, per pool + per wallet) | Fungible `MLP` mint/stake/unstake/burn as **non-priced TRANSFER**; underlying SOL/mSOL/bSOL legs carry basis; terminal `remove_liquidity` ⇒ `LP_EXIT_FINAL` |
 | **D — Fungible LP** | Curve, Balancer, LFJ | composite `lp:` bucket via receipt token identity | Outbound fungible LP/BPT burn + principal return; no synthetic NFT receipt |
 | **E — Gauge / farm** | Pancake MasterChef, Velodrome stake, Aura gauge | optional ERC721 link (phase 2) | `LP_POSITION_STAKE` / `LP_POSITION_UNSTAKE` **do not** close NFT CL positions |
 
@@ -144,3 +145,41 @@ Harvest rows (`LP_FEE_CLAIM`) must carry `lp-position:*` correlation when callda
 
 Gauge stake/unstake moves custody of an NFT or farm share but does **not** by itself mark
 the underlying concentrated-liquidity position closed.
+
+### Pendle staked-wrapper exit (ADR-081)
+
+A terminal Pendle exit may burn the **staked wrapper** receipt (`eqbPENDLE-LPT` /
+`pnpPENDLE-LPT`, via Equilibria `zapOutV3SingleToken` / Penpie) instead of the base `PENDLE-LPT`
+symbol, returning the underlying (e.g. cmETH). Detection grammar:
+
+- map `eqb<X>` / `pnp<X>` to the base LP receipt `<X>` for netting, effective balance, and exit
+  linking — so entry-mint and wrapper-burn net the base receipt to 0 and the position closes **by
+  link**, not by relying on the basis pool draining;
+- resolve the **same** `marketOrSyAddress` for the direct entry and the wrapped exit (wrapper→market
+  registry, config-plane per ADR-059, or market-from-underlying-source recovery). Non-identical keys
+  break the close-by-link;
+- cmETH keeps its ADR-047 LP-cost basis (no +$2,228 spot spike); cmETH is a **separate** accounting
+  family, pinned independently of `FAMILY:ETH`.
+
+Negative cases (do NOT match): PENDLE governance-token buys/sells, PT/YT trades, `eqb<X>` staking
+where the base LP was never held by the tracked wallet.
+
+### On-chain-balance closure cross-check (ADR-080, secondary / flagged)
+
+Closure is **primarily** link-based (correct exit link drains the receipt / basis pool) plus the
+terminal signals (`LP_EXIT_FINAL`; Solana rent-reclaim per ADR-075; EVM CL-NFT `Transfer → 0x0`
+burn / `positions(tokenId).liquidity == 0`). The on-chain-balance rule is a **secondary flagged
+coverage guard**: an **authoritative summed-family on-chain zero ⇒ CLOSED**, one-directional (never
+forces OPEN, never fabricates an open). The closure balance is the **effective family sum**
+(wallet base + `eqb`/`pnp` wrapper + gauge/farm staked, merged via `ProtocolLockedBalanceProvider`),
+so a staked receipt with wallet balance 0 stays **OPEN**. A missing/errored balance is **not** a zero
+(reuses ADR-078): it keeps the internal determination and raises a per-position coverage flag. A
+zero⇒closed only fires when the zero is at least as fresh as the latest LP entry/adjust (freshness
+gate), and an effective balance below the sub-dust threshold counts as zero.
+
+### LP-receipt identity (non-priced; ADR-081)
+
+LP receipts (`PENDLE-LPT`, `eqbPENDLE-LPT`, Meteora `MLP`, CL `LP-RECEIPT:*`) resolve to the
+`FAMILY:LP_RECEIPT` continuity identity and are **non-priced** — they are excluded from the priced
+spot-asset dashboard surface and from spot family move-basis aggregation, driven by
+identity/correlationId membership (not a symbol-suffix spelling heuristic).

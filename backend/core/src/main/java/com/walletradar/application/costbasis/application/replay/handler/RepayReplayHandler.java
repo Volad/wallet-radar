@@ -20,7 +20,9 @@ import java.math.MathContext;
 import java.time.Instant;
 
 /**
- * REPAY disposal with zero realised PnL on liability-matched principal (ADR-012 §D3).
+ * REPAY disposal with zero realised PnL on liability-matched principal in BOTH the Market and Net
+ * lanes (ADR-012 §D3 + ADR-040 §5, 2026-07-18 amendment). Over-repay beyond the tracked liability
+ * (residual) is realised at position AVCO in both lanes.
  */
 @Component
 public class RepayReplayHandler {
@@ -84,15 +86,29 @@ public class RepayReplayHandler {
             flow.setUnitPriceUsd(match.liabilityAvcoUsd());
             flow.setPriceSource(PriceSource.LIABILITY_MATCH);
             flowSupport.applySell(flow, position);
-            // Full liability match: zero realised PnL per ADR-012 §D3.
-            // applySell uses position AVCO (blended across all borrows) which may differ from
-            // the individual liability AVCO, producing a spurious non-zero PnL. Correct it here.
-            BigDecimal priorRealised = flow.getRealisedPnlUsd() == null ? BigDecimal.ZERO : flow.getRealisedPnlUsd();
-            if (priorRealised.signum() != 0) {
-                position.setTotalRealisedPnlUsd(position.totalRealisedPnlUsd().subtract(priorRealised, MC));
-                position.setTotalNetRealisedPnlUsd(position.totalNetRealisedPnlUsd().subtract(priorRealised, MC));
-                flow.setRealisedPnlUsd(BigDecimal.ZERO);
+            // Full liability match: zero realised PnL in BOTH lanes (ADR-012 §D3 + ADR-040 §5).
+            // applySell books realised at the position's blended Market AVCO and Net AVCO, either
+            // of which may diverge from the individual liability AVCO used as the sale price. With
+            // borrowed principal now entering both lanes at market-at-borrow basis (ADR-040 §5),
+            // the two deltas are numerically equal for a pure borrowed pool, so zeroing each lane
+            // is a no-op there. The explicit per-lane zeroing is defense-in-depth for blended pools
+            // (netAvco != marketAvco): it removes any residual (marketAvco − netAvco) × matchedQty
+            // Net-lane term that the prior priorRealised-only correction left behind — precisely the
+            // phantom that the historical net-$0 borrow basis produced (net realised ≈ marketAvco ×
+            // qty even when the Market lane already netted to $0). We subtract each lane's actual
+            // applySell delta (measured against the pre-repay snapshot), so the correction is
+            // coverage-aware and fires even when the Market delta is $0 but the Net delta is not.
+            BigDecimal marketRealisedDelta =
+                    position.totalRealisedPnlUsd().subtract(before.totalRealisedPnlUsd(), MC);
+            BigDecimal netRealisedDelta =
+                    position.totalNetRealisedPnlUsd().subtract(before.totalNetRealisedPnlUsd(), MC);
+            if (marketRealisedDelta.signum() != 0) {
+                position.setTotalRealisedPnlUsd(position.totalRealisedPnlUsd().subtract(marketRealisedDelta, MC));
             }
+            if (netRealisedDelta.signum() != 0) {
+                position.setTotalNetRealisedPnlUsd(position.totalNetRealisedPnlUsd().subtract(netRealisedDelta, MC));
+            }
+            flow.setRealisedPnlUsd(BigDecimal.ZERO);
         } else {
             flowSupport.applySell(flow, position);
             if (match.matchedQty().signum() > 0 && match.liabilityFound()) {

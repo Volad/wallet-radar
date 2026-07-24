@@ -1,5 +1,7 @@
 package com.walletradar.application.costbasis.application;
 
+import com.walletradar.application.costbasis.domain.LpReceiptBasisPool;
+import com.walletradar.application.costbasis.support.WalletAddressReadScope;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.session.TrackedWallet;
 import com.walletradar.domain.session.TrackedWalletRepository;
@@ -44,11 +46,14 @@ public class OnChainBalanceRefreshQueryService {
     }
 
     public List<BalanceRefreshCandidate> loadCandidates(List<String> walletAddresses) {
+        // Family-aware canonicalization: EVM/CEX lowercased (legacy behavior), but case-sensitive
+        // base58 Solana and friendly TON refs are preserved so the walletAddress $in query matches
+        // the canonically-stored normalized rows (blind lowercasing dropped every SOL/TON candidate).
         List<String> trackedWallets = walletAddresses == null
                 ? List.of()
                 : walletAddresses.stream()
                 .filter(Objects::nonNull)
-                .map(value -> value.trim().toLowerCase(Locale.ROOT))
+                .map(WalletAddressReadScope::normalize)
                 .filter(value -> !value.isBlank())
                 .distinct()
                 .toList();
@@ -91,12 +96,83 @@ public class OnChainBalanceRefreshQueryService {
                 ))
         );
 
-        return mongoOperations.aggregate(aggregation, NormalizedTransaction.class, Document.class)
+        List<BalanceRefreshCandidate> flowCandidates = mongoOperations
+                .aggregate(aggregation, NormalizedTransaction.class, Document.class)
                 .getMappedResults()
                 .stream()
                 .map(this::toCandidate)
                 .filter(Objects::nonNull)
                 .toList();
+
+        // ADR-080 (C3, Precondition A): also emit a candidate per known LP-receipt identity from
+        // `lp_receipt_basis_pools`. A fully-burned/exited fungible receipt (PENDLE-LPT, Meteora MLP,
+        // fungible CL receipt) nets to zero across its flows, so the flow-derived universe above drops
+        // it (netQuantity == 0 filter) — leaving ABSENCE, which the closure cross-check must not treat
+        // as an authoritative zero. Probing these identities on the background refresh writes an
+        // explicit on_chain_balances row (0 = authoritative zero, distinct from a missing row), which
+        // is what lets the closure resolver tell "burned ⇒ closed" apart from "never observed".
+        List<BalanceRefreshCandidate> lpReceiptCandidates = loadLpReceiptBasisPoolCandidates(trackedWallets);
+        return mergeDistinct(flowCandidates, lpReceiptCandidates);
+    }
+
+    /**
+     * ADR-080 (C3): the LP-receipt basis-pool identities scoped to the tracked wallets, as balance
+     * refresh candidates. Read-only projection over {@code lp_receipt_basis_pools}; only fungible
+     * receipts carrying a real on-chain token identity (non-blank {@code assetContract} or a concrete
+     * {@code assetSymbol}) are emitted, so NFT-position pools (resolved via {@code ownerOf}/burn, C4)
+     * are not probed as ERC-20 balances here.
+     */
+    private List<BalanceRefreshCandidate> loadLpReceiptBasisPoolCandidates(List<String> trackedWallets) {
+        if (trackedWallets.isEmpty()) {
+            return List.of();
+        }
+        org.springframework.data.mongodb.core.query.Query query =
+                org.springframework.data.mongodb.core.query.Query.query(
+                        Criteria.where("walletAddress").in(trackedWallets));
+        query.fields()
+                .include("walletAddress")
+                .include("networkId")
+                .include("assetSymbol")
+                .include("assetContract");
+        List<BalanceRefreshCandidate> candidates = new java.util.ArrayList<>();
+        for (LpReceiptBasisPool pool : mongoOperations.find(query, LpReceiptBasisPool.class)) {
+            if (pool == null || pool.getWalletAddress() == null || pool.getNetworkId() == null) {
+                continue;
+            }
+            String assetContract = normalizedString(pool.getAssetContract());
+            String assetSymbol = normalizedSymbol(pool.getAssetSymbol());
+            if (assetContract == null && assetSymbol == null) {
+                continue;
+            }
+            candidates.add(new BalanceRefreshCandidate(
+                    pool.getWalletAddress().trim(),
+                    pool.getNetworkId(),
+                    assetSymbol,
+                    assetContract
+            ));
+        }
+        return candidates;
+    }
+
+    private List<BalanceRefreshCandidate> mergeDistinct(
+            List<BalanceRefreshCandidate> primary,
+            List<BalanceRefreshCandidate> additional
+    ) {
+        Map<String, BalanceRefreshCandidate> byKey = new LinkedHashMap<>();
+        for (BalanceRefreshCandidate candidate : primary) {
+            byKey.putIfAbsent(candidateKey(candidate), candidate);
+        }
+        for (BalanceRefreshCandidate candidate : additional) {
+            byKey.putIfAbsent(candidateKey(candidate), candidate);
+        }
+        return List.copyOf(byKey.values());
+    }
+
+    private String candidateKey(BalanceRefreshCandidate candidate) {
+        return candidate.walletAddress()
+                + "|" + candidate.networkId()
+                + "|" + (candidate.assetSymbol() == null ? "" : candidate.assetSymbol())
+                + "|" + (candidate.assetContract() == null ? "" : candidate.assetContract());
     }
 
     public Map<TokenContractRef, Integer> loadKnownTokenDecimals(
@@ -229,7 +305,7 @@ public class OnChainBalanceRefreshQueryService {
         String walletAddress = normalizedString(document.get("walletAddress"));
         String networkRaw = normalizedString(document.get("networkId"));
         NetworkId networkId = parseNetworkId(networkRaw);
-        if (walletAddress == null || networkId == null || networkId == NetworkId.SOLANA) {
+        if (walletAddress == null || networkId == null) {
             return null;
         }
         return new BalanceRefreshCandidate(

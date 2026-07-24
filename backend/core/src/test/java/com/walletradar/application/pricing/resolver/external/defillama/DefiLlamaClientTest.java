@@ -26,8 +26,13 @@ class DefiLlamaClientTest {
     }
 
     @Test
-    void returnsEmptyForNullOrUnsupportedNetwork() {
+    void mapsTonToDefiLlamaChainSlug() {
+        // PR3 RC-T1.5: TON pricing re-enabled so native TON + jetton legs are priceable.
+        assertThat(DefiLlamaClient.chainSlug(NetworkId.TON)).contains("ton");
+    }
+
+    @Test
+    void returnsEmptyForNullNetwork() {
         assertThat(DefiLlamaClient.chainSlug(null)).isEmpty();
-        assertThat(DefiLlamaClient.chainSlug(NetworkId.TON)).isEmpty();
     }
 }

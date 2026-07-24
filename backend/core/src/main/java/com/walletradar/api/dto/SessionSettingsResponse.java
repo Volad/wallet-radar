@@ -11,6 +11,7 @@ public record SessionSettingsResponse(
         List<WalletEntry> wallets,
         List<IntegrationEntry> integrations,
         List<ExternalVenueEntry> externalVenues,
+        List<ExternalCustodyDestinationEntry> externalCustodyDestinations,
         Boolean hideSmallAssets,
         Boolean showReconciliationWarnings
 ) {
@@ -26,6 +27,17 @@ public record SessionSettingsResponse(
      * Cycle/9 S2: owned external-venue counterparty address (Paradex/MEX/etc.).
      */
     public record ExternalVenueEntry(
+            String address,
+            String provider,
+            String label,
+            List<String> networks
+    ) {
+    }
+
+    /**
+     * WS-5 (ADR-072): user-designated external custody destination (labeled counterparty only).
+     */
+    public record ExternalCustodyDestinationEntry(
             String address,
             String provider,
             String label,

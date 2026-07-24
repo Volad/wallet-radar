@@ -57,6 +57,16 @@ public class RewardRouteClassifier implements OnChainFamilyClassifier {
             return Optional.empty();
         }
 
+        // R6a: defer when an inbound principal leg is a registered LP pool token (e.g. a Balancer
+        // BPT returned by an Aura/gauge withdraw). Such a transaction returns LP position principal,
+        // so it is an LP_POSITION_UNSTAKE (basis-neutral), not a pure reward claim. Deferring lets
+        // LpRegistryClassifier (STAKE_CONTRACT / special-handler path) classify it correctly and
+        // keep the BPT basis continuous. Generalized (no protocol/address hardcoding): any inbound
+        // registered POOL principal signals a position return rather than a harvest.
+        if (hasInboundLpPoolPrincipal(context)) {
+            return Optional.empty();
+        }
+
         ProtocolRegistryEntry entry = rewardEntry.get();
         boolean hasInboundMovement = context.movementLegs().stream()
                 .anyMatch(leg -> !leg.fee() && leg.quantityDelta().signum() > 0);
@@ -93,6 +103,27 @@ public class RewardRouteClassifier implements OnChainFamilyClassifier {
                 entry.protocolName(),
                 entry.protocolVersion()
         ));
+    }
+
+    /**
+     * R6a: {@code true} when any inbound (positive) non-fee movement leg is a registered LP
+     * {@code POOL} principal token — i.e. the transaction returns LP position principal (a Balancer
+     * BPT from an Aura/gauge withdraw), so it must be classified as an LP position unstake rather
+     * than a reward claim.
+     */
+    private boolean hasInboundLpPoolPrincipal(OnChainClassificationContext context) {
+        for (RawLeg leg : context.movementLegs()) {
+            if (leg == null || leg.fee() || leg.assetContract() == null
+                    || leg.quantityDelta() == null || leg.quantityDelta().signum() <= 0) {
+                continue;
+            }
+            Optional<ProtocolRegistryEntry> legEntry =
+                    protocolRegistryService.lookup(context.view().networkId(), leg.assetContract());
+            if (legEntry.isPresent() && legEntry.get().role() == ProtocolRegistryRole.POOL) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private Optional<ProtocolRegistryEntry> findKnownRewardEntry(OnChainClassificationContext context) {

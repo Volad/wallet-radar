@@ -235,59 +235,11 @@
               </div>
             </header>
 
+            <!-- Per product decision the move-basis page shows exactly TWO AVCO metrics:
+                 "Effective cost" (ADR-062 Effective Cost = break-even) and "Balance AVCO".
+                 Market / Blended AVCO are no longer displayed. -->
             <div class="stats">
-              <div class="sc" [class.sc-hint-open]="openAvcoHintKey() === 'market'">
-                <div class="sc-l sc-l-row">
-                  <span>Market AVCO</span>
-                  <button
-                    type="button"
-                    class="avco-hint-btn"
-                    aria-label="What is Market AVCO?"
-                    aria-haspopup="dialog"
-                    aria-controls="avco-hint-popover"
-                    [attr.aria-expanded]="openAvcoHintKey() === 'market'"
-                    (click)="toggleAvcoHint('market', $event)">?</button>
-                </div>
-                <div class="sc-v avco-secondary">
-                  <wr-smart-amount [value]="data.current.avcoUsd" />
-                </div>
-                <div class="sc-s">market basis / {{ data.displaySymbol }}</div>
-              </div>
-              <div class="sc" [class.sc-hint-open]="openAvcoHintKey() === 'balance'">
-                <div class="sc-l sc-l-row">
-                  <span>Balance AVCO</span>
-                  <button
-                    type="button"
-                    class="avco-hint-btn"
-                    aria-label="What is Balance AVCO?"
-                    aria-haspopup="dialog"
-                    aria-controls="avco-hint-popover"
-                    [attr.aria-expanded]="openAvcoHintKey() === 'balance'"
-                    (click)="toggleAvcoHint('balance', $event)">?</button>
-                </div>
-                <div class="sc-v avco">
-                  <wr-smart-amount [value]="data.current.netAvcoUsd" />
-                </div>
-                <div class="sc-s">balance avg cost / {{ data.displaySymbol }}</div>
-              </div>
-              <div class="sc" [class.sc-hint-open]="openAvcoHintKey() === 'blended'">
-                <div class="sc-l sc-l-row">
-                  <span>Blended AVCO</span>
-                  <button
-                    type="button"
-                    class="avco-hint-btn"
-                    aria-label="What is Blended AVCO?"
-                    aria-haspopup="dialog"
-                    aria-controls="avco-hint-popover"
-                    [attr.aria-expanded]="openAvcoHintKey() === 'blended'"
-                    (click)="toggleAvcoHint('blended', $event)">?</button>
-                </div>
-                <div class="sc-v avco-blended-value">
-                  <wr-smart-amount [value]="blendedNetAvcoCurrent()" />
-                </div>
-                <div class="sc-s">total-exposure avg cost / {{ data.displaySymbol }}</div>
-              </div>
-              <div class="sc" [class.sc-hint-open]="openAvcoHintKey() === 'breakeven'">
+              <div class="sc sc-headline" [class.sc-hint-open]="openAvcoHintKey() === 'breakeven'">
                 <div class="sc-l sc-l-row">
                   <span>Effective cost</span>
                   <button
@@ -300,21 +252,55 @@
                     (click)="toggleAvcoHint('breakeven', $event)">?</button>
                 </div>
                 <div class="sc-v avco-breakeven-value">
-                  @if (data.current.breakEvenUsd !== null) {
+                  @if (data.current.breakEvenSuppressed) {
+                    <span class="sc-emdash">—</span>
+                  } @else if (data.current.breakEvenUsd !== null) {
                     <wr-smart-amount [value]="data.current.breakEvenUsd" />
                   } @else {
                     <span class="sc-emdash">—</span>
                   }
                 </div>
-                @if (data.current.lockedSurplusUsd > 0) {
+                @if (data.current.breakEvenSuppressed) {
+                  <div
+                    class="sc-s sc-s-lowcov"
+                    title="Break-even hidden: too little of the held balance is basis-backed for a meaningful break-even price."
+                  >
+                    @if (data.current.coveredRatio !== null) {
+                      low coverage · {{ (data.current.coveredRatio * 100).toFixed(1) }}%
+                    } @else {
+                      low coverage
+                    }
+                  </div>
+                } @else if (data.current.lockedSurplusUsd > 0) {
                   <div class="sc-s sc-s-surplus">
                     past $0 by <wr-smart-amount [value]="data.current.lockedSurplusUsd" /> surplus
                   </div>
                 } @else if (data.current.attributionTargetFamily !== null) {
                   <div class="sc-s">P&#64;L credited to {{ attributionParentLabel(data.current.attributionTargetFamily) }}</div>
                 } @else {
-                  <div class="sc-s">effective cost / {{ data.displaySymbol }}</div>
+                  <div class="sc-s">sell to recover all / {{ data.displaySymbol }}</div>
                 }
+              </div>
+              <div class="sc sc-headline" [class.sc-hint-open]="openAvcoHintKey() === 'balance'">
+                <div class="sc-l sc-l-row">
+                  <span>Balance AVCO</span>
+                  <button
+                    type="button"
+                    class="avco-hint-btn"
+                    aria-label="What is Balance AVCO?"
+                    aria-haspopup="dialog"
+                    aria-controls="avco-hint-popover"
+                    [attr.aria-expanded]="openAvcoHintKey() === 'balance'"
+                    (click)="toggleAvcoHint('balance', $event)">?</button>
+                </div>
+                <div class="sc-v avco">
+                  @if (data.current.details?.balanceNetAvcoUsd != null) {
+                    <wr-smart-amount [value]="data.current.details?.balanceNetAvcoUsd ?? null" />
+                  } @else {
+                    <span class="sc-emdash">—</span>
+                  }
+                </div>
+                <div class="sc-s">liquid balance / {{ data.displaySymbol }}</div>
               </div>
               <div class="sc">
                 <div class="sc-l">qty held</div>
@@ -359,11 +345,12 @@
                 }
               </div>
             }
+
           </div>
 
-          <!-- AVCO-series legend (RC-E3 / ADR-061). Each item is a toggle button that shows/hides its
-               line on the canvas (all ON by default). Swatches render each line's actual dash pattern
-               (line-style, not colour-only) so the three series are distinguishable without hue (a11y). -->
+          <!-- AVCO-series legend. Each item is a toggle button that shows/hides its line on the canvas
+               (both ON by default). Swatches render each line's actual dash pattern (line-style, not
+               colour-only) so the two series are distinguishable without hue (a11y). -->
           <ul class="avco-legend" aria-label="AVCO series legend">
             <li>
               <button
@@ -378,44 +365,6 @@
                   <line x1="1" y1="4" x2="25" y2="4" stroke="rgb(34,211,238)" stroke-width="1.75" />
                 </svg>
                 <span class="avco-legend-label">Balance AVCO</span>
-              </button>
-            </li>
-            <li>
-              <button
-                type="button"
-                class="avco-legend-item"
-                [class.active]="showBlendedAvco()"
-                [attr.aria-pressed]="showBlendedAvco()"
-                [style.--chipColor]="'rgb(245,158,11)'"
-                (click)="toggleAvcoLine('blended')">
-                <span class="check-box" [class.checked]="showBlendedAvco()"></span>
-                <svg class="avco-swatch" width="26" height="8" viewBox="0 0 26 8" aria-hidden="true" focusable="false">
-                  <line
-                    x1="1"
-                    y1="4"
-                    x2="25"
-                    y2="4"
-                    stroke="rgb(245,158,11)"
-                    stroke-width="1.75"
-                    stroke-linecap="round"
-                    stroke-dasharray="1 5" />
-                </svg>
-                <span class="avco-legend-label">Blended AVCO</span>
-              </button>
-            </li>
-            <li>
-              <button
-                type="button"
-                class="avco-legend-item"
-                [class.active]="showMarketAvco()"
-                [attr.aria-pressed]="showMarketAvco()"
-                [style.--chipColor]="'rgb(255,255,255)'"
-                (click)="toggleAvcoLine('market')">
-                <span class="check-box" [class.checked]="showMarketAvco()"></span>
-                <svg class="avco-swatch" width="26" height="8" viewBox="0 0 26 8" aria-hidden="true" focusable="false">
-                  <line x1="1" y1="4" x2="25" y2="4" stroke="rgb(255,255,255)" stroke-width="1.25" stroke-dasharray="5 4" />
-                </svg>
-                <span class="avco-legend-label">Market AVCO</span>
               </button>
             </li>
             <li>
@@ -617,7 +566,8 @@
                         </span>
                       </td>
                       <td class="r mono-cell"><wr-smart-amount [value]="marker.amountUsd" /></td>
-                      <td class="r mono-cell"><wr-smart-amount [value]="marker.priceUsd" /></td>
+                      <!-- ADR-062 Wave 3 (AC-12 / D9): subject asset's own unit price, not the quote-leg. -->
+                      <td class="r mono-cell"><wr-smart-amount [value]="marker.displayUnitPriceUsd" /></td>
                       <td>
                         <span class="table-endpoint" [title]="marker.pathFromTitle ?? marker.pathFrom">
                           <span class="endpoint-dot" [class.colored]="marker.pathFromColor !== null" [style.--endpointColor]="marker.pathFromColor ?? 'transparent'"></span>
@@ -673,8 +623,6 @@
                                     <th>Basis</th>
                                     <th class="r">Balance AVCO before</th>
                                     <th class="r">Balance AVCO after</th>
-                                    <th class="r">Market AVCO before</th>
-                                    <th class="r">Market AVCO after</th>
                                     <th class="r">Gas</th>
                                     <th>Flows</th>
                                   </tr>
@@ -697,7 +645,7 @@
                                         </span>
                                       </td>
                                       <td class="r mono-cell"><wr-smart-amount [value]="row.amountUsd" /></td>
-                                      <td class="r mono-cell"><wr-smart-amount [value]="row.priceUsd" /></td>
+                                      <td class="r mono-cell"><wr-smart-amount [value]="row.displayUnitPriceUsd" /></td>
                                       <td class="mono-cell tx-expand-cell">
                                         <wr-copy-hash [hash]="row.txHash" />
                                       </td>
@@ -721,8 +669,6 @@
                                       </td>
                                       <td class="r mono-cell"><wr-smart-amount [value]="row.netAvcoBeforeUsd" /></td>
                                       <td class="r mono-cell"><wr-smart-amount [value]="row.netAvcoAfterUsd" /></td>
-                                      <td class="r mono-cell avco-tax-cell"><wr-smart-amount [value]="row.avcoBeforeUsd" /></td>
-                                      <td class="r mono-cell avco-tax-cell"><wr-smart-amount [value]="row.avcoAfterUsd" /></td>
                                       <td class="r mono-cell"><wr-smart-amount [value]="row.gasDeltaUsd" /></td>
                                       <td class="flows-cell">
                                         @if (row.flows.length > 0) {
@@ -802,7 +748,9 @@
           </div>
           <div class="tr">
             <span class="k">price</span>
-            <span class="v"><wr-smart-amount [value]="marker.priceUsd" /></span>
+            <!-- ADR-062 Wave 3 (AC-12 / D9): show the subject asset's own unit price, not the
+                 counterparty quote-leg (e.g. USDT $1), when the backend supplies it. -->
+            <span class="v"><wr-smart-amount [value]="marker.displayUnitPriceUsd" /></span>
           </div>
           <div class="tr tx-row">
             <span class="k">tx hash</span>
@@ -863,28 +811,12 @@
             <span class="v"><wr-smart-amount [value]="marker.netAvcoAfterUsd" /></span>
           </div>
           <div class="tr">
-            <span class="k">Blended AVCO before</span>
-            <span class="v avco-blended-value"><wr-smart-amount [value]="marker.blendedNetAvcoBeforeUsd" /></span>
-          </div>
-          <div class="tr">
-            <span class="k">Blended AVCO after</span>
-            <span class="v avco-blended-value"><wr-smart-amount [value]="marker.blendedNetAvcoAfterUsd" /></span>
-          </div>
-          <div class="tr">
-            <span class="k">Market AVCO before</span>
-            <span class="v avco-tax-value"><wr-smart-amount [value]="marker.avcoBeforeUsd" /></span>
-          </div>
-          <div class="tr">
-            <span class="k">Market AVCO after</span>
-            <span class="v avco-tax-value"><wr-smart-amount [value]="marker.avcoAfterUsd" /></span>
+            <span class="k">Effective cost</span>
+            <span class="v avco-effective-value"><wr-smart-amount [value]="marker.effectiveCostAfterUsd" /></span>
           </div>
           <div class="tr">
             <span class="k">Balance qty</span>
             <span class="v"><wr-smart-amount [value]="marker.liquidQuantityAfter" mode="qty" [suffix]="marker.displaySymbol" /></span>
-          </div>
-          <div class="tr">
-            <span class="k">Covered qty (blended)</span>
-            <span class="v avco-blended-value"><wr-smart-amount [value]="marker.blendedCoveredQuantityAfter" mode="qty" [suffix]="marker.displaySymbol" /></span>
           </div>
           @if (marker.avcoKindLabel) {
             <div class="tr">
@@ -896,11 +828,6 @@
             <span class="k">basis</span>
             <span class="v neu">{{ marker.basisSummary }}</span>
           </div>
-          @if (isPoolNearZeroDrainedButParked(marker)) {
-            <div class="tr ti-pool-note">
-              <span class="v">{{ poolNearZeroNote }}</span>
-            </div>
-          }
         </div>
       </div>
     </div>

@@ -13,7 +13,7 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { HttpErrorResponse } from '@angular/common/http';
 import { catchError, of, startWith, Subscription } from 'rxjs';
 
-import { COLORS, EVM_NETWORK_PRESENTATION_BY_ID } from '../../core/data/dashboard.constants';
+import { ALL_NETWORK_PRESENTATION_BY_ID, COLORS } from '../../core/data/dashboard.constants';
 import {
   LpData,
   LpLiquidityBin,
@@ -22,7 +22,7 @@ import {
   LpPrecision,
   LpViewState,
 } from '../../core/models/lp.models';
-import { EvmNetworkId, RefreshStateItemResponse, RefreshStatusResponse } from '../../core/models/wallet-api.models';
+import { OnChainWalletNetworkId, RefreshStateItemResponse, RefreshStatusResponse } from '../../core/models/wallet-api.models';
 import { LpDataService } from '../../core/services/lp-data.service';
 import { RefreshStatusPollerService } from '../../core/services/refresh-status-poller.service';
 import { WalletApiService } from '../../core/services/wallet-api.service';
@@ -318,7 +318,7 @@ export class LpPageComponent implements OnChanges {
     return [...new Set(this.positions().map((position) => position.protocol))].sort();
   }
 
-  networks(): ReadonlyArray<EvmNetworkId> {
+  networks(): ReadonlyArray<OnChainWalletNetworkId> {
     return [...new Set(this.positions().map((position) => position.networkId))].sort();
   }
 
@@ -929,15 +929,15 @@ export class LpPageComponent implements OnChanges {
   }
 
   networkIcon(networkId: string): string {
-    return EVM_NETWORK_PRESENTATION_BY_ID.get(networkId as EvmNetworkId)?.icon ?? '•';
+    return ALL_NETWORK_PRESENTATION_BY_ID.get(networkId)?.icon ?? '•';
   }
 
   networkLabel(networkId: string): string {
-    return EVM_NETWORK_PRESENTATION_BY_ID.get(networkId as EvmNetworkId)?.label ?? networkId;
+    return ALL_NETWORK_PRESENTATION_BY_ID.get(networkId)?.label ?? networkId;
   }
 
   networkColor(networkId: string): string {
-    return EVM_NETWORK_PRESENTATION_BY_ID.get(networkId as EvmNetworkId)?.color ?? COLORS.textSubtle;
+    return ALL_NETWORK_PRESENTATION_BY_ID.get(networkId)?.color ?? COLORS.textSubtle;
   }
 
   shortAddress(address: string): string {

@@ -95,7 +95,7 @@ class OnChainNormalizationServiceTest {
         RawTransaction laterIndex = raw("0xccc", 1_700_000_001L, 7);
         RawTransaction earliest = raw("0xaaa", 1_700_000_000L, 3);
         RawTransaction sameTimestampLowerIndex = raw("0xbbb", 1_700_000_001L, 2);
-        when(pendingRawTransactionQueryService.loadNextBatch(10))
+        when(pendingRawTransactionQueryService.loadNextEvmBatch(10))
                 .thenReturn(List.of(laterIndex, sameTimestampLowerIndex, earliest));
         when(internalTransferRawPeerRepairService.repairMissingPeers(any())).thenReturn(0);
 
@@ -114,7 +114,7 @@ class OnChainNormalizationServiceTest {
         RawTransaction repairedEarlier = raw("0xccc", 1_700_000_001L, 0);
         repairedEarlier.getRawData().remove("transactionIndex");
         RawTransaction existingLater = raw("0xbbb", 1_700_000_001L, 7);
-        when(pendingRawTransactionQueryService.loadNextBatch(10))
+        when(pendingRawTransactionQueryService.loadNextEvmBatch(10))
                 .thenReturn(List.of(existingLater, repairedEarlier));
         when(internalTransferRawPeerRepairService.repairMissingPeers(any())).thenReturn(0);
         when(explorerRawOrderingRepairGateway.fetch("0xccc", NetworkId.ETHEREUM))
@@ -254,7 +254,7 @@ class OnChainNormalizationServiceTest {
     @DisplayName("repairs missing raw peers before normalizing current batch")
     void repairsMissingRawPeersBeforeNormalizingCurrentBatch() {
         RawTransaction rawTransaction = raw("0xabc", 1_700_000_000L, 5);
-        when(pendingRawTransactionQueryService.loadNextBatch(10)).thenReturn(List.of(rawTransaction));
+        when(pendingRawTransactionQueryService.loadNextEvmBatch(10)).thenReturn(List.of(rawTransaction));
         when(internalTransferRawPeerRepairService.repairMissingPeers(any())).thenReturn(1);
 
         service.processNextBatch();

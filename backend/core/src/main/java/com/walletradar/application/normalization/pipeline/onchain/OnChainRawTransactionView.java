@@ -379,18 +379,25 @@ public final class OnChainRawTransactionView {
         NetworkId networkId = networkId();
         if (networkId == null) {
             errors.add("Missing or unsupported networkId");
-        } else if (networkId == NetworkId.SOLANA) {
-            errors.add("SOLANA normalization is out of scope");
         }
-        if (blockTimestamp() == null) {
-            errors.add("Missing rawData.timeStamp");
-        }
-        if (transactionIndex() == null) {
-            errors.add("Missing rawData.transactionIndex");
+        if (networkId != NetworkId.SOLANA) {
+            if (blockTimestamp() == null) {
+                errors.add("Missing rawData.timeStamp");
+            }
+            if (transactionIndex() == null) {
+                errors.add("Missing rawData.transactionIndex");
+            }
         }
         return errors;
     }
 
+    /**
+     * EVM-only address normalization (ADR-066): lowercases and {@code 0x}-prefixes to the 20-byte
+     * hex form, returning {@code null} for anything that is not a 42-char {@code 0x} address. This
+     * deliberately rejects Solana base58 program IDs / mints — callers handling non-EVM families must
+     * use {@link com.walletradar.application.normalization.pipeline.classification.registry.AddressNormalizer}
+     * instead so case-sensitive identifiers survive.
+     */
     public static String normalizeAddress(String value) {
         if (value == null || value.isBlank()) {
             return null;

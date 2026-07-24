@@ -5,9 +5,9 @@ import java.util.Locale;
 /**
  * Resolves display symbols and decimals for ERC-20 legs when explorer/RPC metadata is missing or blank.
  *
- * <p>The underlying data lives in {@code classpath:token-metadata.json} (group {@code fallbackTokens},
- * exposed via {@link TokenMetadataRegistry}) — a single source of truth shared with the rest of the
- * normalization layer. Two decimal semantics are maintained:
+ * <p>The underlying data lives in the per-network {@code token-overrides} map in
+ * {@code network-descriptors.yml} (single source of truth, exposed via {@link TokenMetadataRegistry}).
+ * Two decimal semantics are maintained:
  * <ul>
  *   <li>fallback decimals ({@link TokenMetadataRegistry#fallbackDecimals}) — applied when the explorer
  *       provides no {@code tokenDecimal} field (i.e. the field is null or absent).</li>

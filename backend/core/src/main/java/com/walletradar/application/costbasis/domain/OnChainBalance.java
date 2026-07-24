@@ -45,4 +45,16 @@ public class OnChainBalance {
     private Integer tokenDecimals;
     private BigDecimal quantity;
     private Instant capturedAt;
+
+    /**
+     * ADR-067 addendum / ADR-078: {@code true} when this row is a <b>retained last-known snapshot</b>
+     * re-emitted because the live balance fetch (provider chain + RPC) failed for a candidate that
+     * resolved a nonzero net-flow — never a fresh authoritative reading. The refresh path keeps the
+     * prior {@code quantity} and prior {@code capturedAt} (it does <b>not</b> backfill {@code
+     * capturedAt} to the current capture time), so the read model can (a) distinguish a transient
+     * capture miss from an authoritative on-chain zero and (b) bound fallback staleness. The dashboard
+     * covered-quantity-weighted AVCO raises a coverage/health flag for such buckets instead of
+     * silently dropping the lot. {@code null}/{@code false} marks a fresh authoritative capture.
+     */
+    private Boolean captureFallback;
 }

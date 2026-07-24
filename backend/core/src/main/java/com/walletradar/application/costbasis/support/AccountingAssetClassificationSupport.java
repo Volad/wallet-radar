@@ -3,6 +3,7 @@ package com.walletradar.application.costbasis.support;
 import com.walletradar.application.pricing.domain.CanonicalAssetCatalog;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 
 import java.util.Locale;
 import java.util.Map;
@@ -27,9 +28,10 @@ public final class AccountingAssetClassificationSupport {
             "VBETH",
             // BTC C1
             "BTC", "WBTC", "AARBWBTC", "AETHWBTC", "ALINWBTC", "AMANWBTC", "AZKSWBTC", "ABASWBTC", "AOPTWBTC",
-            // AVAX / SOL / MNT native wrappers (not staked derivatives)
+            // AVAX / SOL / MNT / TON native wrappers (not staked derivatives)
             "AVAX", "WAVAX", "AAVAWAVAX",
             "SOL",
+            "TON",
             "MNT", "WMNT", "AMANMNT", "AMANWMNT",
             // Stable / other families already 1:1 within family
             "USDC", "USDBC", "AAVAUSDC", "AMANUSDC", "AARBUSDC", "AETHUSDC", "ABASUSDC", "AOPTUSDC", "AZKSUSDC",
@@ -38,6 +40,10 @@ public final class AccountingAssetClassificationSupport {
             "DEUSD", "EDEUSD", "USDE", "USDE0",
             "EWSTUSR", "WSTUSR",
             "ARB", "AARBARB",
+            // ZK family: AZKSZK is the Aave-zkSync aToken, a 1:1 redeemable receipt of native ZK
+            // (mirrors ARB/AARBARB) — folds the lending receipt into the ZK spot family rather than
+            // stranding it on its raw aToken contract.
+            "ZK", "AZKSZK",
             // METH family: CMETH is a 1:1 Bybit-issued receipt for METH staking deposits and
             // shares the METH cost-basis pool (ADR-054 C1 — not a separately-priced C2 asset).
             "CMETH"
@@ -79,6 +85,7 @@ public final class AccountingAssetClassificationSupport {
             Map.entry("WAVAX", "FAMILY:AVAX"),
             Map.entry("AAVAWAVAX", "FAMILY:AVAX"),
             Map.entry("SOL", "FAMILY:SOL"),
+            Map.entry("TON", "FAMILY:TON"),
             Map.entry("MNT", "FAMILY:MNT"),
             Map.entry("WMNT", "FAMILY:MNT"),
             Map.entry("AMANMNT", "FAMILY:MNT"),
@@ -116,6 +123,8 @@ public final class AccountingAssetClassificationSupport {
             Map.entry("WSTUSR", "FAMILY:WSTUSR"),
             Map.entry("ARB", "FAMILY:ARB"),
             Map.entry("AARBARB", "FAMILY:ARB"),
+            Map.entry("ZK", "FAMILY:ZK"),
+            Map.entry("AZKSZK", "FAMILY:ZK"),
             Map.entry("CMETH", "FAMILY:METH")
     );
 
@@ -135,6 +144,68 @@ public final class AccountingAssetClassificationSupport {
             Map.entry("YVVBETH", "FAMILY:YVVBETH"),
             Map.entry("SAVAX", "FAMILY:SAVAX"),
             Map.entry("BBSOL", "FAMILY:BBSOL")
+    );
+
+    /** ADR-083 RC-2: trailing Pendle maturity suffix ({@code -DDMONYYYY}), anchored to end. */
+    private static final java.util.regex.Pattern MATURITY_SUFFIX =
+            java.util.regex.Pattern.compile("-\\d{1,2}[A-Z]{3}\\d{4}$");
+
+    /** ADR-083: staking cluster identities used by cluster-carry (PnL=0 intra-cluster conversions). */
+    private static final String CLUSTER_ETH_STAKING = "CLUSTER:ETH_STAKING";
+    private static final String CLUSTER_SOL_STAKING = "CLUSTER:SOL_STAKING";
+    private static final String CLUSTER_AVAX_STAKING = "CLUSTER:AVAX_STAKING";
+
+    /**
+     * ADR-083: single source of truth for staking-cluster membership — {@code FAMILY:*} accounting
+     * identity → cluster. Both normalization ({@link #normalizationClusterForSymbol(String)}) and
+     * replay carry-vs-realize ({@link #isIntraClusterConversion(NormalizedTransaction)}) resolve
+     * cluster membership through this table so they cannot drift. Extending membership means adding
+     * a family here (never editing the C1/C2 identity sets), which keeps {@code accountingFamilyIdentity}
+     * on ledger points stable (auditor R4 blast-radius containment).
+     */
+    private static final Map<String, String> FAMILY_TO_CLUSTER = Map.ofEntries(
+            // ETH staking cluster
+            Map.entry("FAMILY:ETH", CLUSTER_ETH_STAKING),
+            Map.entry("FAMILY:METH", CLUSTER_ETH_STAKING),
+            Map.entry("FAMILY:STETH", CLUSTER_ETH_STAKING),
+            Map.entry("FAMILY:WSTETH", CLUSTER_ETH_STAKING),
+            Map.entry("FAMILY:RETH", CLUSTER_ETH_STAKING),
+            Map.entry("FAMILY:CBETH", CLUSTER_ETH_STAKING),
+            Map.entry("FAMILY:OSETH", CLUSTER_ETH_STAKING),
+            Map.entry("FAMILY:EETH", CLUSTER_ETH_STAKING),
+            Map.entry("FAMILY:WEETH", CLUSTER_ETH_STAKING),
+            Map.entry("FAMILY:EWEETH", CLUSTER_ETH_STAKING),
+            Map.entry("FAMILY:EWETH", CLUSTER_ETH_STAKING),
+            Map.entry("FAMILY:EZETH", CLUSTER_ETH_STAKING),
+            Map.entry("FAMILY:RSETH", CLUSTER_ETH_STAKING),
+            Map.entry("FAMILY:YVVBETH", CLUSTER_ETH_STAKING),
+            // SOL staking cluster
+            Map.entry("FAMILY:SOL", CLUSTER_SOL_STAKING),
+            Map.entry("FAMILY:BBSOL", CLUSTER_SOL_STAKING),
+            // AVAX staking cluster
+            Map.entry("FAMILY:AVAX", CLUSTER_AVAX_STAKING),
+            Map.entry("FAMILY:SAVAX", CLUSTER_AVAX_STAKING)
+    );
+
+    /**
+     * ADR-083: supplemental cluster membership for staking derivatives whose continuity family
+     * identity resolves to a <em>raw contract / mint address</em> (they sit outside the C1/C2
+     * registry, so the {@code FAMILY:*} table above cannot key them). Contract-first resolution
+     * ({@link #stakingClusterForFlow(String, String)}) runs first; this symbol map is the explicit,
+     * reviewable fallback for those members only. Keyed on {@link #classificationSymbol(String)}.
+     */
+    private static final Map<String, String> SUPPLEMENTAL_CLUSTER_BY_SYMBOL = Map.ofEntries(
+            // SOL LSTs keyed on their SPL mint (not in C1/C2)
+            Map.entry("MSOL", CLUSTER_SOL_STAKING),
+            Map.entry("VSOL", CLUSTER_SOL_STAKING),
+            Map.entry("BSOL", CLUSTER_SOL_STAKING),
+            Map.entry("BBSOL", CLUSTER_SOL_STAKING),
+            Map.entry("JITOSOL", CLUSTER_SOL_STAKING),
+            // Pendle principal tokens keyed on their PT contract (not in C1/C2)
+            Map.entry("PT-CMETH", CLUSTER_ETH_STAKING),
+            Map.entry("PT-ETH", CLUSTER_ETH_STAKING),
+            // Aave aAvaSAVAX (also resolved via FAMILY:SAVAX supplemental, kept here for symbol-only paths)
+            Map.entry("AAVASAVAX", CLUSTER_AVAX_STAKING)
     );
 
     private AccountingAssetClassificationSupport() {
@@ -244,6 +315,28 @@ public final class AccountingAssetClassificationSupport {
         return false;
     }
 
+    /**
+     * D1: {@code true} when this row is a cross-canonical <b>staking/vault identity change</b> — a
+     * staking/vault deposit or withdraw whose principal legs dispose one canonical asset and acquire
+     * a distinct one (e.g. ETH → mETH, or a vault deposit minting a differently-identified share).
+     * Same-family carries (e.g. mETH → cmETH, both {@code FAMILY:METH}) return {@code false}.
+     *
+     * <p>Single source of truth used by normalization to stamp
+     * {@link NormalizedTransaction#getCrossCanonicalStakingConversion()}, which the pricing layer then
+     * reads to force market pricing on both principal legs (ADR-054 §9). No symbol/contract list is
+     * hardcoded here beyond the existing C1/C2 identity registry.</p>
+     */
+    public static boolean isCrossCanonicalStakingVaultConversion(NormalizedTransaction transaction) {
+        if (transaction == null || transaction.getType() == null) {
+            return false;
+        }
+        return switch (transaction.getType()) {
+            case STAKING_DEPOSIT, STAKING_WITHDRAW, VAULT_DEPOSIT, VAULT_WITHDRAW ->
+                    hasCrossCanonicalIdentityPrincipalPair(transaction);
+            default -> false;
+        };
+    }
+
     public static boolean sharesCanonicalTokenIdentity(
             String leftSymbol,
             String leftContract,
@@ -274,40 +367,166 @@ public final class AccountingAssetClassificationSupport {
         return null;
     }
 
+    /**
+     * ADR-083: cluster identity for a {@code FAMILY:*} accounting family, or {@code null} for any
+     * family not in a staking cluster. Single source of truth ({@link #FAMILY_TO_CLUSTER}) shared by
+     * normalization and replay carry decisions.
+     */
+    public static String clusterForFamilyIdentity(String familyIdentity) {
+        if (familyIdentity == null || familyIdentity.isBlank()) {
+            return null;
+        }
+        return FAMILY_TO_CLUSTER.get(familyIdentity);
+    }
+
+    /**
+     * ADR-083: contract-first staking-cluster resolution for a flow's asset. Resolves the flow's
+     * accounting family via {@link AccountingAssetFamilySupport#continuityIdentity(String, String)}
+     * (contract-first, LP-receipt-aware) then maps family → cluster; falls back to the explicit
+     * {@link #SUPPLEMENTAL_CLUSTER_BY_SYMBOL} map only for staking members whose family identity is a
+     * raw contract/mint (outside the C1/C2 registry). Returns {@code null} for any non-cluster asset
+     * (fiat/stable/BTC/other, LP receipts, unmapped instruments) — the fail-safe that keeps
+     * cluster↔non-cluster and cross-cluster moves on the realize path.
+     */
+    public static String stakingClusterForFlow(String assetSymbol, String assetContract) {
+        String familyIdentity = AccountingAssetFamilySupport.continuityIdentity(assetSymbol, assetContract);
+        String byFamily = clusterForFamilyIdentity(familyIdentity);
+        if (byFamily != null) {
+            return byFamily;
+        }
+        String base = classificationSymbol(assetSymbol);
+        if (base.isBlank()) {
+            return null;
+        }
+        String bySymbol = SUPPLEMENTAL_CLUSTER_BY_SYMBOL.get(base);
+        if (bySymbol != null) {
+            return bySymbol;
+        }
+        // ADR-083 RC-2: Pendle principal tokens carry a maturity suffix (e.g. PT-CMETH-18SEP2025) that
+        // classificationSymbol does not strip, so the SUPPLEMENTAL_CLUSTER_BY_SYMBOL key (PT-CMETH)
+        // misses. Retry on the maturity-stripped base. Scoped to cluster resolution only so pool /
+        // accounting-family identity (which must stay maturity-specific) is unaffected.
+        String maturityStripped = stripMaturitySuffix(base);
+        return maturityStripped.equals(base) ? null : SUPPLEMENTAL_CLUSTER_BY_SYMBOL.get(maturityStripped);
+    }
+
+    /**
+     * ADR-083 replay predicate: {@code true} when a conversion is an <b>intra-cluster</b> form change
+     * that must carry basis (PnL=0) rather than realize. Requirements:
+     * <ul>
+     *   <li>type is a conversion type ({@code STAKING_DEPOSIT}/{@code STAKING_WITHDRAW}/
+     *       {@code VAULT_DEPOSIT}/{@code VAULT_WITHDRAW}/{@code SWAP});</li>
+     *   <li>principals contain both an outbound (−) and an inbound (+) leg;</li>
+     *   <li>every principal leg resolves (contract-first) to the <b>same non-null</b> staking cluster;</li>
+     *   <li>no principal leg is non-cluster (a fiat/stable/BTC/other or second-cluster principal ⇒ realize).</li>
+     * </ul>
+     * For {@code SWAP} the conversion must additionally be genuinely cross-canonical
+     * ({@link #hasCrossCanonicalIdentityPrincipalPair(NormalizedTransaction)}): same-canonical-identity
+     * swaps (e.g. WETH↔ETH, WAVAX↔AVAX) stay on the family-equivalent same-family swap path, which
+     * carries basis with its own dust-fragment ratio guard. Single-pass and type-gated for hot-path
+     * SWAP cost.
+     */
+    public static boolean isIntraClusterConversion(NormalizedTransaction transaction) {
+        if (transaction == null
+                || transaction.getType() == null
+                || transaction.getFlows() == null
+                || transaction.getFlows().isEmpty()) {
+            return false;
+        }
+        boolean typeGated = switch (transaction.getType()) {
+            case STAKING_DEPOSIT, STAKING_WITHDRAW, VAULT_DEPOSIT, VAULT_WITHDRAW, SWAP -> true;
+            default -> false;
+        };
+        if (!typeGated) {
+            return false;
+        }
+        // ADR-083 RC-1: exclude only a *provably same-canonical-token* swap (WETH↔ETH, WAVAX↔AVAX),
+        // which belongs on the same-family swap path. The former C1/C2-only pre-gate
+        // (hasCrossCanonicalIdentityPrincipalPair) rejected any swap whose leg identity is unknown to
+        // the registry (Pendle PT, Solana SPL LSTs, Aave aTokens) *before* the contract-first cluster
+        // test could run, silently realizing genuine intra-cluster conversions. We now defer to the
+        // per-leg cluster loop below whenever the same-token identity cannot be proven.
+        if (transaction.getType() == NormalizedTransactionType.SWAP
+                && isSameCanonicalTokenIdentitySwap(transaction)) {
+            return false;
+        }
+        String cluster = null;
+        boolean hasOutbound = false;
+        boolean hasInbound = false;
+        for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
+            if (!isPrincipalFlow(flow)) {
+                continue;
+            }
+            String flowCluster = stakingClusterForFlow(flow.getAssetSymbol(), flow.getAssetContract());
+            if (flowCluster == null) {
+                return false;
+            }
+            if (cluster == null) {
+                cluster = flowCluster;
+            } else if (!cluster.equals(flowCluster)) {
+                return false;
+            }
+            if (flow.getQuantityDelta().signum() < 0) {
+                hasOutbound = true;
+            } else if (flow.getQuantityDelta().signum() > 0) {
+                hasInbound = true;
+            }
+        }
+        return cluster != null && hasOutbound && hasInbound;
+    }
+
+    /**
+     * ADR-083 RC-1: {@code true} only when a swap is a <b>provably same-canonical-token identity</b>
+     * move — every principal leg resolves (via the C1/C2 {@link #canonicalTokenIdentity}) to one and
+     * the same non-null identity, with both an outbound and an inbound leg (e.g. WETH→ETH, WAVAX→AVAX).
+     * These belong on the same-family swap path. When any principal leg's canonical identity is unknown
+     * (Pendle PT / Solana SPL LST / Aave aToken outside the registry), we cannot prove a same-token
+     * move and return {@code false}, letting the contract-first cluster test decide carry-vs-realize.
+     */
+    private static boolean isSameCanonicalTokenIdentitySwap(NormalizedTransaction transaction) {
+        String shared = null;
+        boolean hasOutbound = false;
+        boolean hasInbound = false;
+        for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
+            if (!isPrincipalFlow(flow)) {
+                continue;
+            }
+            String identity = canonicalTokenIdentity(flow.getAssetSymbol(), flow.getAssetContract());
+            if (identity == null || identity.isBlank()) {
+                return false;
+            }
+            if (shared == null) {
+                shared = identity;
+            } else if (!shared.equals(identity)) {
+                return false;
+            }
+            if (flow.getQuantityDelta().signum() < 0) {
+                hasOutbound = true;
+            } else if (flow.getQuantityDelta().signum() > 0) {
+                hasInbound = true;
+            }
+        }
+        return shared != null && hasOutbound && hasInbound;
+    }
+
     public static String normalizationClusterForSymbol(String assetSymbol) {
         String base = classificationSymbol(assetSymbol);
         if (base.isBlank()) {
             return null;
         }
-        if (isC1SameAsset(base)) {
-            String family = C1_UNDERLYING_FAMILY.get(base);
-            if ("FAMILY:ETH".equals(family)) {
-                return "CLUSTER:ETH_STAKING";
-            }
-            if ("FAMILY:AVAX".equals(family)) {
-                return "CLUSTER:AVAX_STAKING";
-            }
-            if ("FAMILY:SOL".equals(family)) {
-                return "CLUSTER:SOL_STAKING";
-            }
-            // CMETH is C1(FAMILY:METH) — METH is an ETH staking derivative, so CMETH
-            // belongs to the ETH staking normalization cluster alongside METH.
-            if ("FAMILY:METH".equals(family)) {
-                return "CLUSTER:ETH_STAKING";
-            }
-        }
+        // ADR-083: symbol-only family resolution (this method's historical contract), then map
+        // through the single FAMILY→CLUSTER table so normalization and replay agree.
+        String family = null;
         if (isC2DistinctAsset(base)) {
-            if ("SAVAX".equals(base)) {
-                return "CLUSTER:AVAX_STAKING";
-            }
-            if ("BBSOL".equals(base)) {
-                return "CLUSTER:SOL_STAKING";
-            }
-            if (C2_CONTINUITY_FAMILY.containsKey(base)) {
-                return "CLUSTER:ETH_STAKING";
-            }
+            family = C2_CONTINUITY_FAMILY.get(base);
+        } else if (isC1SameAsset(base)) {
+            family = C1_UNDERLYING_FAMILY.get(base);
         }
-        return null;
+        String cluster = clusterForFamilyIdentity(family);
+        if (cluster != null) {
+            return cluster;
+        }
+        return SUPPLEMENTAL_CLUSTER_BY_SYMBOL.get(base);
     }
 
     static String classificationSymbol(String assetSymbol) {
@@ -347,6 +566,20 @@ public final class AccountingAssetClassificationSupport {
         }
         return (flow.getRole() == NormalizedLegRole.SELL && flow.getQuantityDelta().signum() < 0)
                 || (flow.getRole() == NormalizedLegRole.BUY && flow.getQuantityDelta().signum() > 0);
+    }
+
+    /**
+     * ADR-083 RC-2: strips a trailing Pendle-style maturity segment ({@code -DDMONYYYY}, e.g.
+     * {@code -18SEP2025}) from a normalized symbol so {@code PT-CMETH-18SEP2025} → {@code PT-CMETH}.
+     * The pattern is date-shaped (1–2 digits, 3 letters, 4 digits) and anchored to the end, so it does
+     * not touch ordinary hyphenated symbols. Returns the input unchanged when no maturity suffix is
+     * present.
+     */
+    private static String stripMaturitySuffix(String symbol) {
+        if (symbol == null || symbol.isBlank()) {
+            return symbol;
+        }
+        return MATURITY_SUFFIX.matcher(symbol).replaceAll("");
     }
 
     private static boolean isEulerIndexedSuffix(String suffix) {

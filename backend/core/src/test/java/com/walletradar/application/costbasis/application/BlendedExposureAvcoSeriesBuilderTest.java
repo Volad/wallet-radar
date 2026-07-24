@@ -719,7 +719,196 @@ class BlendedExposureAvcoSeriesBuilderTest {
         }
     }
 
+    @Nested
+    @DisplayName("§6 RM-1 same-family CARRY corridor fold")
+    class CarryCorridorFold {
+
+        private static final java.time.Instant T1 = java.time.Instant.parse("2026-04-05T10:01:00Z");
+
+        @Test
+        @DisplayName("§6.1 same-family CARRY_OUT→CARRY_IN keeps the blended denominator whole (no $0 drop between legs)")
+        void carryCorridorKeepsDenominatorWholeBetweenLegs() {
+            // ETH parked out via a cross-wallet/cross-chain internal transfer (or bridge-out): the liquid
+            // pool drains to 0 between the OUT and the IN legs. Before RM-1 the blended line dropped to a
+            // false $0/UNAVAILABLE in that window; now the CARRY_OUT is folded so the denominator holds.
+            BlendedExposureAvcoSeriesBuilder.BlendedSeriesSession session = builder.newSession(ETH, List.of(
+                    carryOut("bridge:custody-roundtrip:0xabc", "txOut", 1L, "1", "0", "2851", "2851"),
+                    carryIn("bridge:custody-roundtrip:0xabc", "txIn", 2L, "1", "0", "2851", "2851")
+            ));
+
+            session.applyEvent(List.of("txOut"));
+            // In-flight: liquid drained to 0 (spot line would break, ADR-031) but blended holds.
+            BlendedExposureAvcoSeriesBuilder.BlendedPoint inFlight =
+                    session.blend(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
+            assertThat(inFlight.avcoKind()).isEqualTo("PRIMARY_FLOW");
+            assertThat(inFlight.coveredQuantity()).isEqualByComparingTo("1");
+            assertThat(inFlight.marketAvco()).isEqualByComparingTo("2851");
+
+            // Return leg closes the corridor → parked empty → blended == spot (no double-count).
+            session.applyEvent(List.of("txIn"));
+            BlendedExposureAvcoSeriesBuilder.BlendedPoint afterReturn =
+                    session.blend(new BigDecimal("1"), new BigDecimal("2851"), new BigDecimal("2851"));
+            assertThat(afterReturn.coveredQuantity()).isEqualByComparingTo("1");
+            assertThat(afterReturn.marketAvco()).isEqualByComparingTo("2851");
+        }
+
+        @Test
+        @DisplayName("§6.2 internal transfer with no correlationId folds on the shared lifecycleChainId")
+        void internalTransferFoldsOnLifecycleChainId() {
+            BlendedExposureAvcoSeriesBuilder.BlendedSeriesSession session = builder.newSession(ETH, List.of(
+                    carryOutChain("chain:internal:1", "txOut", 1L, "1", "0", "2000", "2000"),
+                    carryInChain("chain:internal:1", "txIn", 2L, "1", "0", "2000", "2000")
+            ));
+
+            session.applyEvent(List.of("txOut"));
+            BlendedExposureAvcoSeriesBuilder.BlendedPoint inFlight =
+                    session.blend(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
+            assertThat(inFlight.avcoKind()).isEqualTo("PRIMARY_FLOW");
+            assertThat(inFlight.coveredQuantity()).isEqualByComparingTo("1");
+            assertThat(inFlight.marketAvco()).isEqualByComparingTo("2000");
+
+            session.applyEvent(List.of("txIn"));
+            BlendedExposureAvcoSeriesBuilder.BlendedPoint afterReturn =
+                    session.blend(new BigDecimal("1"), new BigDecimal("2000"), new BigDecimal("2000"));
+            assertThat(afterReturn.coveredQuantity()).isEqualByComparingTo("1");
+        }
+
+        @Test
+        @DisplayName("§6.3 lending-loop collateral CARRY_OUT stays folded until LENDING_LOOP_CLOSE CARRY_IN")
+        void lendingLoopCollateralStaysFoldedUntilClose() {
+            // 0xcb8483-style loop: 0.919 ETH collateral CARRY_OUT on LENDING_LOOP_OPEN, closed on the
+            // LENDING_LOOP_CLOSE CARRY_IN. No lending-loop exclusion in the fold path.
+            BlendedExposureAvcoSeriesBuilder.BlendedSeriesSession session = builder.newSession(ETH, List.of(
+                    carryOut("lending-loop:0xcb8483", "open", 1L, "0.919", "0", "3987", "3987"),
+                    carryIn("lending-loop:0xcb8483", "close", 2L, "0.919", "0", "3987", "3987")
+            ));
+
+            session.applyEvent(List.of("open"));
+            // Collateral parked: liquid drained but the collateral is folded back in.
+            BlendedExposureAvcoSeriesBuilder.BlendedPoint whileParked =
+                    session.blend(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
+            assertThat(whileParked.avcoKind()).isEqualTo("PRIMARY_FLOW");
+            assertThat(whileParked.coveredQuantity()).isEqualByComparingTo("0.919");
+
+            session.applyEvent(List.of("close"));
+            BlendedExposureAvcoSeriesBuilder.BlendedPoint afterClose =
+                    session.blend(new BigDecimal("0.919"), new BigDecimal("3987"), new BigDecimal("3987"));
+            assertThat(afterClose.coveredQuantity()).isEqualByComparingTo("0.919"); // parked closed via CARRY_IN
+        }
+
+        @Test
+        @DisplayName("§6.4 C2 (weETH) CARRY is excluded from the blended FAMILY:ETH pool")
+        void c2CarryExcludedFromBlendedEthPool() {
+            BlendedExposureAvcoSeriesBuilder.BlendedSeriesSession session = builder.newSession(ETH, List.of(
+                    // A C2 (weETH) CARRY must NOT enter the blended FAMILY:ETH pool.
+                    carryOutSymbol("carry:weeth", "wtx1", 1L, "WEETH", "1", "0", "3100", "3100"),
+                    // A genuine C1 ETH CARRY DOES fold.
+                    carryOut("carry:eth", "wtx2", 2L, "1", "0", "2000", "2000")
+            ));
+
+            session.applyEvent(List.of("wtx1", "wtx2"));
+            BlendedExposureAvcoSeriesBuilder.BlendedPoint blended =
+                    session.blend(new BigDecimal("1"), new BigDecimal("2200"), new BigDecimal("2200"));
+
+            // Parked = only the ETH CARRY (covered 1, basis 2000). weETH contributed $0.
+            assertThat(blended.coveredQuantity()).isEqualByComparingTo("2");
+            assertThat(blended.marketAvco().multiply(blended.coveredQuantity(), MC))
+                    .isEqualByComparingTo("4200"); // 2200 spot + 2000 parked ETH only
+        }
+
+        @Test
+        @DisplayName("§6.5 terminal CARRY corridor with no matching return closes to zero (bridge leak)")
+        void terminalCarryWithNoReturnClosesToZero() {
+            BlendedExposureAvcoSeriesBuilder.BlendedSeriesSession session = builder.newSession(
+                    ETH,
+                    List.of(carryOut("bridge:lifi:0x585aefbf", "txOut", 1L, "0.01371", "0", "9.07", "9.07")),
+                    List.of(),
+                    List.of(),
+                    java.util.Map.of() // no open family-origin pool row for the leaked corridor
+            );
+
+            session.applyEvent(List.of("txOut"));
+            BlendedExposureAvcoSeriesBuilder.BlendedPoint afterPark =
+                    session.blend(new BigDecimal("1"), new BigDecimal("2000"), new BigDecimal("2000"));
+            assertThat(afterPark.coveredQuantity()).isEqualByComparingTo("1.01371");
+
+            // No return, no pool row → generalized terminal clamp closes the bridge-leak corridor to 0.
+            session.applyTerminalClamp();
+            BlendedExposureAvcoSeriesBuilder.BlendedPoint terminal =
+                    session.blend(new BigDecimal("1"), new BigDecimal("2000"), new BigDecimal("2000"));
+            assertThat(terminal.coveredQuantity()).isEqualByComparingTo("1"); // leak closed, not lingering
+            assertThat(terminal.marketAvco()).isEqualByComparingTo("2000");
+        }
+    }
+
     // ── fixtures ──────────────────────────────────────────────────────────────
+
+    private static AssetLedgerPoint carryOut(
+            String correlationId, String txId, long replaySequence,
+            String quantityDelta, String uncoveredQuantityDelta, String costBasisDeltaUsd, String netCostBasisDeltaUsd
+    ) {
+        AssetLedgerPoint point = base(correlationId, txId, replaySequence, "WETH", "wallet-a");
+        point.setBasisEffect(AssetLedgerPoint.BasisEffect.CARRY_OUT);
+        point.setQuantityDelta(new BigDecimal("-" + quantityDelta));
+        point.setUncoveredQuantityDelta(new BigDecimal(uncoveredQuantityDelta));
+        point.setCostBasisDeltaUsd(new BigDecimal("-" + costBasisDeltaUsd));
+        point.setNetCostBasisDeltaUsd(new BigDecimal("-" + netCostBasisDeltaUsd));
+        return point;
+    }
+
+    private static AssetLedgerPoint carryIn(
+            String correlationId, String txId, long replaySequence,
+            String quantityDelta, String uncoveredQuantityDelta, String costBasisDeltaUsd, String netCostBasisDeltaUsd
+    ) {
+        AssetLedgerPoint point = base(correlationId, txId, replaySequence, "WETH", "wallet-b");
+        point.setBasisEffect(AssetLedgerPoint.BasisEffect.CARRY_IN);
+        point.setQuantityDelta(new BigDecimal(quantityDelta));
+        point.setUncoveredQuantityDelta(new BigDecimal(uncoveredQuantityDelta));
+        point.setCostBasisDeltaUsd(new BigDecimal(costBasisDeltaUsd));
+        point.setNetCostBasisDeltaUsd(new BigDecimal(netCostBasisDeltaUsd));
+        return point;
+    }
+
+    private static AssetLedgerPoint carryOutSymbol(
+            String correlationId, String txId, long replaySequence, String symbol,
+            String quantityDelta, String uncoveredQuantityDelta, String costBasisDeltaUsd, String netCostBasisDeltaUsd
+    ) {
+        AssetLedgerPoint point = base(correlationId, txId, replaySequence, symbol, "wallet-a");
+        point.setBasisEffect(AssetLedgerPoint.BasisEffect.CARRY_OUT);
+        point.setQuantityDelta(new BigDecimal("-" + quantityDelta));
+        point.setUncoveredQuantityDelta(new BigDecimal(uncoveredQuantityDelta));
+        point.setCostBasisDeltaUsd(new BigDecimal("-" + costBasisDeltaUsd));
+        point.setNetCostBasisDeltaUsd(new BigDecimal("-" + netCostBasisDeltaUsd));
+        return point;
+    }
+
+    private static AssetLedgerPoint carryOutChain(
+            String lifecycleChainId, String txId, long replaySequence,
+            String quantityDelta, String uncoveredQuantityDelta, String costBasisDeltaUsd, String netCostBasisDeltaUsd
+    ) {
+        AssetLedgerPoint point = base(null, txId, replaySequence, "WETH", "wallet-a");
+        point.setLifecycleChainId(lifecycleChainId);
+        point.setBasisEffect(AssetLedgerPoint.BasisEffect.CARRY_OUT);
+        point.setQuantityDelta(new BigDecimal("-" + quantityDelta));
+        point.setUncoveredQuantityDelta(new BigDecimal(uncoveredQuantityDelta));
+        point.setCostBasisDeltaUsd(new BigDecimal("-" + costBasisDeltaUsd));
+        point.setNetCostBasisDeltaUsd(new BigDecimal("-" + netCostBasisDeltaUsd));
+        return point;
+    }
+
+    private static AssetLedgerPoint carryInChain(
+            String lifecycleChainId, String txId, long replaySequence,
+            String quantityDelta, String uncoveredQuantityDelta, String costBasisDeltaUsd, String netCostBasisDeltaUsd
+    ) {
+        AssetLedgerPoint point = base(null, txId, replaySequence, "WETH", "wallet-b");
+        point.setLifecycleChainId(lifecycleChainId);
+        point.setBasisEffect(AssetLedgerPoint.BasisEffect.CARRY_IN);
+        point.setQuantityDelta(new BigDecimal(quantityDelta));
+        point.setUncoveredQuantityDelta(new BigDecimal(uncoveredQuantityDelta));
+        point.setCostBasisDeltaUsd(new BigDecimal(costBasisDeltaUsd));
+        point.setNetCostBasisDeltaUsd(new BigDecimal(netCostBasisDeltaUsd));
+        return point;
+    }
 
     private static AssetLedgerPoint crossFamilyAcquire(
             String correlationId, String txId, long replaySequence,

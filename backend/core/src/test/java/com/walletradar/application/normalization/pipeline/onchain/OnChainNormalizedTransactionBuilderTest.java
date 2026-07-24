@@ -513,6 +513,149 @@ class OnChainNormalizedTransactionBuilderTest {
                 .satisfies(reference -> assertThat(reference.getString("tokenId")).isEqualTo("1"));
     }
 
+    // ------------------------------------------------------------------------------------------
+    // WS-8 (ADR-073/074): capability flags must survive ON_CHAIN_RECLASSIFICATION. Reclassification
+    // rebuilds every on-chain row through rebuildAfterReclassification(...), which previously stamped
+    // only EVM's receiptBearingCollateral and dropped the Solana flags stamped in
+    // SolanaNormalizedTransactionBuilder.build(). Asserting on the rebuild output (not just build())
+    // is the regression contract: the shared NormalizedCapabilityFlagStamper re-derives both flags
+    // from the preserved networkId + correlationId.
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("WS-8: Solana LP position keeps lpConcentrated=true and receiptBearingCollateral=false after reclassification rebuild")
+    void reclassificationRebuildReDerivesSolanaLpConcentratedFlag() {
+        RawTransaction rawTransaction = solanaRaw("SoLLpSig111", "SoWa11etAddress1111111111111111111111111111");
+        NormalizedTransaction existing = new NormalizedTransaction();
+        existing.setId(rawTransaction.getId());
+        existing.setCreatedAt(Instant.parse("2026-07-20T10:00:00Z"));
+        // Position-scoped LP correlation carried over from the initial Solana build.
+        existing.setCorrelationId("lp-position:solana:raydium-clmm:6FxDaS4KaRBUZJ2Xoi7iwzwExcY7QiJGLNwXAuqQcFpW");
+
+        NormalizedTransaction reclassified = builder.rebuildAfterReclassification(
+                existing,
+                rawTransaction,
+                classification(NormalizedTransactionType.LP_ENTRY),
+                Instant.parse("2026-07-20T12:00:00Z")
+        );
+
+        assertThat(reclassified.getCorrelationId())
+                .isEqualTo("lp-position:solana:raydium-clmm:6FxDaS4KaRBUZJ2Xoi7iwzwExcY7QiJGLNwXAuqQcFpW");
+        assertThat(reclassified.getLpConcentrated()).isTrue();
+        assertThat(reclassified.getReceiptBearingCollateral()).isFalse();
+    }
+
+    @Test
+    @DisplayName("WS-8: Solana Jupiter Lend borrow keeps receiptBearingCollateral=false (not concentrated LP) after reclassification rebuild")
+    void reclassificationRebuildReDerivesSolanaLendingReceiptFlag() {
+        RawTransaction rawTransaction = solanaRaw("SoLBorrowSig1", "SoWa11etAddress1111111111111111111111111111");
+        NormalizedTransaction existing = new NormalizedTransaction();
+        existing.setId(rawTransaction.getId());
+        existing.setCreatedAt(Instant.parse("2026-07-20T10:00:00Z"));
+        existing.setCorrelationId(
+                "solana:jupiter-lend:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v:SoWa11etAddress1111111111111111111111111111");
+
+        NormalizedTransaction reclassified = builder.rebuildAfterReclassification(
+                existing,
+                rawTransaction,
+                classification(NormalizedTransactionType.BORROW),
+                Instant.parse("2026-07-20T12:00:00Z")
+        );
+
+        assertThat(reclassified.getReceiptBearingCollateral()).isFalse();
+        assertThat(reclassified.getLpConcentrated()).isNull();
+    }
+
+    @Test
+    @DisplayName("WS-8: TON row keeps receiptBearingCollateral=false after reclassification rebuild")
+    void reclassificationRebuildReDerivesTonReceiptFlag() {
+        RawTransaction rawTransaction = new RawTransaction();
+        rawTransaction.setTxHash("ton-tx-hash-1");
+        rawTransaction.setNetworkId("TON");
+        rawTransaction.setWalletAddress("UQAbc0000000000000000000000000000000000000000");
+        rawTransaction.setRawData(new Document()
+                .append("timeStamp", "1700000000")
+                .append("transactionIndex", "0"));
+        rawTransaction.setId("ton-tx-hash-1:TON:UQAbc0000000000000000000000000000000000000000");
+
+        NormalizedTransaction existing = new NormalizedTransaction();
+        existing.setId(rawTransaction.getId());
+        existing.setCreatedAt(Instant.parse("2026-07-20T10:00:00Z"));
+
+        NormalizedTransaction reclassified = builder.rebuildAfterReclassification(
+                existing,
+                rawTransaction,
+                classification(NormalizedTransactionType.EXTERNAL_TRANSFER_IN),
+                Instant.parse("2026-07-20T12:00:00Z")
+        );
+
+        assertThat(reclassified.getReceiptBearingCollateral()).isFalse();
+        assertThat(reclassified.getLpConcentrated()).isNull();
+    }
+
+    @Test
+    @DisplayName("WS-8: EVM row keeps receiptBearingCollateral=true after reclassification rebuild")
+    void reclassificationRebuildKeepsEvmReceiptFlag() {
+        RawTransaction rawTransaction = new RawTransaction();
+        rawTransaction.setTxHash("0xevmreclass");
+        rawTransaction.setNetworkId("ARBITRUM");
+        rawTransaction.setWalletAddress(WALLET);
+        rawTransaction.setRawData(new Document()
+                .append("timeStamp", "1700000000")
+                .append("transactionIndex", "3")
+                .append("from", WALLET)
+                .append("to", "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .append("value", "0")
+                .append("txreceipt_status", "1")
+                .append("gasUsed", "21000")
+                .append("effectiveGasPrice", "5000000000"));
+        rawTransaction.setId("0xevmreclass:ARBITRUM:" + WALLET);
+
+        NormalizedTransaction existing = new NormalizedTransaction();
+        existing.setId(rawTransaction.getId());
+        existing.setCreatedAt(Instant.parse("2026-07-20T10:00:00Z"));
+
+        NormalizedTransaction reclassified = builder.rebuildAfterReclassification(
+                existing,
+                rawTransaction,
+                classification(NormalizedTransactionType.REPAY),
+                Instant.parse("2026-07-20T12:00:00Z")
+        );
+
+        assertThat(reclassified.getReceiptBearingCollateral()).isTrue();
+        assertThat(reclassified.getLpConcentrated()).isNull();
+    }
+
+    private static RawTransaction solanaRaw(String signature, String wallet) {
+        RawTransaction rawTransaction = new RawTransaction();
+        rawTransaction.setTxHash(signature);
+        rawTransaction.setNetworkId("SOLANA");
+        rawTransaction.setWalletAddress(wallet);
+        rawTransaction.setRawData(new Document()
+                .append("timeStamp", "1700000000")
+                .append("transactionIndex", "0"));
+        rawTransaction.setId(signature + ":SOLANA:" + wallet);
+        return rawTransaction;
+    }
+
+    private static OnChainClassificationResult classification(NormalizedTransactionType type) {
+        return new OnChainClassificationResult(
+                type,
+                NormalizedTransactionStatus.PENDING_PRICE,
+                ClassificationSource.HEURISTIC,
+                ConfidenceLevel.MEDIUM,
+                List.of(),
+                List.of(),
+                null,
+                false,
+                null,
+                false,
+                null,
+                null,
+                null
+        );
+    }
+
     private NormalizedTransaction.Flow flow(String symbol, String quantityDelta) {
         NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
         flow.setAssetSymbol(symbol);

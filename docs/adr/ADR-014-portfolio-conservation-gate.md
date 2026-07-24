@@ -159,6 +159,28 @@ expectedPnL = adjustedMtm − nec
 
 For the cycle/5 audit window all loans are closed (per `n19-defect-catalog.md` D-LOAN-ROUNDTRIP), so `totalLiabilityUsd = 0` and the simple formula in D2 suffices. The adjusted formula is what the gate MUST use when D2 ships alongside [ADR-012](ADR-012-borrow-liability-tracker.md).
 
+### D11. RC-T2 amendment — replay-safe promotion must not confirm dropped on-chain value (ADR-066)
+
+The replay-safe promotion path (`StatValidationService.promoteReplaySafeNeedsReview`
+and the fee-only branch of `validate`) previously confirmed any `NEEDS_REVIEW` row
+whose only non-zero flows were FEE legs, on the assumption that a fee-only row
+carries no economic value. That assumption fails for a non-EVM on-chain row whose
+**real economic value was observed but could not be booked** (e.g. a TON
+jetton/DeFi transfer with unavailable owner-addressed evidence): the row would be
+silently `CONFIRMED` as empty while its value is dropped, understating NEC/MtM and
+defeating the conservation gate's diagnostic role (§D7).
+
+RC-T2 gates the promotion strictly on that evidence condition: the TON normalizer
+stamps `TON_ONCHAIN_UNRESOLVED_VALUE` (`TonNormalizedTransactionBuilder`) when a
+non-zero raw value collapses to a fee-only / empty flow set. `StatValidationService`
+treats an `ON_CHAIN` row carrying that marker as **not** replay-safe and keeps it
+`NEEDS_REVIEW` (surfacing it for out-of-scope-DeFi review / partial-coverage flag).
+EVM rows never carry this marker, so EVM replay-safe promotion is byte-for-byte
+unchanged (regression asserted in `StatValidationServiceTest`
+`replaySafePromotionRejectsOnChainDroppedValueButStillPromotesEvmFeeOnly`). This is
+an amendment note to this ADR, not a standalone ADR; see ADR-066 for the per-family
+resolution SPI it ships with.
+
 ## Consequences
 
 ### Positive

@@ -46,23 +46,38 @@ Wallet `0xWALLET_A`, asset ETH family.
 
 ---
 
-## Example 5: Staking conversion realizes P&L — `ETH → cmETH → ETH`
+## Example 5: Intra-cluster staking conversion **carries** basis (PnL=0) — `ETH → cmETH → ETH`
 
-> **Target model — PLANNED, not yet implemented.** Per [eth-family-tracking-model plan](../tasks/eth-family-tracking-model-implementation-plan.md) §6.4 / §7b (decision P1). Under the *current* engine a value-accruing LST is carried 1:1 with no conversion PnL (see `STAKING_DEPOSIT` in [AVCO rules](../pipeline/cost-basis/02-avco-rules.md)); this example documents the accepted target behavior once the per-asset-pool model ships.
+> **Cluster-carry (ADR-083).** ETH and cmETH are **both** in `CLUSTER:ETH_STAKING`, so an
+> `ETH↔cmETH` form change is an **intra-cluster conversion**: it carries basis on both lanes with
+> **realized PnL = 0** (REALLOCATE_OUT/IN), *not* a disposal at market. This supersedes the earlier
+> realize-at-market model (ADR-054 §2) for intra-cluster conversions. Realization happens **only** on
+> an exit to a **non-cluster** asset (USDT/fiat/BTC) or a **cross-cluster** move. See `STAKING_DEPOSIT`
+> in [AVCO rules](../pipeline/cost-basis/02-avco-rules.md) and [ADR-083](../adr/ADR-083-cluster-carry-intra-cluster-conversions.md).
 
-cmETH is a **C2** value-accruing LST → its **own** cost-basis pool with its **own** market price. An `ETH↔cmETH` identity change is a **disposal + acquisition at market** (realizes P&L); it does **not** carry ETH's AVCO onto cmETH. A **same-token** move (cmETH corridor/bridge) still carries with no PnL.
+Lanes: **Market** (income booked at FMV) and **Net** (income booked at $0). On a carry both lanes move
+identically (no income event) and the disposed basis re-averages onto the acquired quantity.
 
-Lanes: **Market** (formerly "Tax" — income booked at FMV) and **Net** (income booked at $0). For pure market-priced conversions both lanes move identically.
+| Step | Event | Effect | Realized P&L | Resulting pool |
+|------|-------|--------|--------------|----------------|
+| 0 | BUY 1 ETH @ $2000 | ACQUIRE | — | ETH: 1.0, basis $2000, AVCO $2000 |
+| 1 | STAKE ETH→cmETH (1 ETH → 0.9709 cmETH) | REALLOCATE_OUT ETH / REALLOCATE_IN cmETH | **$0** | cmETH: 0.9709, basis **$2000** (carried), AVCO ≈$2060 |
+| 2 | UNSTAKE cmETH→ETH (0.9709 cmETH → 1.029 ETH) | REALLOCATE_OUT cmETH / REALLOCATE_IN ETH | **$0** | ETH: 1.029, basis **$2000** (carried), AVCO ≈$1944 |
+| 3 | SELL 1.029 ETH → 3600 USDT (exit to non-cluster) | DISPOSE | **+$1600** | ETH: 0; realized against carried $2000 basis |
 
-| Step | Event | Dispose @ market | Realized P&L (Market = Net) | Resulting pool |
-|------|-------|------------------|------------------|----------------|
-| 0 | BUY 1 ETH @ $2000 | — | — | ETH: 1.0, basis $2000, AVCO $2000 |
-| 1 | STAKE ETH→cmETH (ETH $3000 → 0.9709 cmETH @ ≈$3090) | 1 ETH @ $3000 | **+$1000** | cmETH: 0.9709, basis $3000, AVCO $3090 (fresh, = market) |
-| 2 | UNSTAKE cmETH→ETH (0.9709 cmETH @ ≈$3710 → 1.029 ETH @ $3500) | 0.9709 cmETH @ $3710 | **+$602** | ETH: 1.029, basis $3602, AVCO $3500 (fresh, = market) |
+**Conservation:** the $2000 ETH basis is preserved across every intra-cluster hop (Σ carry-out == Σ
+carry-in, PnL=0); the entire $1600 gain realizes **once**, at the exit to USDT — never phantom-realized
+on the internal form changes.
 
-**Conservation:** Σ realized P&L = $1000 + $602 = **$1602** = final value $3602 − initial $2000. ✓ ETH's $2000 AVCO is **never** carried onto cmETH.
+**Down-conversion caveat (ADR-040 amendment):** because the carry writes basis via `restoreToPosition`
+without a `min(market)` clamp, a carried lot may show `Net ≥ Market` — the disposed basis is preserved
+rather than written down. Basis conservation still holds.
 
-**Lane divergence appears only on income** (rebase / `REWARD_CLAIM` / lending interest), never on a market-priced conversion — e.g. a stETH rebase of +0.05 @ $2200 books $110 basis in the **Market** lane (AVCO ≈ stable) but $0 in the **Net** lane (Net AVCO drops → reward is pure future profit). The pre-model zero-cost path that added quantity at $0 basis in the AVCO-authoritative Market lane is removed.
+**Lane divergence appears only on income** (rebase / `REWARD_CLAIM` / lending interest / discrete
+in-cluster reward inflow), never on a carried conversion — e.g. a stETH rebase of +0.05 @ $2200 books
+$110 basis in the **Market** lane (AVCO ≈ stable) but $0 in the **Net** lane (Net AVCO drops → reward is
+pure future profit). A discrete reward inflow into the cluster (extra mETH with no paired outbound)
+enters at $0 basis = income (not a conversion).
 
 ## Example 6: Bybit Funding-History `Crypto Loans` — TON borrow → withdraw → deposit → repay
 

@@ -41,6 +41,7 @@ public class SessionSettingsCommandService {
     private final BackfillSegmentRepository backfillSegmentRepository;
     private final IntegrationSyncStatusService integrationSyncStatusService;
     private final ObjectMapper objectMapper;
+    private final com.walletradar.application.linking.pipeline.clarification.ExternalCustodyDestinationRegistry externalCustodyDestinationRegistry;
 
     public Optional<UserSession> overwriteSessionSettings(String sessionId, PutSessionSettingsRequest request) {
         if (sessionId == null || sessionId.isBlank()) {
@@ -75,6 +76,10 @@ public class SessionSettingsCommandService {
         session.setLastSeenAt(now);
         userSessionRepository.save(session);
 
+        // WS-5 (ADR-072): drop any cached custody-destination index so newly designated venues take
+        // effect on the next normalization/reclassification pass.
+        externalCustodyDestinationRegistry.invalidate(session.getId());
+
         trackedWalletProjectionService.replaceSessionWallets(previousWallets, normalizedWallets, now);
         Set<String> newUniverseKeys = sourceKeys(
                 session.getWallets(),
@@ -99,7 +104,55 @@ public class SessionSettingsCommandService {
                 request.showReconciliationWarnings() == null ? Boolean.TRUE : request.showReconciliationWarnings()
         );
         settings.setExternalVenues(normalizeExternalVenues(request.externalVenues()));
+        settings.setExternalCustodyDestinations(normalizeCustodyDestinations(request.externalCustodyDestinations()));
         return settings;
+    }
+
+    /**
+     * WS-5 (ADR-072): custody destinations are labeled counterparties, NOT universe members, so they
+     * are deliberately excluded from {@link #sourceKeys} (no universe sync) and never mirrored into
+     * {@code AccountingUniverse}. Normalization mirrors {@link #normalizeExternalVenues} for a
+     * canonical, de-duplicated per-address list.
+     */
+    private List<UserSession.ExternalCustodyDestination> normalizeCustodyDestinations(
+            List<PutSessionSettingsRequest.ExternalCustodyDestinationEntry> entries
+    ) {
+        if (entries == null || entries.isEmpty()) {
+            return new ArrayList<>();
+        }
+        Map<String, UserSession.ExternalCustodyDestination> merged = new LinkedHashMap<>();
+        for (PutSessionSettingsRequest.ExternalCustodyDestinationEntry entry : entries) {
+            if (entry == null || entry.address() == null || entry.address().isBlank()) {
+                continue;
+            }
+            NetworkId fallbackNetwork = (entry.networks() != null && !entry.networks().isEmpty())
+                    ? entry.networks().get(0)
+                    : NetworkId.ETHEREUM;
+            String canonical = NetworkAddressFormat.canonicalAddress(fallbackNetwork, entry.address());
+            if (canonical == null || canonical.isBlank()) {
+                continue;
+            }
+            UserSession.ExternalCustodyDestination destination = merged.computeIfAbsent(canonical, ignored -> {
+                UserSession.ExternalCustodyDestination created = new UserSession.ExternalCustodyDestination();
+                created.setAddress(canonical);
+                created.setNetworks(new ArrayList<>());
+                return created;
+            });
+            if (entry.label() != null && !entry.label().isBlank()) {
+                destination.setLabel(entry.label().trim());
+            }
+            if (entry.provider() != null && !entry.provider().isBlank()) {
+                destination.setProvider(entry.provider().trim().toUpperCase(Locale.ROOT));
+            }
+            LinkedHashSet<NetworkId> combinedNetworks = new LinkedHashSet<>(
+                    destination.getNetworks() == null ? List.of() : destination.getNetworks()
+            );
+            if (entry.networks() != null) {
+                combinedNetworks.addAll(entry.networks());
+            }
+            destination.setNetworks(new ArrayList<>(combinedNetworks));
+        }
+        return new ArrayList<>(merged.values());
     }
 
     private List<UserSession.ExternalVenue> normalizeExternalVenues(

@@ -31,13 +31,29 @@ Exact-asset identity at rest; **canonical-token identity** (ADR-054 C1/C2 regist
 (`AccountingAssetFamilySupport`) keys read-model rollup; C2 staked derivatives no longer roll into
 `FAMILY:ETH` (ADR-045 amendment).
 
-### C1 / C2 carry boundary (ADR-054)
+### C1 / C2 carry boundary (ADR-054, amended by ADR-083)
 
 | Class | Examples | Identity | Move between classes |
 |---|---|---|---|
 | **C1** — same underlying, 1:1 fixed rate | ETH, WETH, Aave `a*WETH`, VBETH; WBTC, `a*WBTC` | underlying family (`FAMILY:ETH`, `FAMILY:BTC`, …) | REALLOCATE, no P&amp;L |
-| **C2** — distinct market asset | STETH, WSTETH, CMETH, WEETH, EWETH, YVVBETH; sAVAX, BBSOL | own per-token family (`FAMILY:CMETH`, …) | DISPOSE + ACQUIRE at market, realize P&amp;L |
+| **C2** — distinct market asset | STETH, WSTETH, CMETH, WEETH, EWETH, YVVBETH; sAVAX, BBSOL | own per-token family (`FAMILY:CMETH`, …) | **Intra-cluster** (same staking cluster) → **cluster-carry** REALLOCATE, no P&amp;L (ADR-083). **Cluster↔non-cluster / cross-cluster** → DISPOSE + ACQUIRE at market, realize P&amp;L |
 | **Same-token custody** (both classes) | cmETH CEX→wallet corridor, C2 bridge | unchanged | REALLOCATE, no P&amp;L |
+
+### Staking-cluster carry (ADR-083)
+
+Beyond the C1/C2 identity boundary, replay groups staking assets into **clusters**
+(`CLUSTER:ETH_STAKING`, `CLUSTER:SOL_STAKING`, `CLUSTER:AVAX_STAKING`) via a single
+`FAMILY→CLUSTER` table in `AccountingAssetClassificationSupport` (resolution is contract-first through
+`stakingClusterForFlow`, with a supplemental symbol map for members whose family is a raw mint/contract
+— mSOL/vSOL/bSOL/jitoSOL, PT-cmETH/PT-ETH, aAvaSAVAX). A conversion whose **every** principal leg
+resolves to the **same non-null cluster** and touches **no** non-cluster principal
+(`isIntraClusterConversion`) is a **cluster-carry**: it carries the disposed basis onto the acquired
+leg on **both** lanes with **realized PnL = 0** (ETH↔mETH, AVAX↔sAVAX, SOL↔mSOL, cmETH↔PT-cmETH,
+yvVBETH↔vBETH, and the degenerate same-family METH↔CMETH). It reuses the REALLOCATE engine via the
+`CLUSTER_CARRY` route (formerly `LIQUID_STAKING`), extended to `STAKING_*`/`VAULT_*` and cross-canonical
+intra-cluster `SWAP`. Realization is reserved for **exits to a non-cluster asset** (USDT/fiat/BTC/other)
+and **cross-cluster** moves; unmapped instruments (e.g. GMX GM ETH/USD) resolve to a null cluster and
+realize (fail-safe). See ADR-083.
 
 ## Counterparty basis pools (ADR-015)
 
@@ -68,7 +84,56 @@ Used for LP receipt routing and protocol custody where wallet-level AVCO alone l
 Per-position multi-asset buckets for:
 
 - `lp-position:<network>:<nfpmContractLowercased>:<tokenId>` (Uniswap V3/V4 CL and same-interface forks)
-- `pendle-lp:<network>:<market>` (Pendle)
+- `lp-position:solana:meteora-dlmm:<positionPda>` (Solana Meteora DLMM NFT positions, RC-S-LP / ADR-063)
+- `lp-position:solana:meteora-damm:<poolAddress>:<walletLower>` (Solana Meteora DAMM / MLP fungible receipt, ADR-081)
+- `pendle-lp:<network>:<marketOrSyAddress>:<walletLower>` (Pendle, per market + per wallet — ADR-081, supersedes the ADR-023 D3 symbol-only key)
+
+**LP receipts are non-priced (ADR-081):** the LP receipt token itself (`PENDLE-LPT`,
+`eqbPENDLE-LPT`/`pnpPENDLE-LPT` staked wrappers, Meteora `MLP`, CL `LP-RECEIPT:*`) resolves to the
+`FAMILY:LP_RECEIPT` continuity identity and is **never priced or disposed as inventory**. Its economic
+value lives in the underlying leg(s) and the `lp_receipt_basis_pools` bucket — carried on entry,
+restored on exit — so a receipt movement (mint, farm stake/unstake, burn) is a **non-priced
+`TRANSFER`** (never role `SELL`/`BUY`). A staked-wrapper exit closes the position **by link** when
+`eqb<X>`/`pnp<X>` is mapped to the base `<X>` and both entry and wrapped exit resolve the **same**
+market/pool key (ADR-081). Closure is anchored, secondarily, to an authoritative effective-family
+on-chain zero (ADR-080), never to a bare wallet balance.
+
+**Wrapped-exit drain vs. hidden+isolated (ADR-081, bounded limitation):** when a Pendle position is
+staked into an Equilibria/Penpie wrapper and later closed by a `zapOutV3SingleToken`, the exit
+transaction only exposes the **wrapper** leg (`eqb<X>`/`pnp<X>`) and never the base receipt contract.
+Netting the base `PENDLE-LPT` quantity to exactly zero (a booked `−PENDLE-LPT` disposal) therefore
+requires a deterministic **wrapper→base receipt-contract registry**, which is a separate follow-up.
+Until then, any residual base `PENDLE-LPT` is **hidden and isolated**, not double-counted: it carries
+`FAMILY:LP_RECEIPT`, so it is excluded from (1) the dashboard spot surface, (2) every priced
+spot/family AVCO and covered-quantity aggregation, and therefore (3) the portfolio total value. Its
+carried basis lives only in `lp_receipt_basis_pools` (there is no priced `FAMILY:LP_RECEIPT` page), so
+there is no double count against the pool. `cmETH` is a **separate C1 family** (`FAMILY:METH`) and
+keeps its ADR-047 LP-cost basis — it is never folded into `FAMILY:LP_RECEIPT` and never spikes.
+
+**Solana Meteora DLMM position identity (RC-S-LP, ADR-063):** DLMM positions are NFT-based with no
+fungible LP token minted to the wallet, so entry↔exit continuity cannot rely on a receipt-token
+flow. `SolanaLpPositionResolver` keys the pool on the on-chain **position account (PDA)** — the
+first account of the largest Meteora DLMM `addLiquidity*` / `removeLiquidity*` instruction in the
+Helius payload. The same PDA appears on the entry and the exit, so the position never splits, and no
+read-path RPC is required. Solana `LP_ENTRY` / `LP_EXIT` principal legs are normalized as
+basis-carrying `TRANSFER`s (never market `BUY`/`SELL`) so this receipt-pool path can deposit and
+restore the basis. Hawksight-wrapped shapes (LP principal custodied inside a Hawksight vault, not the
+wallet) resolve to no position and instead ride the generic family-continuity bucket — a documented,
+bounded limitation, never a fabricated per-position basis.
+
+**TON native / jetton ledger points (RC-T1, ADR-064 / ADR-066):** TON native and jetton transfers
+become ordinary basis-affecting ledger points once RC-T1 fixes canonical address equality. An
+`EXTERNAL_TRANSFER_IN` from an unknown-external peer books an ACQUIRE at market; an
+`EXTERNAL_TRANSFER_OUT` books a DISPOSE; an own↔own move is promoted to `INTERNAL_TRANSFER` and
+carries basis (no phantom disposal/acquisition). A CEX (e.g. Bybit) inbound/outbound is **not** an
+external-capital market event — its `counterpartyType=CEX` routes it through the cross-system pool,
+not a basis reset. Jetton quantities use the resolved decimals (USDT-TON = 6, not the native 9), so
+the ledger quantity reconciles with on-chain balances. **Counterparty as a stat prerequisite:** a
+TON row cannot enter confirmed replay until `TonCounterpartyResolver` sets `counterpartyType` on the
+transaction and every non-fee flow (`STAT_COUNTERPARTY_TYPE_MISSING` / `FLOW_COUNTERPARTY_MISSING`
+otherwise keep it `NEEDS_REVIEW`). A row that dropped real on-chain value (fee-only flow +
+`TON_ONCHAIN_UNRESOLVED_VALUE`) stays `NEEDS_REVIEW` per RC-T2 (ADR-014 §D11) rather than confirming
+empty.
 
 **Pool identity is contract-keyed (RC-1, ADR-018):** the CL-NFT pool key embeds the
 NonfungiblePositionManager **contract address** (`rawData.to`), not the protocol slug. This is
@@ -119,6 +184,66 @@ Once the entry routes to the receipt pool (keyed `FAMILY:ETH`), the existing exi
 `restoreInboundFromLpReceiptPool` carries the basis onto the returned vbETH with no exit-side change.
 
 **Exit attribution (ADR-022):** Each returned asset draws basis from its own pool; cross-pool carry only for one-sided (out-of-range) exits. With contract-keyed identity unifying the pool, a one-sided ETH exit restores the combined ETH+USDC receipt-pool basis onto the returned ETH (no new exit code), and the USDC leg drains to 0 with no fabricated separate USDC ACQUIRE.
+
+## Compounding LP/vault receipts: fee accrual carried in principal
+
+> **Convention (ADR-040 dual-lane; verified 2026-07-22, snapshot 12,384 ledger points / 163 pools).**
+> For **compounding** receipt families — Pendle PT/LP, GMX GM/GLV, Katana `vbETH` vaults, and
+> Aura/Balancer boosted pools — swap-fee and vault yield accrual is **carried inside the principal
+> receipt** and realized only through AVCO when the returned principal is later sold. It is **not**
+> split into a separate fee-income leg at exit. Only **explicit reward-token emissions** are separable
+> **zero-cost income**. This is intentional and correct — not a bundling bug.
+
+### Why compounding differs from V3/Slipstream/V4
+
+The exit-time fee split (see [Exit attribution](#exit-attribution-adr-022) and R1/R4 of
+`docs/tasks/lp-exit-fee-and-rebalancing-implementation-plan.md`) applies to venues that expose an
+**explicit fee amount** at exit:
+
+| Venue class | Fee signal at exit | Treatment |
+|---|---|---|
+| Uniswap/Pancake **V3**, Slipstream (Velodrome/Aerodrome) | `Collect.amount − DecreaseLiquidity.amount` (V3 events) | Split principal vs fee; fee booked as **zero-cost income**, principal carried (Option B) |
+| Uniswap **V4** / Pancake Infinity CL | principal derived from `liquidityDelta`+`sqrtPrice`; `fee = received − principal` | Same split (R4) |
+| **Compounding** (Pendle PT/LP, GMX GM/GLV, Katana `vbETH`, Aura/Balancer boosted) | **none** — fees are auto-reinvested into the receipt's redemption value | **No split.** Accrual rides in the principal receipt; realized via AVCO on later disposal |
+
+Compounding receipts have no `Collect`-equivalent because the protocol folds accrued swap fees (and,
+for Balancer V3 boosted pools, underlying Aave lending yield on ERC-4626 stata stables) back into the
+receipt token's value. There is no observable per-exit fee amount to peel off, and manufacturing one
+would fabricate income and strand principal basis. The economically correct result — that accrued
+value is taxed/realized when the position is finally sold — is delivered automatically by AVCO because
+the entry basis carries forward on the returned principal (`REALLOCATE`, no P&L at exit).
+
+### What *is* separable: explicit reward tokens
+
+Distinct reward-token emissions (e.g. `PENDLE`, and per-claim vault fee legs) are genuine income and
+**are already booked zero-cost** — `basisEffect = ACQUIRE`, `netCostBasisDeltaUsd = 0`, Market
+(ADR-040 gross lane) basis = FMV — as `REWARD_CLAIM` / `LP_FEE_CLAIM`, never as a disposal and never as
+market-net income. Because they add quantity at $0 in the Net lane, they push **Net AVCO below Market
+AVCO** exactly as ADR-040 §"Why Net ≠ Tax for reward-bearing families" requires.
+
+### Verified state (2026-07-22)
+
+- **GMX GM/GLV** (`gmx-lp:arbitrum:weth-usdc`, `…:glv-weth-usdc`): **0** zero-net `ACQUIRE` income legs.
+  All principal legs are `REALLOCATE_IN/OUT` through the async escrow lifecycle
+  (`LP_ENTRY_REQUEST/SETTLEMENT`, `LP_EXIT_REQUEST/SETTLEMENT`); fee accrual is entirely inside the GM/GLV
+  receipt value. Pure compounding, no separable reward token in this wallet.
+- **Pendle** (`pendle-lp:mantle:pendle-lpt:…`): principal `cmETH` is carried out on entry and restored on
+  exit with the Net discount conserved (entry `REALLOCATE_OUT` net −$3,016.32 = exit `REALLOCATE_IN` net
+  +$3,016.32 for the `0x1a87…` wallet); `PENDLE` reward and residual `cmETH` accrual are `ACQUIRE` at
+  `netCostBasisDeltaUsd = 0`. Receipt pools drain to `qtyHeld = basisHeldUsd = netBasisHeldUsd = 0`.
+- **Katana `vbETH`** (`lp-position:katana:0x2659c6…:36201`): the ETH deposit basis is carried onto the
+  returned `vbETH` principal — `LP_EXIT REALLOCATE_IN` **$2,036.930603 Market / $2,036.890814 Net** —
+  with the vault accrual booked as separable zero-cost income (`LP_EXIT` `vbETH ACQUIRE` **+$83.4797
+  Market / $0 Net**, plus $68.43 Market / $0 Net across the position's `LP_FEE_CLAIM` legs). Total exit
+  `vbETH` Market basis **$2,120.92**. The Net lane is exactly conserved (entry ETH net −$2,036.890814 =
+  exit `vbETH` net +$2,036.890814). The earlier acceptance figure **$1,705.995 is stale** (the underlying
+  ETH deposit AVCO changed between DB states) — the reproducible current figures above supersede it.
+
+No compounding position exhibits the D1 (rebalancing surplus mis-booked as zero-net market `ACQUIRE`)
+or D2 (Net-lane basis destroyed instead of carried on a closed position) patterns tracked for
+V3/Slipstream/V4 in `results/lp-exit-fee-verification-audit.md`: the only zero-net `ACQUIRE` legs on
+these families are genuine reward/vault-accrual income, and the real-asset Net lane is conserved on the
+returned principal.
 
 ## Pending transfer and bridge carry
 
@@ -230,6 +355,50 @@ qty, with no inventory inflation.
 
 Atomic carry pair for one outbound + one inbound principal in same audited family (e.g. Aave ETH ↔ aToken), including inbound-first ordering.
 
+## Read-model: CARRY corridors folded into the blended effective-cost series (RM-1, ADR-062)
+
+> **Read-model / series only — no ledger, replay, AVCO, pricing, or linking change.**
+
+The ETH-family **effective-cost** time series (ADR-062) divides the cumulative attributed offset by the
+**blended** ETH-equivalent covered denominator that `BlendedExposureAvcoSeriesBuilder` reconstructs from
+the family superset. Originally only `REALLOCATE_*` corridors (LP / receipt) were re-folded into that
+denominator, so when ETH was parked out of the liquid pool via a **CARRY** corridor — a cross-wallet /
+cross-chain internal transfer, a bridge-out, or `LENDING_LOOP_OPEN` collateral — the blended covered
+quantity collapsed to a sliver between the two legs while the attributed offset stayed whole, flooring
+`max(marketBasis − offset, 0)` to a false **$0** until the matching `CARRY_IN` snapped it back.
+
+RM-1 folds **same-family `CARRY_OUT`/`CARRY_IN`** into the blended denominator exactly as `REALLOCATE`
+is folded (this is a series read-model reconstruction; the ledger CARRY semantics above are unchanged):
+
+- `CARRY_OUT` parks its covered qty + market/net basis; the matching `CARRY_IN` closes it. The park key
+  is the `correlationId` when present (`lending-loop:{openTxHash}`, `bridge:*`, LP `lp:*`) or the
+  `lifecycleChainId` for a bare internal transfer with no correlation, so both legs share one key.
+- The **C2 guard** still excludes wstETH/weETH/cmETH (own families, ADR-054) from the blended
+  `FAMILY:ETH` pool whether they arrive as REALLOCATE or CARRY.
+- The **B-ETH-06 terminal clamp** is retained: a CARRY corridor with no matching return and no open
+  family-origin `lp_receipt_basis_pools` row (genuine bridge leak / dropped transfer) closes to zero at
+  terminal; a still-open lending-loop corridor keeps its basis-conserving residual (B-ETH-02).
+- Aave aTokens (`AARBWETH/AMANWETH/ALINWETH/AZKSWETH/AWETH`) are already `FAMILY:ETH` C1 members, so
+  they are already in the spot lane / series denominator (RM-2 consistency guard — no aToken fold path);
+  RM-1 restores CARRY-parked collateral so the series terminal reconciles with the scalar header
+  break-even.
+
+A companion guard (RM-3, `AssetLedgerChartService.isOverSliverArtifact`) fails **closed** on any
+sliver-denominated point in **both** directions — the offset spike and the floor-to-$0 side both render
+"—" (UNAVAILABLE) — while a healthy (non-sliver) denominator keeps a genuine $0 banked-locked-surplus
+floor. See ADR-062 (amendment 2026-07-24).
+
+> **Held-reward-income amendment (2026-07-24, ADR-062).** The effective-cost **numerator** above is no
+> longer the Market-lane basis. Under `offsetLane=NET` the numerator is the **Net-lane** held basis
+> (`chooseLaneAvco(NET, marketAvco, netAvco) × coveredQty`), so `effectiveBasis = netBasis − netRealized`.
+> This credits zero-cost income that is **received and still held** (staking rewards, airdrops, LP-fee /
+> lending-interest claims never sold) — which lowers the Net basis but generates no realized P&L — not
+> just realized income. Rewards therefore reduce effective cost even while held. Example: a staked
+> derivative acquired almost entirely from reward claims (`FAMILY:SAVAX`) drops from a market-lane
+> $11.96/unit to its true ≈$0.53/unit (Net AVCO). Borrowed/liability-backed inflows carry net≡market
+> basis and are **not** credited as free. The header scalar and this series use the same net numerator
+> (four consumers of `BreakEvenCalculator.compute` / the series), reconciled by the terminal tests.
+
 ## Continuity families (audit)
 
 | Family | Includes (examples) |
@@ -287,14 +456,14 @@ Carry / pool routing per type:
 | `EXTERNAL_TRANSFER_*` + correlation | Pending transfer queue |
 | `LENDING_DEPOSIT` | REALLOCATE; may `takeReservedCarry` from bridge |
 | `LENDING_WITHDRAW` | REALLOCATE restore |
-| `VAULT_DEPOSIT` / `VAULT_WITHDRAW` | Same |
+| `VAULT_DEPOSIT` / `VAULT_WITHDRAW` | Same; **intra-cluster** identity change → `CLUSTER_CARRY` REALLOCATE, PnL=0 (ADR-083, e.g. yvVBETH↔vBETH) |
 | `PROTOCOL_CUSTODY_*` | Counterparty pool push/pop |
-| `STAKING_DEPOSIT` / `WITHDRAW` | **Same canonical-token identity:** `LiquidStakingReplayHandler` or family-equivalent REALLOCATE (C1 only). **Identity change (C1↔C2):** generic swap path — realize P&amp;L at market (ADR-054) |
+| `STAKING_DEPOSIT` / `WITHDRAW` | **Intra-cluster (ADR-083):** `LiquidStakingReplayHandler` via `CLUSTER_CARRY` — REALLOCATE both lanes, PnL=0 (incl. cross-family same-cluster ETH↔mETH, AVAX↔sAVAX). **Cluster↔non-cluster / cross-cluster:** generic swap path — realize P&amp;L at market (ADR-054) |
 | `LP_ENTRY_REQUEST` / `SETTLEMENT` | `GmxLpEntryReplayHandler` escrow |
 | `LP_EXIT_REQUEST` / `SETTLEMENT` | `GenericAsyncLifecycleReplayHandler` |
 | `DEX_ORDER_*` | `AsyncSpotOrderReplayHandler` open bucket |
 | `WRAP` / `UNWRAP` | Family-equivalent atomic carry |
-| `SWAP` | No carry — pooled AVCO consumption |
+| `SWAP` | No carry — pooled AVCO consumption. **Exception (ADR-083):** a genuinely cross-canonical **intra-cluster** SWAP (e.g. cmETH↔ETH, SOL↔mSOL) routes to `CLUSTER_CARRY` (REALLOCATE, PnL=0); same-canonical WETH↔ETH stays family-equivalent |
 | `BORROW` / `REPAY` | Liability book, not counterparty pool |
 | Bybit corridor | Pass-through or CARRY per ADR-019/020 |
 
@@ -339,6 +508,12 @@ that net basis travels with quantity on every IN leg — never silently re-seede
 > For any closed intra-family round-trip (WRAP↔UNWRAP, spot↔receipt, REALLOCATE_IN↔OUT) on a single
 > position key: `|Σ netCostBasisDelta| ≤ dust` — exactly as `Σ marketCostBasisDelta = 0` holds for Market.
 > Net AVCO ≤ Market AVCO for every position. Net AVCO ≥ 0.
+>
+> **ADR-083 exception:** on a **cluster-carried lot** the `Net ≤ Market` cap may equalize or be
+> exceeded by design — the cluster-carry writes basis via `restoreToPosition` (no `min(market)` clamp)
+> so a down-conversion preserves the disposed basis rather than writing it down. Basis conservation
+> (`|Σ netCostBasisDelta| ≤ dust`) still holds; only the per-position `Net ≤ Market` cap is relaxed on
+> carried lots.
 
 ### Mechanism
 

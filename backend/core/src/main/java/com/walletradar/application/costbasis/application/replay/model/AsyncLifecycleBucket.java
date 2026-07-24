@@ -63,6 +63,41 @@ public final class AsyncLifecycleBucket {
         return total;
     }
 
+    /**
+     * ADR-040 (net-carry conservation): the Net (reward-discounted) cost basis remaining in the
+     * principal carries. Mirrors {@link #remainingCostBasisUsd()} on the Net lane so a settlement
+     * receipt (e.g. a GMX GLV/GM share) can be minted carrying Σ contributed net basis instead of
+     * re-seeding net = tax and erasing the reward discount.
+     */
+    public BigDecimal remainingNetCostBasisUsd() {
+        BigDecimal total = BigDecimal.ZERO;
+        for (Deque<CarryTransfer> queue : carriesByAsset.values()) {
+            for (CarryTransfer carry : queue) {
+                total = total.add(effectiveNetCostBasisUsd(carry));
+            }
+        }
+        return total;
+    }
+
+    /** ADR-040: Net-lane peer of {@link #remainingExecutionFeeReserveCostBasisUsd()}. */
+    public BigDecimal remainingExecutionFeeReserveNetCostBasisUsd() {
+        BigDecimal total = BigDecimal.ZERO;
+        for (Deque<CarryTransfer> queue : executionFeeReservesByAsset.values()) {
+            for (CarryTransfer carry : queue) {
+                total = total.add(effectiveNetCostBasisUsd(carry));
+            }
+        }
+        return total;
+    }
+
+    private static BigDecimal effectiveNetCostBasisUsd(CarryTransfer carry) {
+        if (carry == null) {
+            return BigDecimal.ZERO;
+        }
+        // CarryTransfer defaults net to tax when null, but stay defensive for legacy carries.
+        return carry.netCostBasisUsd() != null ? carry.netCostBasisUsd() : carry.costBasisUsd();
+    }
+
     public BigDecimal remainingUncoveredQuantity() {
         BigDecimal total = BigDecimal.ZERO;
         for (Deque<CarryTransfer> queue : carriesByAsset.values()) {

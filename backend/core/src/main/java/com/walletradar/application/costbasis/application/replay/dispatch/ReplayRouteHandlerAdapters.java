@@ -204,18 +204,19 @@ public final class ReplayRouteHandlerAdapters {
         }
     }
 
+    /** ADR-083: adapter for the {@code CLUSTER_CARRY} route (formerly {@code LIQUID_STAKING}). */
     @Component
-    static class LiquidStakingRouteHandler implements ReplayRouteHandler {
+    static class ClusterCarryRouteHandler implements ReplayRouteHandler {
 
         private final LiquidStakingReplayHandler delegate;
 
-        LiquidStakingRouteHandler(LiquidStakingReplayHandler delegate) {
+        ClusterCarryRouteHandler(LiquidStakingReplayHandler delegate) {
             this.delegate = delegate;
         }
 
         @Override
         public boolean supports(NormalizedTransaction transaction, ReplayRoutingDecision routingDecision) {
-            return routingDecision.route() == ReplayRoute.LIQUID_STAKING;
+            return routingDecision.route() == ReplayRoute.CLUSTER_CARRY;
         }
 
         @Override

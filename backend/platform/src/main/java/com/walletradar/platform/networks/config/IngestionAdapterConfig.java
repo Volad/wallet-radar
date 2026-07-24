@@ -1,11 +1,19 @@
 package com.walletradar.platform.networks.config;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.walletradar.platform.common.RetryPolicy;
 import com.walletradar.platform.networks.RpcEndpointRotator;
 import com.walletradar.platform.networks.evm.rpc.EvmRpcClient;
 import com.walletradar.platform.networks.evm.rpc.WebClientEvmRpcClient;
 import com.walletradar.platform.networks.solana.SolanaRpcClient;
 import com.walletradar.platform.networks.solana.WebClientSolanaRpcClient;
+import com.walletradar.platform.networks.solana.helius.HeliusRequestThrottle;
+import com.walletradar.platform.networks.solana.helius.HeliusSolanaClient;
+import com.walletradar.platform.networks.solana.helius.HeliusSolanaProperties;
+import com.walletradar.platform.networks.solana.helius.WebClientHeliusSolanaClient;
+import com.walletradar.platform.networks.ton.TonNetworkProperties;
+import com.walletradar.platform.networks.ton.TonRpcClient;
+import com.walletradar.platform.networks.ton.WebClientTonRpcClient;
 import io.github.resilience4j.ratelimiter.RateLimiter;
 import io.github.resilience4j.ratelimiter.RateLimiterConfig;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -28,7 +36,9 @@ import java.util.stream.Collectors;
         IngestionNetworkProperties.class,
         IngestionRetryProperties.class,
         IngestionEvmRpcProperties.class,
-        IngestionExplorerProperties.class
+        IngestionExplorerProperties.class,
+        HeliusSolanaProperties.class,
+        TonNetworkProperties.class
 })
 public class IngestionAdapterConfig {
 
@@ -45,11 +55,11 @@ public class IngestionAdapterConfig {
                 retryProperties.getMaxAttempts());
     }
 
-    /** EVM networks only (exclude SOLANA). */
+    /** EVM networks only (exclude SOLANA and TON which use dedicated adapters). */
     @Bean
     public Map<String, RpcEndpointRotator> evmRotatorsByNetwork(IngestionNetworkProperties properties) {
         return properties.getNetwork().entrySet().stream()
-                .filter(e -> !"SOLANA".equals(e.getKey()))
+                .filter(e -> !"SOLANA".equals(e.getKey()) && !"TON".equals(e.getKey()))
                 .filter(e -> e.getValue() != null && e.getValue().getUrls() != null && !e.getValue().getUrls().isEmpty())
                 .collect(Collectors.toMap(Map.Entry::getKey, e -> new RpcEndpointRotator(e.getValue().getUrls(), retryPolicy())));
     }
@@ -96,5 +106,31 @@ public class IngestionAdapterConfig {
     @Bean
     public SolanaRpcClient solanaRpcClient(WebClient.Builder webClientBuilder) {
         return new WebClientSolanaRpcClient(webClientBuilder);
+    }
+
+    /**
+     * Shared Helius request-rate gate. Injected into both the Enhanced-API client and the Solana
+     * RPC ATA path (via {@code HeliusSolanaNetworkAdapter}) so the whole single-pass backfill draws
+     * from one rate budget and never bursts past the configured interval.
+     */
+    @Bean
+    public HeliusRequestThrottle heliusRequestThrottle(HeliusSolanaProperties heliusSolanaProperties) {
+        return new HeliusRequestThrottle(heliusSolanaProperties.getMinRequestIntervalMillis());
+    }
+
+    @Bean
+    public HeliusSolanaClient heliusSolanaClient(WebClient.Builder webClientBuilder,
+                                                   HeliusSolanaProperties heliusSolanaProperties,
+                                                   HeliusRequestThrottle heliusRequestThrottle,
+                                                   ObjectMapper objectMapper) {
+        return new WebClientHeliusSolanaClient(webClientBuilder, heliusSolanaProperties,
+                heliusRequestThrottle, objectMapper);
+    }
+
+    @Bean
+    public TonRpcClient tonRpcClient(WebClient.Builder webClientBuilder,
+                                      TonNetworkProperties tonNetworkProperties,
+                                      ObjectMapper objectMapper) {
+        return new WebClientTonRpcClient(webClientBuilder, tonNetworkProperties, objectMapper);
     }
 }

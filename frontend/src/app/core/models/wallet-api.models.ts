@@ -53,8 +53,8 @@ export interface SessionRefreshResponse {
 
 export interface SessionWalletResponse {
   readonly address: string;
-  readonly label: string;
-  readonly color: string;
+  readonly label: string | null;
+  readonly color: string | null;
   readonly networks: ReadonlyArray<OnChainWalletNetworkId>;
 }
 
@@ -180,7 +180,7 @@ export interface DeleteIntegrationResponse {
 }
 
 export interface SessionBackfillNetworkStatus {
-  readonly networkId: EvmNetworkId;
+  readonly networkId: OnChainWalletNetworkId | string;
   readonly status: string;
   readonly progressPct: number;
   readonly lastBlockSynced: number | null;
@@ -287,16 +287,35 @@ export interface SessionAssetLedgerCurrentResponse {
   readonly realisedPnlUsd: number | null;
   readonly netRealisedPnlUsd: number | null;
   readonly gasPaidUsd: number | null;
-  /** ADR-062 break-even (effective-cost) metric. Effective per-unit cost after crediting realized trading P&L; null when no covered qty. */
+  /** ADR-062 headline "Break-even price" per unit; null when the ETH-equivalent denominator is unusable. */
   readonly breakEvenUsd: number | null;
+  /** ADR-062 Wave 3 headline "Average cost" = market held basis ÷ ETH-equivalent covered qty; null when unusable. */
+  readonly averageCostUsd: number | null;
   /** ADR-062: realized profit beyond remaining basis (>0 means already past break-even). */
   readonly lockedSurplusUsd: number;
   /** ADR-062: zero-basis income (yield/rewards/funding) booked to this family's cluster; informational. */
   readonly incomeReceivedUsd: number;
   /** ADR-062: when non-null, this family's realized P&L is credited to that parent family (e.g. FAMILY:ETH). */
   readonly attributionTargetFamily: string | null;
+  /** ADR-062 deviation guard: coveredQuantity / quantity in [0,1]; null when quantity is zero. */
+  readonly coveredRatio: number | null;
+  /** ADR-062 deviation guard: true when a $0 break-even is a low-coverage artifact, not real. */
+  readonly breakEvenSuppressed: boolean | null;
   /** ADR-062: real member asset symbols of this family present in the ledger (e.g. ['ETH','WETH','WSTETH']). */
   readonly familyMemberSymbols: ReadonlyArray<string>;
+  /** ADR-062 Wave 3 (§5): demoted diagnostic lanes (Balance AVCO + dust-guarded Blended AVCO). Nullable. */
+  readonly details: SessionAssetLedgerDiagnosticLanesResponse | null;
+}
+
+/**
+ * ADR-062 Wave 3 (§5) demoted diagnostic lanes: balance-anchored AVCO (market + net) and the
+ * total-exposure blended AVCO terminal (ADR-061), dust-guarded (AC-10). All nullable.
+ */
+export interface SessionAssetLedgerDiagnosticLanesResponse {
+  readonly balanceAvcoUsd: number | null;
+  readonly balanceNetAvcoUsd: number | null;
+  readonly blendedAvcoUsd: number | null;
+  readonly blendedNetAvcoUsd: number | null;
 }
 
 export interface SessionAssetLedgerFullSessionCurrentResponse {
@@ -360,6 +379,12 @@ export interface SessionAssetLedgerTimelineEntryResponse {
    * covered qty is ~0 → the effective-cost line breaks. Terminal value reconciles with `current.breakEvenUsd`.
    */
   readonly effectiveCostAfterUsd: number | null;
+  /**
+   * ADR-062 Wave 3 (AC-12 / D9): the SUBJECT (viewed-family) asset's own unit price for this move
+   * event, so the move-basis tooltip renders the subject price instead of a counterparty quote-leg
+   * (e.g. USDT $1). Nullable.
+   */
+  readonly subjectUnitPriceUsd: number | null;
   readonly fromAddress: string | null;
   readonly toAddress: string | null;
   readonly memberNormalizedTransactionIds: ReadonlyArray<string>;
@@ -480,12 +505,22 @@ export interface SessionDashboardTokenPositionResponse {
   readonly realizedPnlUsd: number;
   /** ADR-062 break-even (effective-cost) metric. Effective per-unit cost after crediting realized trading P&L; null when no covered qty. */
   readonly breakEvenUsd: number | null;
+  /**
+   * ADR-062 §5 "Average cost" = family-level weighted market cost basis ÷ ETH-equivalent covered quantity
+   * (parity with the move-basis page header). Equals `avcoUsd` for a single-wallet family, differs for
+   * multi-wallet/multi-network families. Null when the covered denominator is unusable.
+   */
+  readonly averageCostUsd: number | null;
   /** ADR-062: realized profit beyond remaining basis (>0 means already past break-even). */
   readonly lockedSurplusUsd: number;
   /** ADR-062: zero-basis income (yield/rewards/funding) booked to this family's cluster; informational. */
   readonly incomeReceivedUsd: number;
   /** ADR-062: when non-null, this family's realized P&L is credited to that parent family (e.g. FAMILY:ETH). */
   readonly attributionTargetFamily: string | null;
+  /** ADR-062 deviation guard: coveredQuantity / quantity in [0,1]; null when quantity is zero. */
+  readonly coveredRatio: number | null;
+  /** ADR-062 deviation guard: true when a $0 break-even is a low-coverage artifact, not real. */
+  readonly breakEvenSuppressed: boolean | null;
   /** On-chain chain ID (e.g. 'ETHEREUM') or CEX venue ID (e.g. 'BYBIT'). Use `domain` field to distinguish. */
   readonly networkId: string;
   readonly walletAddress: string;
@@ -832,7 +867,7 @@ export interface SessionLpPositionResponse {
   readonly correlationId: string;
   readonly protocol: string | null;
   readonly family: string | null;
-  readonly networkId: EvmNetworkId | null;
+  readonly networkId: OnChainWalletNetworkId | null;
   readonly wallet?: string | null;
   readonly walletAddress?: string | null;
   readonly pair: string | null;

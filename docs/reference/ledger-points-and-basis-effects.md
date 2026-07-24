@@ -113,11 +113,17 @@ flowchart TD
 
 **Definition:** Move basis between pools (e.g. counterparty external pool, wrap/unwrap) without economic disposal.
 
-**Emitted by:** `CounterpartyBasisPoolReplayHook`, wrap/unwrap same-family reallocation.
+**Emitted by:** `CounterpartyBasisPoolReplayHook`, wrap/unwrap same-family reallocation, and the
+`CLUSTER_CARRY` route for **intra-cluster cross-canonical conversions** (ADR-083): ETH↔mETH↔cmETH,
+AVAX↔sAVAX, SOL↔mSOL, yvVBETH↔vBETH, cmETH↔PT-cmETH. The disposed leg emits `REALLOCATE_OUT` with
+**realized PnL = 0** (both lanes); realize is kept only for exits to a non-cluster asset
+(USDT/USDC/DAI/fiat/BTC) or a cross-cluster move.
 
 ### REALLOCATE_IN {#reallocate-in}
 
-**Definition:** Receive reallocated basis at destination pool/position.
+**Definition:** Receive reallocated basis at destination pool/position. For a `CLUSTER_CARRY`
+conversion (ADR-083) the acquired leg inherits the disposed basis (re-averaged onto its quantity) with
+**PnL = 0** — never a fresh market basis.
 
 #### CARRY / REALLOCATE basis symmetry (ADR-043)
 

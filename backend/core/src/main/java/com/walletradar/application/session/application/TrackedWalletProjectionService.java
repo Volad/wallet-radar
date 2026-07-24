@@ -2,6 +2,8 @@ package com.walletradar.application.session.application;
 
 import com.walletradar.domain.session.TrackedWallet;
 import com.walletradar.domain.session.UserSession;
+import com.walletradar.domain.wallet.WalletDomainKind;
+import com.walletradar.domain.wallet.WalletRef;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.MongoOperations;
@@ -56,9 +58,28 @@ public class TrackedWalletProjectionService {
             if (wallet == null || wallet.getAddress() == null || wallet.getAddress().isBlank()) {
                 continue;
             }
-            addresses.add(wallet.getAddress().trim().toLowerCase(Locale.ROOT));
+            addresses.add(normalizeAddress(wallet.getAddress().trim()));
         }
         return addresses;
+    }
+
+    /**
+     * Normalises an address for the tracked_wallets projection key.
+     * EVM addresses are lowercased (checksummed form is not significant for lookup).
+     * Solana (base58) and TON addresses are case-sensitive and must not be lowercased.
+     */
+    private static String normalizeAddress(String address) {
+        try {
+            WalletRef ref = WalletRef.parse(address);
+            if (ref.domain() == WalletDomainKind.EVM) {
+                return address.toLowerCase(Locale.ROOT);
+            }
+            // SOLANA (base58) and TON: preserve case exactly as stored
+            return address;
+        } catch (Exception e) {
+            // Unknown format — fall back to lowercase to avoid regressions
+            return address.toLowerCase(Locale.ROOT);
+        }
     }
 
     private void touch(String address, Instant now) {

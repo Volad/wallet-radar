@@ -225,6 +225,82 @@ public class NormalizedTransaction {
      */
     private ExternalCapitalBoundary externalCapitalBoundary;
 
+    /**
+     * Venue-neutral semantic capability flag (WS-8): {@code true} when this row's counterparty is a
+     * user-designated external custody destination — an off-chain / custodial venue we cannot read
+     * into (e.g. Telegram Wallet Earn). Deposits stay {@code EXTERNAL_TRANSFER_OUT} and withdrawals
+     * {@code EXTERNAL_TRANSFER_IN} (standard AVCO); the flag only lets read paths surface the
+     * informational custody ledger without re-deriving venue semantics per network (ADR-072).
+     * {@code null}/false for every other row.
+     *
+     * <p>Sparse-indexed: the field is absent on the overwhelming majority of rows, so the index only
+     * holds the handful of custody rows and keeps the informational custody-ledger read off a scan.</p>
+     */
+    @Indexed(name = "normalized_custodial_offchain_idx", sparse = true)
+    private Boolean custodialOffChain;
+
+    /**
+     * Venue- and network-neutral semantic capability flag (D1): {@code true} when this row is a
+     * <b>cross-canonical staking/vault identity change</b> — one canonical asset is disposed and a
+     * distinct canonical asset is acquired in the same operation (e.g. ETH → mETH staking on Bybit,
+     * or a vault deposit that mints a share token of a different canonical identity). Same-family
+     * carries (e.g. mETH → cmETH, both {@code FAMILY:METH}) are <b>not</b> flagged.
+     *
+     * <p>Stamped once at normalization time via the ADR-054 accounting identity registry
+     * ({@code AccountingAssetClassificationSupport.isCrossCanonicalStakingVaultConversion}) — the
+     * single source of truth for C1/C2 canonical identity — so no symbol/contract list is hardcoded.
+     * The pricing layer reads this flag (instead of importing the accounting registry, which the
+     * module boundary forbids) to force market pricing on the disposed and acquired principal
+     * {@code TRANSFER} legs, ensuring replay books a real cost basis rather than silently admitting a
+     * $0-basis acquisition that strips the underlying family's basis (ADR-054 §9). {@code null} for
+     * every non-cross-canonical staking/vault row.</p>
+     */
+    private Boolean crossCanonicalStakingConversion;
+
+    /**
+     * Venue- and network-neutral semantic capability flag (WS-8): {@code true} when the lending
+     * collateral on this row's network is represented by a fungible on-chain <b>receipt token</b>
+     * (e.g. Aave aTokens / Compound cTokens on EVM), {@code false} for receipt-less lending
+     * (e.g. Jupiter Lend on Solana, TON) where collateral surfaces no snapshot-able balance.
+     *
+     * <p>Stamped once at normalization time — the single place network specifics are allowed. Read
+     * paths (e.g. {@code LendingCycleBuilder}) consume this instead of re-deriving
+     * {@code NetworkAddressFormat.isEvm(networkId)}, keeping the consumption plane network-agnostic
+     * (ADR-073, generalizing the ADR-052 "venue specificity ends at normalization" invariant to the
+     * network axis). Meaningful only for lending-family rows; {@code null} elsewhere.</p>
+     */
+    private Boolean receiptBearingCollateral;
+
+    /**
+     * Venue- and network-neutral semantic capability flag (WS-8): {@code true} for a
+     * concentrated-liquidity LP position whose full exit is recorded as a terminal {@code LP_EXIT}
+     * (never {@code LP_EXIT_FINAL}) and whose closure is therefore governed by lifecycle events /
+     * live snapshots rather than a residual {@code qtyHeld} signal — currently Solana DLMM (Meteora)
+     * and CLMM (Raydium) positions. EVM CL-NFT positions emit {@code LP_EXIT_FINAL} and are left
+     * unstamped.
+     *
+     * <p>Stamped once at normalization time. Read paths ({@code SessionLpQueryService},
+     * {@code LpPositionRefreshService}) consume this instead of testing the
+     * {@code "lp-position:solana:"} correlation-id prefix (ADR-073). {@code null}/false elsewhere.</p>
+     */
+    private Boolean lpConcentrated;
+
+    /**
+     * On-chain <b>pool address captured at normalization time</b> for a position-scoped LP row whose
+     * pool identity cannot be recovered later from the (deallocated) position account. Currently the
+     * Meteora DLMM <b>LbPair</b> pool address ({@code accounts[1]} of the largest DLMM liquidity
+     * instruction): the LbPair pool account is shared and persists on-chain even after the user's
+     * individual position PDA is closed and its rent reclaimed, so it is the only reliable pair
+     * source for a CLOSED single-sided position (the position PDA is deallocated and cannot be
+     * decoded to the LbPair anymore).
+     *
+     * <p>The correlation id is <b>unchanged</b> (still keyed on the position PDA so basis-pool
+     * continuity holds); this is auxiliary enrichment metadata consumed by the LP position reader
+     * to resolve the SOL/&lt;SPL&gt; pair for both open and closed positions without a read-path RPC
+     * decode. {@code null} for every non-Meteora / non-LP row.</p>
+     */
+    private String lpPoolAddress;
+
     @NoArgsConstructor
     @Getter
     @Setter
@@ -252,5 +328,15 @@ public class NormalizedTransaction {
          * Consumed by the replay engine to raise Net AVCO without touching Market AVCO.
          */
         private BigDecimal acquisitionFeeUsd;
+
+        /**
+         * ADR-080/ADR-081 (C1, durable identity/flag route): marks this leg as the <b>LP-receipt</b>
+         * token of an LP correlation (e.g. the Meteora DAMM {@code MLP} fungible receipt whose symbol
+         * is confusable across pools). Set at classification/normalization from LP-correlation
+         * membership — not from the (confusable) symbol — so replay stamps the ledger point's
+         * {@code accountingFamilyIdentity = FAMILY:LP_RECEIPT} and the dashboard/spot-family surfaces
+         * exclude it by identity regardless of the symbol. Null/false for ordinary priced legs.
+         */
+        private Boolean lpReceipt;
     }
 }

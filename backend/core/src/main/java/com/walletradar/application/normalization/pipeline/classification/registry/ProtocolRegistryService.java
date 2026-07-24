@@ -1,7 +1,6 @@
 package com.walletradar.application.normalization.pipeline.classification.registry;
 
 import com.walletradar.domain.common.NetworkId;
-import com.walletradar.application.normalization.pipeline.onchain.OnChainRawTransactionView;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -30,8 +29,12 @@ public class ProtocolRegistryService {
     }
 
     public Optional<ProtocolRegistryEntry> lookup(NetworkId networkId, String contractAddress) {
-        String normalizedAddress = OnChainRawTransactionView.normalizeAddress(contractAddress);
-        if (networkId == null || normalizedAddress == null) {
+        if (networkId == null) {
+            return Optional.empty();
+        }
+        // ADR-066: family-aware keying — EVM entries key on 0x-lowercase, Solana on raw base58.
+        String normalizedAddress = AddressNormalizer.normalize(networkId, contractAddress);
+        if (normalizedAddress == null) {
             return Optional.empty();
         }
         return Optional.ofNullable(entriesByKey.get(new ProtocolRegistryLoader.RegistryKey(networkId, normalizedAddress)));

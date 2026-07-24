@@ -66,6 +66,8 @@ class SessionLendingQueryServiceTest {
     @Mock
     private LendingGroupRefreshStateRepository lendingGroupRefreshStateRepository;
     @Mock
+    private LendingLivePositionSnapshotService livePositionSnapshotService;
+    @Mock
     private com.walletradar.application.pricing.latest.CurrentPriceReadService currentPriceReadService;
 
     private SessionLendingQueryService newService() {
@@ -86,6 +88,7 @@ class SessionLendingQueryServiceTest {
                 new LendingMarketMetricEstimator(),
                 rateService,
                 healthService,
+                livePositionSnapshotService,
                 lendingGroupRefreshStateRepository,
                 new LendingMarketKeyResolver(identityService),
                 identityService

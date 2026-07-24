@@ -8,6 +8,8 @@ import com.walletradar.application.costbasis.support.CexUmbrellaSupport;
 import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
 import com.walletradar.application.costbasis.support.AccountingAssetIdentitySupport;
 import com.walletradar.application.costbasis.support.OutOfScopeFamilySupport;
+import com.walletradar.application.costbasis.support.ReceiptlessLockedCollateralSupport;
+import com.walletradar.application.costbasis.support.WalletAddressReadScope;
 import com.walletradar.application.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.application.costbasis.domain.OnChainBalance;
 import com.walletradar.application.costbasis.support.AssetLedgerSupport;
@@ -62,6 +64,12 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
     private static final String ISSUE_COVERAGE_GAP = "coverage_gap";
     private static final String ISSUE_HISTORY_FLAGS = "history_flags";
     private static final String ISSUE_MISSING_REPLAY_POINT = "missing_replay_point";
+    // ADR-078 read-model coverage guard: a bucket whose on-chain balance is missing/errored (never an
+    // authoritative zero) while its ledger still carries covered basis is weighted off the
+    // ledger-covered quantity for the headline covered-qty-weighted AVCO, and surfaces this flag. It
+    // never resurrects a genuinely sold lot (a real disposal writes an authoritative zero row that
+    // drops out) and never overstates holdings (it weights off the covered floor, not raw quantity).
+    private static final String ISSUE_BALANCE_CAPTURE_FALLBACK = "balance_capture_fallback";
     private static final String PRICE_ISSUE_MISSING = "missing_price";
     private static final String PRICE_ISSUE_STALE = "stale_price";
     private static final String PRICE_ISSUE_HISTORICAL_FALLBACK = "historical_price_fallback";
@@ -71,6 +79,9 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
     private static final String PRICE_SOURCE_PROTOCOL_SNAPSHOT = "PROTOCOL_SNAPSHOT";
     private static final long CURRENT_QUOTE_STALE_AFTER_SECONDS = 90 * 60;
     private static final BigDecimal AVCO_CAP_COVERAGE_THRESHOLD = new BigDecimal("0.05");
+    // ADR-062 deviation guard: below this covered fraction a $0 break-even is a coverage artifact, not
+    // a real effective cost, so the read model flags it for "insufficient coverage" annotation.
+    private static final BigDecimal BREAK_EVEN_COVERAGE_SUPPRESSION_THRESHOLD = new BigDecimal("0.5");
     private static final BigDecimal MINIMUM_POSITION_VALUE_USD = new BigDecimal("0.01");
     private static final BigDecimal AVCO_CAP_PRICE_MULTIPLIER = BigDecimal.TEN;
 
@@ -169,7 +180,11 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                     : latestPoint.getFamilyDisplaySymbol();
             String rowSymbol = blank(familyDisplaySymbol) ? normalizeSymbol(balance.getAssetSymbol()) : familyDisplaySymbol;
 
-            if (AccountingAssetFamilySupport.isLpReceiptSymbol(balance.getAssetSymbol())) {
+            // ADR-080/ADR-081 (C7): exclude LP-receipt holdings by resolved identity, not symbol
+            // spelling, so PENDLE-LPT / eqbPENDLE-LPT / MLP (and any novel receipt routed via its LP
+            // correlationId to FAMILY:LP_RECEIPT) never render as priced spot assets.
+            if (AccountingAssetFamilySupport.isLpReceiptHolding(
+                    familyIdentity, balance.getAssetSymbol(), balance.getAssetContract())) {
                 continue;
             }
             FamilyRowKey rowKey = new FamilyRowKey(
@@ -188,7 +203,20 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                     )
             );
             accumulator.addBalance(currentQuantity, latestPoint, balance.getAssetSymbol());
+            // ADR-078: this bucket's quantity is a retained last-known snapshot (the live capture
+            // failed), so its covered-qty contribution keeps the headline AVCO stable but must surface
+            // a coverage flag instead of reading as a fresh authoritative quantity.
+            if (Boolean.TRUE.equals(balance.getCaptureFallback())) {
+                accumulator.markCaptureCoverage();
+            }
         }
+
+        // ADR-078 coverage guard: an on-chain ledger bucket that still carries covered basis but whose
+        // on-chain balance row is entirely missing (a capture miss, never an authoritative zero — a
+        // real disposal writes an explicit zero row that is present-and-dropped above) is weighted off
+        // the ledger-covered quantity so a single missing balance row cannot silently move the headline
+        // covered-qty-weighted AVCO. It surfaces a coverage flag and never overstates holdings.
+        applyMissingBucketCoverageGuard(rows, latestPointByBucket, latestBalances);
 
         if (!enabledCexVenueRefs.isEmpty()) {
             for (Map.Entry<BucketKey, AssetLedgerPoint> ledgerEntry : latestPointByBucket.entrySet()) {
@@ -203,7 +231,14 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                 if (currentQuantity.signum() <= 0) {
                     continue;
                 }
-                if (AccountingAssetFamilySupport.isLpReceiptSymbol(latestPoint.getAssetSymbol())) {
+                if (AccountingAssetFamilySupport.isLpReceiptHolding(
+                        resolvedFamilyIdentity(
+                                latestPoint,
+                                bucketKey.networkId(),
+                                latestPoint.getAssetSymbol(),
+                                latestPoint.getAssetContract()),
+                        latestPoint.getAssetSymbol(),
+                        latestPoint.getAssetContract())) {
                     continue;
                 }
                 if (isBareCexUmbrellaWallet(bucketKey.walletAddress())
@@ -258,6 +293,15 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
         clampCexUmbrellaToLive(rows, session, enabledCexVenueRefs);
         addMissingLiveCexRows(rows, session);
 
+        // Part 1 (receipt-less lending continuity): credit each family row for locked lending/staking/
+        // vault collateral whose basis was carried OUT of the underlying (REALLOCATE_OUT) but has no
+        // in-family receipt-token balance to re-cover it. The still-locked amount is already folded
+        // into the on-chain balance quantity by the live provider, so it otherwise reads as covered=0.
+        // This mirrors the move-basis reconciliation credit so the dashboard shows the SAME covered
+        // quantity, AVCO, and effective cost as the move-basis header (network-agnostic; EVM aTokens
+        // net to ~0 and are unaffected).
+        applyReceiptlessLockedCollateral(rows, scopedLedgerPoints);
+
         Map<String, DashboardPriceSnapshot> latestPricesBySymbol = loadLatestPrices(
                 rows.values().stream()
                 .flatMap(accumulator -> accumulator.priceLookupCandidates().stream())
@@ -296,12 +340,13 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                 .map(view -> {
                     BreakEvenCalculator.BreakEvenResult result = breakEvenByFamily.get(view.familyIdentity());
                     return result == null
-                            ? view.withBreakEven(null, null, null, null)
+                            ? view.withBreakEven(null, null, null, null, null)
                             : view.withBreakEven(
                                     result.breakEvenUsd(),
                                     result.lockedSurplusUsd(),
                                     result.incomeReceivedUsd(),
-                                    result.attributionTargetFamily()
+                                    result.attributionTargetFamily(),
+                                    result.averageCostUsd()
                             );
                 })
                 .toList();
@@ -318,6 +363,22 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
         BigDecimal totalUnrealizedPnlPct = totalProvableBasisUsd.signum() <= 0
                 ? BigDecimal.ZERO
                 : totalUnrealizedPnlUsd.multiply(BigDecimal.valueOf(100), MC).divide(totalProvableBasisUsd, MC);
+
+        // ADR-067 / RC-8: out-of-scope families (SOL / TON / HYPEREVM) are now displayed in
+        // portfolioValueUsd and totalUnrealizedPnlUsd, but the conservation identity has no NEC
+        // boundary support for their external capital flows. To keep reportedPnL ≈ adjustedMTM − NEC
+        // balanced, feed the gate an IN-SCOPE mark-to-market and unrealized P&L that exclude OOS
+        // positions symmetrically with the already-excluded OOS realized (inScopeRealisedPnlUsd).
+        BigDecimal inScopeMarkToMarketUsd = tokenPositions.stream()
+                .filter(position -> !OutOfScopeFamilySupport.isOutOfScopeFamily(
+                        position.familyIdentity(), position.symbol()))
+                .map(TokenPositionView::marketValueUsd)
+                .reduce(BigDecimal.ZERO, (left, right) -> left.add(right, MC));
+        BigDecimal inScopeUnrealizedPnlUsd = tokenPositions.stream()
+                .filter(position -> !OutOfScopeFamilySupport.isOutOfScopeFamily(
+                        position.familyIdentity(), position.symbol()))
+                .map(position -> zeroIfNull(position.unrealizedPnlUsd()))
+                .reduce(BigDecimal.ZERO, (left, right) -> left.add(right, MC));
 
         LinkedHashSet<String> sessionNetworkNames = new LinkedHashSet<>();
         List<WalletView> wallets = new ArrayList<>();
@@ -360,9 +421,9 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
         PortfolioConservationGate.ConservationResult conservation = portfolioConservationGate.evaluate(
                 new PortfolioConservationGate.ConservationInputs(
                         universeScope.accountingUniverseId(),
-                        portfolioValueUsd,
+                        inScopeMarkToMarketUsd,
                         inScopeRealisedPnlUsd,
-                        totalUnrealizedPnlUsd,
+                        inScopeUnrealizedPnlUsd,
                         tokenPositions
                 )
         );
@@ -553,6 +614,115 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
         }
     }
 
+    /**
+     * Credits each dashboard family row for receipt-less locked lending/staking/vault collateral,
+     * grouped by (wallet, network, family) so it lands on the exact row whose on-chain balance folded
+     * the still-locked amount back in. The credit is capped by that row's on-chain coverage gap, so it
+     * can never over-cover, and is symmetric with {@code AssetLedgerReconciliationService}.
+     */
+    private void applyReceiptlessLockedCollateral(
+            Map<FamilyRowKey, TokenPositionAccumulator> rows,
+            List<AssetLedgerPoint> scopedLedgerPoints
+    ) {
+        if (rows.isEmpty() || scopedLedgerPoints.isEmpty()) {
+            return;
+        }
+        Map<FamilyRowKey, List<AssetLedgerPoint>> receiptlessByRow = new LinkedHashMap<>();
+        for (AssetLedgerPoint point : scopedLedgerPoints) {
+            if (!ReceiptlessLockedCollateralSupport.isReceiptlessLockedPoint(point)) {
+                continue;
+            }
+            String familyIdentity = resolvedFamilyIdentity(
+                    point,
+                    point.getNetworkId(),
+                    point.getAssetSymbol(),
+                    point.getAssetContract()
+            );
+            FamilyRowKey rowKey = new FamilyRowKey(
+                    normalizeAddress(point.getWalletAddress()),
+                    point.getNetworkId(),
+                    familyIdentity
+            );
+            receiptlessByRow.computeIfAbsent(rowKey, ignored -> new ArrayList<>()).add(point);
+        }
+        for (Map.Entry<FamilyRowKey, List<AssetLedgerPoint>> entry : receiptlessByRow.entrySet()) {
+            TokenPositionAccumulator accumulator = rows.get(entry.getKey());
+            if (accumulator == null) {
+                continue;
+            }
+            ReceiptlessLockedCollateralSupport.LockedCollateralBasis locked =
+                    ReceiptlessLockedCollateralSupport.fromFamilyPoints(entry.getValue());
+            if (locked.isPresent()) {
+                accumulator.creditReceiptlessLockedCollateral(locked);
+            }
+        }
+    }
+
+    /**
+     * ADR-078 read-model coverage guard. For each on-chain ledger bucket that still carries covered
+     * basis ({@code basisBackedQuantityAfter > 0}) but has <b>no</b> {@code on_chain_balances} row at
+     * all, weights the headline covered-qty-weighted AVCO off the ledger-covered quantity and raises a
+     * coverage flag. The missing-vs-zero distinction is exact: an authoritative on-chain zero (a real
+     * disposal) writes an explicit zero balance row, which is <em>present</em> and dropped by the
+     * {@code signum() <= 0} filter in the balance loop — so it never reaches this guard and a genuinely
+     * sold lot is never resurrected. The guard weights off the covered floor (never the raw
+     * quantityAfter), so it never overstates holdings, and CEX ledgers ({@code networkId == null}) are
+     * excluded (they have their own live-balance reconciliation).
+     */
+    private void applyMissingBucketCoverageGuard(
+            Map<FamilyRowKey, TokenPositionAccumulator> rows,
+            Map<BucketKey, AssetLedgerPoint> latestPointByBucket,
+            Map<BucketKey, OnChainBalance> latestBalances
+    ) {
+        for (Map.Entry<BucketKey, AssetLedgerPoint> entry : latestPointByBucket.entrySet()) {
+            BucketKey bucketKey = entry.getKey();
+            AssetLedgerPoint latestPoint = entry.getValue();
+            if (latestPoint == null || bucketKey.networkId() == null) {
+                continue;
+            }
+            if (latestBalances.containsKey(bucketKey)) {
+                continue;
+            }
+            BigDecimal coveredQty = zeroIfNull(latestPoint.getBasisBackedQuantityAfter());
+            if (coveredQty.signum() <= 0) {
+                continue;
+            }
+            String familyIdentity = resolvedFamilyIdentity(
+                    latestPoint,
+                    bucketKey.networkId(),
+                    latestPoint.getAssetSymbol(),
+                    latestPoint.getAssetContract()
+            );
+            if (AccountingAssetFamilySupport.isLpReceiptHolding(
+                    familyIdentity, latestPoint.getAssetSymbol(), latestPoint.getAssetContract())) {
+                continue;
+            }
+            String familyDisplaySymbol = blank(latestPoint.getFamilyDisplaySymbol())
+                    ? AssetLedgerSupport.familyDisplaySymbol(familyIdentity, latestPoint.getAssetSymbol())
+                    : latestPoint.getFamilyDisplaySymbol();
+            String rowSymbol = blank(familyDisplaySymbol)
+                    ? normalizeSymbol(latestPoint.getAssetSymbol())
+                    : familyDisplaySymbol;
+            FamilyRowKey rowKey = new FamilyRowKey(
+                    bucketKey.walletAddress(),
+                    bucketKey.networkId(),
+                    familyIdentity
+            );
+            TokenPositionAccumulator accumulator = rows.computeIfAbsent(
+                    rowKey,
+                    ignored -> new TokenPositionAccumulator(
+                            familyIdentity,
+                            rowSymbol,
+                            displayName(rowSymbol),
+                            bucketKey.networkId(),
+                            bucketKey.walletAddress()
+                    )
+            );
+            accumulator.addBalance(coveredQty, latestPoint, latestPoint.getAssetSymbol());
+            accumulator.markCaptureCoverage();
+        }
+    }
+
     private List<OnChainBalance> loadOnChainBalances(String sessionId, Collection<String> walletAddresses) {
         if (walletAddresses.isEmpty()) {
             return List.of();
@@ -712,6 +882,7 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
             Map<FamilyRowKey, BigDecimal> netRealisedPnlByFamily
     ) {
         Map<String, BigDecimal> marketBasisByFamily = new LinkedHashMap<>();
+        Map<String, BigDecimal> netBasisByFamily = new LinkedHashMap<>();
         Map<String, BigDecimal> coveredByFamily = new LinkedHashMap<>();
         Map<String, String> symbolByFamily = new LinkedHashMap<>();
         for (TokenPositionView position : positions) {
@@ -720,6 +891,10 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                 continue;
             }
             marketBasisByFamily.merge(family, zeroIfNull(position.provableBasisUsd()), (left, right) -> left.add(right, MC));
+            // ADR-062 (2026-07-24): Net-lane provable basis aggregate feeds the effective-cost
+            // numerator under offsetLane=NET (held zero-cost income credited free). The Market-lane
+            // aggregate above still feeds unrealized-PnL% via totalProvableBasisUsd (unchanged).
+            netBasisByFamily.merge(family, zeroIfNull(position.netProvableBasisUsd()), (left, right) -> left.add(right, MC));
             coveredByFamily.merge(family, zeroIfNull(position.coveredQuantity()), (left, right) -> left.add(right, MC));
             symbolByFamily.putIfAbsent(family, position.symbol());
         }
@@ -736,6 +911,7 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                     family,
                     BreakEvenAttributionService.representativeSymbolFor(family, symbolByFamily.get(family)),
                     zeroIfNull(marketBasisByFamily.get(family)),
+                    zeroIfNull(netBasisByFamily.get(family)),
                     zeroIfNull(coveredByFamily.get(family)),
                     zeroIfNull(marketPnlByFamily.get(family)),
                     zeroIfNull(netPnlByFamily.get(family))
@@ -824,7 +1000,10 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
     }
 
     private static String normalizeAddress(String address) {
-        return address == null ? "" : address.trim().toLowerCase(Locale.ROOT);
+        // Family-aware: EVM/CEX lowercased (legacy), Solana case-preserved, TON preferred member ref.
+        // Blind lowercasing corrupted case-sensitive base58 Solana/TON addresses so their balance and
+        // ledger rows never matched the session wallet on the read path.
+        return WalletAddressReadScope.normalize(address);
     }
 
     private static String normalizeSymbol(String symbol) {
@@ -904,7 +1083,26 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
             /** ADR-062 informational zero-basis income booked against this family's cluster. */
             BigDecimal incomeReceivedUsd,
             /** ADR-062 parent family this row's realized P&L contributes to; null when self. */
-            String attributionTargetFamily
+            String attributionTargetFamily,
+            /**
+             * ADR-062 deviation guard: fraction of the held quantity backed by provable basis
+             * (coveredQuantity / quantity), in [0,1]; null when quantity is zero.
+             */
+            BigDecimal coveredRatio,
+            /**
+             * ADR-062 deviation guard: true when the break-even floored to $0 while coverage is below
+             * the display threshold, so the read model can annotate "insufficient coverage" instead of
+             * rendering a misleading bare $0 effective cost. Null when break-even is not applicable.
+             */
+            Boolean breakEvenSuppressed,
+            /**
+             * ADR-062 §5 "Average cost": family-level weighted market cost basis ÷ ETH-equivalent
+             * covered quantity (the same value the move-basis header shows). Equals {@link #avcoUsd}
+             * for a single-wallet family row, but differs when a family spans multiple wallets/networks
+             * (and auto-absorbs held-exposure folds). {@code avcoUsd}/{@code netAvcoUsd} remain as
+             * demoted diagnostics. Null when break-even is not applicable.
+             */
+            BigDecimal averageCostUsd
     ) {
         public BigDecimal marketValueUsd() {
             return marketValueUsd == null ? BigDecimal.ZERO : marketValueUsd;
@@ -914,18 +1112,38 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
             return avcoUsd.multiply(coveredQuantity, MC);
         }
 
+        /**
+         * ADR-062 (2026-07-24): Net-lane provable held basis = {@code netAvcoUsd × coveredQuantity}
+         * (real-cash lane mirror of {@link #provableBasisUsd()}). Feeds ONLY the effective-cost
+         * break-even numerator under {@code offsetLane=NET}; {@link #provableBasisUsd()} is left
+         * untouched so {@code totalProvableBasisUsd}/unrealized-PnL% stay on the Market lane.
+         */
+        public BigDecimal netProvableBasisUsd() {
+            return netAvcoUsd == null ? BigDecimal.ZERO : netAvcoUsd.multiply(coveredQuantity, MC);
+        }
+
         public TokenPositionView withBreakEven(
                 BigDecimal breakEvenUsd,
                 BigDecimal lockedSurplusUsd,
                 BigDecimal incomeReceivedUsd,
-                String attributionTargetFamily
+                String attributionTargetFamily,
+                BigDecimal averageCostUsd
         ) {
+            BigDecimal coveredRatio = quantity == null || quantity.signum() <= 0
+                    ? null
+                    : zeroIfNull(coveredQuantity).divide(quantity, MC);
+            Boolean breakEvenSuppressed = breakEvenUsd == null
+                    ? null
+                    : breakEvenUsd.signum() == 0
+                            && coveredRatio != null
+                            && coveredRatio.compareTo(BREAK_EVEN_COVERAGE_SUPPRESSION_THRESHOLD) < 0;
             return new TokenPositionView(
                     familyIdentity, symbol, name, quantity, coveredQuantity, priceUsd, marketValueUsd,
                     priceSource, pricedAt, stalenessSeconds, isLiveQuote, priceIssue, avcoUsd, netAvcoUsd,
                     unrealizedPnlPct, unrealizedPnlUsd, realizedPnlUsd, networkId, walletAddress, issue,
                     valuationModel, valuationUnderlyingSymbol, unsupportedValuationReason, domain, venueId,
-                    subAccount, breakEvenUsd, lockedSurplusUsd, incomeReceivedUsd, attributionTargetFamily
+                    subAccount, breakEvenUsd, lockedSurplusUsd, incomeReceivedUsd, attributionTargetFamily,
+                    coveredRatio, breakEvenSuppressed, averageCostUsd
             );
         }
     }
@@ -1044,6 +1262,42 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
             this.issue = issueCode;
         }
 
+        /**
+         * ADR-078: flags this row's covered-qty contribution as sourced from a missing/errored on-chain
+         * balance (retained fallback snapshot or ledger-covered guard) rather than a fresh authoritative
+         * capture, so the read model can surface a coverage/health gap without dropping the lot.
+         */
+        private void markCaptureCoverage() {
+            issue = mergeIssueCodes(issue, ISSUE_BALANCE_CAPTURE_FALLBACK);
+        }
+
+        /**
+         * Credits receipt-less locked lending/staking/vault collateral into this row's covered
+         * quantity and cost basis (Part 1). The credit is capped by the on-chain coverage gap
+         * ({@code quantity - coveredQuantity}) so the still-locked amount already folded into the
+         * on-chain balance is covered exactly once and can never over-cover. Basis is credited pro
+         * rata by the covered fraction so partial coverage keeps AVCO consistent. When the row becomes
+         * fully covered the stale {@code coverage_gap} / {@code missing_replay_point} issue is cleared.
+         */
+        private void creditReceiptlessLockedCollateral(ReceiptlessLockedCollateralSupport.LockedCollateralBasis locked) {
+            if (locked == null || !locked.isPresent()) {
+                return;
+            }
+            BigDecimal onChainGap = quantity.subtract(coveredQuantity, MC).max(BigDecimal.ZERO);
+            BigDecimal creditQty = locked.quantity().min(onChainGap);
+            if (creditQty.signum() <= 0) {
+                return;
+            }
+            BigDecimal ratio = creditQty.divide(locked.quantity(), MC);
+            coveredQuantity = coveredQuantity.add(creditQty, MC);
+            totalCostBasisUsd = totalCostBasisUsd.add(locked.grossBasisUsd().multiply(ratio, MC), MC);
+            totalNetCostBasisUsd = totalNetCostBasisUsd.add(locked.netBasisUsd().multiply(ratio, MC), MC);
+            if (coveredQuantity.compareTo(quantity) >= 0
+                    && (ISSUE_COVERAGE_GAP.equals(issue) || ISSUE_MISSING_REPLAY_POINT.equals(issue))) {
+                issue = null;
+            }
+        }
+
         private String priceLookupSymbol() {
             return normalizeSymbol(symbol);
         }
@@ -1124,6 +1378,9 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
                     walletRef.domain().name(),
                     walletRef.venueId(),
                     walletRef.subAccount(),
+                    null,
+                    null,
+                    null,
                     null,
                     null,
                     null,
@@ -1334,6 +1591,7 @@ public class SessionDashboardQueryService implements SessionDashboardReadPort {
 
     private static int issueRank(String issue) {
         return switch (issue) {
+            case ISSUE_BALANCE_CAPTURE_FALLBACK -> 5;
             case ISSUE_MISSING_REPLAY_POINT -> 4;
             case ISSUE_COVERAGE_GAP -> 3;
             case ISSUE_HISTORY_FLAGS -> 2;

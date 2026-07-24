@@ -1,19 +1,21 @@
 import { CommonModule } from '@angular/common';
 import { ChangeDetectionStrategy, Component, EventEmitter, Input, Output } from '@angular/core';
 
-import { EvmNetworkId } from '../../../core/models/wallet-api.models';
+import { OnChainWalletNetworkId } from '../../../core/models/wallet-api.models';
+import { WalletAddressDomain } from '../../../core/utils/wallet-address.util';
 
 export interface SettingsWalletDraftView {
   readonly id: string;
   readonly address: string;
   readonly label: string;
   readonly color: string;
-  readonly networks: ReadonlyArray<EvmNetworkId>;
+  readonly networks: ReadonlyArray<OnChainWalletNetworkId>;
   readonly networksOpen: boolean;
+  readonly domain: WalletAddressDomain;
 }
 
 export interface NetworkPresentationItem {
-  readonly id: EvmNetworkId;
+  readonly id: OnChainWalletNetworkId;
   readonly label: string;
   readonly icon: string;
   readonly color: string;
@@ -53,5 +55,28 @@ export class WalletsSettingsSectionComponent {
   @Output() readonly updatePendingWalletField = new EventEmitter<{ walletId: string; field: 'address' | 'label'; value: string }>();
   @Output() readonly discardPending = new EventEmitter<void>();
   @Output() readonly saveWallets = new EventEmitter<void>();
-}
 
+  networkLabel(domain: WalletAddressDomain): string {
+    switch (domain) {
+      case 'SOLANA': return 'Solana';
+      case 'TON': return 'TON';
+      default: return 'All networks';
+    }
+  }
+
+  networkIcon(domain: WalletAddressDomain): string {
+    switch (domain) {
+      case 'SOLANA': return '◎';
+      case 'TON': return '💎';
+      default: return '';
+    }
+  }
+
+  networkColor(domain: WalletAddressDomain): string {
+    switch (domain) {
+      case 'SOLANA': return '#9945FF';
+      case 'TON': return '#0098EA';
+      default: return '';
+    }
+  }
+}

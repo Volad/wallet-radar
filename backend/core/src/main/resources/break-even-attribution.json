@@ -1,6 +1,9 @@
 {
   "version": 1,
-  "_comment": "ADR-062 break-even (effective-cost) attribution plane. Maps a CLUSTER:* or FAMILY:* source key to a target FAMILY:* whose break-even receives the source's Market-lane realized P&L. Explicit FAMILY:* entries override CLUSTER:* entries. Each family resolves to exactly one target (partition; no double count). Read-model only — does not affect AVCO/replay (ADR-054).",
+  "offsetLane": "NET",
+  "_comment": "ADR-062 break-even (effective-cost) attribution plane. Maps a CLUSTER:* or FAMILY:* source key to a target FAMILY:* whose break-even receives the source's realized P&L. Explicit FAMILY:* entries override CLUSTER:* entries. Each family resolves to exactly one target (partition; no double count). Read-model only — does not affect AVCO/replay (ADR-054).",
+  "_offsetLane_comment": "ADR-062 (2026-07-21 amendment) offset lane: NET credits realized income (rewards/yield = net-market) plus trading profit against effective cost (default); MARKET credits only trading profit. Intra-CLUSTER:*_STAKING losses bypass the loss floor (AC-8); external/self losses stay floored, keeping their effective cost in [0, AVCO].",
+  "_foldHeldExposure_comment": "ADR-062 (2026-07-23 Wave 3, AC-9/D8) optional per-entry boolean foldHeldExposure. When true the source family's HELD market basis AND its ETH-equivalent covered quantity fold into the target's break-even basis + denominator (not just its realized P&L). A missing/null child ETH-equivalent quantity fails the target metric CLOSED (never 1:1). NOTE: GMX GM ETH/USD and Pendle PT-ETH are NOT yet mappable here — they carry raw-contract accountingFamilyIdentity (e.g. 0x70d9...) rather than a CLUSTER:*/FAMILY:* key, and their ETH-share (~$411 / +0.11 ETH-eq) is a dynamic LP-composition value not present in the read-model. Activating that fold requires an accounting family/cluster identity for these LP-receipt instruments plus a live ETH-share composition source; until then they are disclosed-excluded from the ETH fold.",
   "attributions": [
     {
       "source": "CLUSTER:ETH_STAKING",

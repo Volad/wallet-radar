@@ -3,11 +3,13 @@ package com.walletradar.application.costbasis.application;
 import com.walletradar.application.costbasis.breakeven.BreakEvenAttributionLoader;
 import com.walletradar.application.costbasis.breakeven.BreakEvenAttributionService;
 import com.walletradar.application.costbasis.breakeven.BreakEvenCalculator;
+import com.walletradar.application.costbasis.breakeven.OffsetLane;
 import com.walletradar.application.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.application.costbasis.domain.AssetLedgerPointRepository;
 import com.walletradar.application.costbasis.domain.LpReceiptBasisPool;
 import com.walletradar.application.costbasis.domain.LpReceiptBasisPoolRepository;
 import com.walletradar.application.costbasis.domain.OnChainBalance;
+import com.walletradar.application.costbasis.support.AccountingAssetIdentitySupport;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
@@ -58,19 +60,42 @@ class AssetLedgerQueryServiceTest {
     private LpReceiptBasisPoolRepository lpReceiptBasisPoolRepository;
 
     private AssetLedgerQueryService service() {
-        BreakEvenAttributionService attributionService =
-                new BreakEvenAttributionService(new BreakEvenAttributionLoader(new com.fasterxml.jackson.databind.ObjectMapper()));
+        return service(new BreakEvenAttributionService(
+                new BreakEvenAttributionLoader(new com.fasterxml.jackson.databind.ObjectMapper())));
+    }
+
+    private AssetLedgerQueryService service(BreakEvenAttributionService attributionService) {
         return new AssetLedgerQueryService(
                 userSessionRepository,
                 assetLedgerPointRepository,
                 normalizedTransactionRepository,
                 accountingUniverseService,
-                new AssetLedgerChartService(new BlendedExposureAvcoSeriesBuilder()),
+                new AssetLedgerChartService(new BlendedExposureAvcoSeriesBuilder(), attributionService),
                 new AssetLedgerReconciliationService(mongoOperations, cexLiveBalancePort),
                 new LpReceiptBasisPoolService(lpReceiptBasisPoolRepository),
                 new BreakEvenCalculator(attributionService),
                 attributionService
         );
+    }
+
+    /**
+     * ADR-062 (2026-07-21 amendment): an attribution service whose offset lane is forced (default
+     * classpath lane is NET), so tests can exercise both lanes deterministically. Mirrors the
+     * classpath cluster→family mappings.
+     */
+    private static BreakEvenAttributionService attributionServiceWithLane(OffsetLane offsetLane) {
+        Map<String, String> sourceToTarget = new LinkedHashMap<>();
+        sourceToTarget.put("CLUSTER:ETH_STAKING", "FAMILY:ETH");
+        sourceToTarget.put("CLUSTER:SOL_STAKING", "FAMILY:SOL");
+        sourceToTarget.put("CLUSTER:AVAX_STAKING", "FAMILY:AVAX");
+        BreakEvenAttributionLoader.LoadedBreakEvenAttribution loaded =
+                new BreakEvenAttributionLoader.LoadedBreakEvenAttribution(sourceToTarget, java.util.Set.of(), offsetLane);
+        return new BreakEvenAttributionService(new BreakEvenAttributionLoader(new com.fasterxml.jackson.databind.ObjectMapper()) {
+            @Override
+            public LoadedBreakEvenAttribution loadFromClasspath() {
+                return loaded;
+            }
+        });
     }
 
     @Test
@@ -275,7 +300,16 @@ class AssetLedgerQueryServiceTest {
         );
         wrapPoint.setAssetSymbol("WETH");
         wrapPoint.setAssetContract("0x4200000000000000000000000000000000000006");
-        wrapPoint.setAccountingAssetIdentity("NATIVE:" + NetworkId.BASE.name());
+        // The wrap ledger point and the WETH on-chain balance must reconcile on the SAME position
+        // bucket. Reconciliation keys the balance via AccountingAssetIdentitySupport.positionAssetIdentity
+        // and the point via its stored accountingAssetIdentity. In production the wrapped-native contract
+        // folds to NATIVE:BASE via NetworkNativeAssets, but that binding is process-global static state:
+        // whether it is active in a unit run depends on test ORDER. Deriving the point identity from the
+        // SAME resolver as the balance makes the bucket keys match regardless of binding state, so this
+        // reconciles deterministically as coverage_gap (uncovered-with-a-known-point), never
+        // missing_replay_point.
+        wrapPoint.setAccountingAssetIdentity(AccountingAssetIdentitySupport.positionAssetIdentity(
+                NetworkId.BASE, "WETH", "0x4200000000000000000000000000000000000006"));
         wrapPoint.setBasisBackedQuantityAfter(BigDecimal.ZERO);
         wrapPoint.setUncoveredQuantityAfter(new BigDecimal("1"));
         wrapPoint.setHasIncompleteHistoryAfter(true);
@@ -380,6 +414,122 @@ class AssetLedgerQueryServiceTest {
             assertThat(bucket.hasUnresolvedFlags()).isFalse();
         });
         assertThat(view.current().shortfallSources()).isEmpty();
+    }
+
+    @Test
+    void sessionFamilyLedgerCreditsReceiptlessLockedCollateralBasisIntoCoverage() {
+        // Receipt-less lending (e.g. Jupiter Lend on Solana): the LENDING_DEPOSIT REALLOCATE_OUTs the
+        // underlying's basis (no receipt token to re-cover it) while a live-balance provider merges the
+        // locked amount back into the native balance. Without the credit the merged balance reads as
+        // held-but-uncovered; the parked net REALLOCATE_OUT basis must be credited back, capped by the
+        // on-chain gap, so covered == held and AVCO blends liquid + locked.
+        UserSession session = new UserSession();
+        session.setId("session-recl");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("wallet-a");
+        wallet.setNetworks(List.of(NetworkId.MANTLE));
+        session.setWallets(List.of(wallet));
+
+        // After deposit: 0.5 liquid remains basis-backed at $60/ETH; 5.0 was reallocated out at $160/ETH.
+        AssetLedgerPoint lendingOut = point(
+                "1",
+                "wallet-a",
+                NetworkId.MANTLE,
+                "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.REALLOCATE_OUT,
+                AssetLedgerPoint.LifecycleKind.LENDING,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "-5",
+                "-800",
+                "0",
+                "0",
+                "0.5",
+                "30"
+        );
+        lendingOut.setNormalizedType("LENDING_DEPOSIT");
+        lendingOut.setProtocolName("Jupiter Lend");
+
+        when(userSessionRepository.findById("session-recl")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-recl",
+                List.of("wallet-a"),
+                List.of("wallet-a")
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-recl",
+                "FAMILY:ETH"
+        )).thenReturn(List.of(lendingOut));
+        when(normalizedTransactionRepository.findAllById(List.of("1"))).thenReturn(List.of());
+        // Merged native balance: 0.5 liquid + 5.0 still locked in the receipt-less lending position.
+        OnChainBalance balance = balance("wallet-a", NetworkId.MANTLE, "ETH", "5.5");
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(balance));
+
+        AssetLedgerQueryService service = service();
+        AssetLedgerQueryService.CurrentStateView current =
+                service.findSessionFamilyLedger("session-recl", "FAMILY:ETH").orElseThrow().current();
+
+        assertThat(current.quantity()).isEqualByComparingTo("5.5");
+        assertThat(current.coveredQuantity()).isEqualByComparingTo("5.5");
+        assertThat(current.uncoveredQuantity()).isZero();
+        // Blended AVCO = (0.5*60 + 800) / 5.5 = 830 / 5.5.
+        assertThat(current.avcoUsd()).isEqualByComparingTo(new BigDecimal("830").divide(new BigDecimal("5.5"), java.math.MathContext.DECIMAL128));
+        assertThat(current.uncoveredBuckets()).isEmpty();
+    }
+
+    @Test
+    void sessionFamilyLedgerDoesNotCreditReceiptBearingLendingTwice() {
+        // Receipt-bearing lending (Aave aToken) nets to ~0 within the family (basis lands on the aToken
+        // bucket, reconciled via its own on_chain_balance), so the receipt-less credit must NOT fire.
+        UserSession session = new UserSession();
+        session.setId("session-recb");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("wallet-a");
+        wallet.setNetworks(List.of(NetworkId.MANTLE));
+        session.setWallets(List.of(wallet));
+
+        AssetLedgerPoint lendingIn = point(
+                "1",
+                "wallet-a",
+                NetworkId.MANTLE,
+                "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.REALLOCATE_IN,
+                AssetLedgerPoint.LifecycleKind.LENDING,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "3.06",
+                "6058.10",
+                "0",
+                "0",
+                "3.06",
+                "6058.10"
+        );
+        lendingIn.setAssetSymbol("aManWETH");
+        lendingIn.setAssetContract("0xea00000000000000000000000000000000000000");
+        lendingIn.setAccountingAssetIdentity("0xea00000000000000000000000000000000000000");
+        lendingIn.setNormalizedType("LENDING_DEPOSIT");
+        lendingIn.setProtocolName("Aave");
+
+        when(userSessionRepository.findById("session-recb")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-recb",
+                List.of("wallet-a"),
+                List.of("wallet-a")
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-recb",
+                "FAMILY:ETH"
+        )).thenReturn(List.of(lendingIn));
+        when(normalizedTransactionRepository.findAllById(List.of("1"))).thenReturn(List.of());
+        OnChainBalance balance = balance("wallet-a", NetworkId.MANTLE, "aManWETH", "3.06");
+        balance.setAssetContract("0xea00000000000000000000000000000000000000");
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(balance));
+
+        AssetLedgerQueryService service = service();
+        AssetLedgerQueryService.CurrentStateView current =
+                service.findSessionFamilyLedger("session-recb", "FAMILY:ETH").orElseThrow().current();
+
+        // Covered fully via the aToken bucket itself; the receipt-less credit adds nothing (net IN).
+        assertThat(current.coveredQuantity()).isEqualByComparingTo("3.06");
+        assertThat(current.quantity()).isEqualByComparingTo("3.06");
     }
 
     @Test
@@ -1616,6 +1766,79 @@ class AssetLedgerQueryServiceTest {
     }
 
     @Test
+    void sessionFamilyLedgerBlendedSeriesHoldsWhenEthParkedViaLendingLoopCarry() {
+        // RM-1 (2026-07-24): ETH bought, then parked out as lending-loop collateral via a same-family
+        // CARRY_OUT (LENDING_LOOP_OPEN) draining the liquid pool to 0. Before RM-1 the blended /
+        // effective-cost line dropped to a false $0/UNAVAILABLE across the parked window because CARRY
+        // corridors were excluded from the fold; now the CARRY corridor is folded so the blended line
+        // stays defined and covers the parked collateral (series holds instead of flooring to $0).
+        UserSession session = new UserSession();
+        session.setId("session-carry-fold");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("wallet-a");
+        wallet.setNetworks(List.of(NetworkId.BASE));
+        session.setWallets(List.of(wallet));
+
+        AssetLedgerPoint buy = point(
+                "1", "wallet-a", NetworkId.BASE, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.ACQUIRE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "1", "2000", "0", "0", "1", "2000"
+        );
+        buy.setNormalizedType("BUY");
+
+        AssetLedgerPoint collateralOut = point(
+                "2", "wallet-a", NetworkId.BASE, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.CARRY_OUT, AssetLedgerPoint.LifecycleKind.LOOP,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "-1", "-2000", "0", "0", "0", "0"
+        );
+        collateralOut.setAssetSymbol("WETH");
+        collateralOut.setNormalizedType("LENDING_LOOP_OPEN");
+        collateralOut.setCorrelationId("lending-loop:0xcb8483");
+        collateralOut.setNetCostBasisDeltaUsd(new BigDecimal("-2000"));
+        collateralOut.setBlockTimestamp(Instant.parse("2026-04-05T10:01:00Z"));
+
+        when(userSessionRepository.findById("session-carry-fold")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-carry-fold",
+                List.of("wallet-a"),
+                List.of("wallet-a")
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-carry-fold",
+                "FAMILY:ETH"
+        )).thenReturn(List.of(buy, collateralOut));
+        when(normalizedTransactionRepository.findAllById(List.of("1", "2")))
+                .thenReturn(List.of(
+                        normalized("1", "Coinbase", "ETH", "BUY", "1", "2000"),
+                        normalized("2", "Aave", "WETH", "TRANSFER", "-1", null)
+                ));
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(
+                balance("wallet-a", NetworkId.BASE, "ETH", "0")
+        ));
+
+        AssetLedgerQueryService.SessionAssetLedgerView view = service()
+                .findSessionFamilyLedger("session-carry-fold", "FAMILY:ETH")
+                .orElseThrow();
+
+        assertThat(view.timeline()).hasSize(2);
+        AssetLedgerQueryService.TimelineEntryView parked = view.timeline().get(1);
+
+        // Spot (liquid) line breaks — byte-identical to pre-change behavior.
+        assertThat(parked.avcoKind()).isEqualTo("UNAVAILABLE");
+        assertThat(parked.liquidQuantityAfter()).isEqualByComparingTo("0");
+
+        // RM-1: the CARRY-parked collateral keeps the blended line defined (no false $0 drop).
+        assertThat(parked.blendedAvcoKind()).isEqualTo("PRIMARY_FLOW");
+        assertThat(parked.blendedAvcoAfterUsd()).isEqualByComparingTo("2000");
+        assertThat(parked.blendedCoveredQuantityAfter()).isEqualByComparingTo("1");
+        assertThat(parked.blendedCoveredQuantityAfter()).isGreaterThan(parked.liquidQuantityAfter());
+        // Effective-cost series stays available (offset 0 → equals AVCO), not floored to $0 or "—".
+        assertThat(parked.effectiveCostAfterUsd()).isEqualByComparingTo("2000");
+    }
+
+    @Test
     void sessionFamilyLedgerBlendedParkedTerminalReconcilesToLpReceiptBasisPoolsOnCrossAssetExit() {
         // RC-E3 / B-ETH-05 (ADR-061 amendment): a cross-asset LP exit (ETH→USDC) returns nothing to
         // FAMILY:ETH — the receipt burn is a REALLOCATE_OUT on FAMILY:LP_RECEIPT, so the parked slice
@@ -1928,6 +2151,560 @@ class AssetLedgerQueryServiceTest {
         assertThat(view.timeline()).isNotEmpty();
         AssetLedgerQueryService.TimelineEntryView terminal = view.timeline().get(view.timeline().size() - 1);
         assertThat(terminal.effectiveCostAfterUsd()).isEqualByComparingTo("1500");
+        assertThat(terminal.effectiveCostAfterUsd()).isEqualByComparingTo(view.current().breakEvenUsd());
+    }
+
+    @Test
+    void sessionFamilyLedgerEffectiveCostReconcilesUnderBothOffsetLanes() {
+        // ADR-062 (2026-07-21 amendment): FAMILY:ETH parent (1 ETH @ $2000 basis, no self P&L) with an
+        // attributed cmETH child (FAMILY:METH) that banked +$200 Market-lane trading profit AND +$500
+        // realized income (net realized = $700, income = net − market = $500).
+        //   NET lane   : offset = $700 → effective basis $1300 → break-even $1300/ETH.
+        //   MARKET lane: offset = $200 → effective basis $1800 → break-even $1800/ETH.
+        // Terminal chart effective cost must equal the header break-even under the SAME lane, and the
+        // NET terminal (income credited) must be ≤ the MARKET terminal (income ≥ 0).
+        UserSession session = new UserSession();
+        session.setId("session-lane");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("wallet-a");
+        wallet.setNetworks(List.of(NetworkId.BASE));
+        session.setWallets(List.of(wallet));
+
+        AssetLedgerPoint ethBuy = point(
+                "1", "wallet-a", NetworkId.BASE, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.ACQUIRE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "1", "2000", "0", "0", "1", "2000"
+        );
+        ethBuy.setNormalizedType("BUY");
+        ethBuy.setBlockTimestamp(Instant.parse("2026-04-05T10:00:00Z"));
+
+        AssetLedgerPoint methSell = point(
+                "5", "wallet-a", NetworkId.BASE, "FAMILY:METH",
+                AssetLedgerPoint.BasisEffect.DISPOSE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "-2", "-5000", "200", "0", "0", "0"
+        );
+        methSell.setAssetSymbol("CMETH");
+        methSell.setFamilyDisplaySymbol("CMETH");
+        methSell.setNormalizedType("SELL");
+        methSell.setNetRealisedPnlDeltaUsd(new BigDecimal("700"));
+        methSell.setBlockTimestamp(Instant.parse("2026-04-05T10:05:00Z"));
+
+        when(userSessionRepository.findById("session-lane")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-lane",
+                List.of("wallet-a"),
+                List.of("wallet-a")
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-lane", "FAMILY:ETH"
+        )).thenReturn(List.of(ethBuy));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-lane", "FAMILY:METH"
+        )).thenReturn(List.of(methSell));
+        when(normalizedTransactionRepository.findAllById(List.of("1")))
+                .thenReturn(List.of(normalized("1", "Coinbase", "ETH", "BUY", "1", "2000")));
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(
+                balance("wallet-a", NetworkId.BASE, "ETH", "1")
+        ));
+
+        AssetLedgerQueryService.SessionAssetLedgerView netView = service(attributionServiceWithLane(OffsetLane.NET))
+                .findSessionFamilyLedger("session-lane", "FAMILY:ETH")
+                .orElseThrow();
+        AssetLedgerQueryService.SessionAssetLedgerView marketView = service(attributionServiceWithLane(OffsetLane.MARKET))
+                .findSessionFamilyLedger("session-lane", "FAMILY:ETH")
+                .orElseThrow();
+
+        BigDecimal netTerminal = netView.timeline().get(netView.timeline().size() - 1).effectiveCostAfterUsd();
+        BigDecimal marketTerminal = marketView.timeline().get(marketView.timeline().size() - 1).effectiveCostAfterUsd();
+
+        assertThat(netView.current().breakEvenUsd()).isEqualByComparingTo("1300");
+        assertThat(netTerminal).isEqualByComparingTo("1300");
+        assertThat(netTerminal).isEqualByComparingTo(netView.current().breakEvenUsd());
+
+        assertThat(marketView.current().breakEvenUsd()).isEqualByComparingTo("1800");
+        assertThat(marketTerminal).isEqualByComparingTo("1800");
+        assertThat(marketTerminal).isEqualByComparingTo(marketView.current().breakEvenUsd());
+
+        assertThat(netTerminal).isLessThanOrEqualTo(marketTerminal);
+    }
+
+    @Test
+    void sessionFamilyLedgerEffectiveCostNetLaneHeldIncomeReconcilesAtLowerNetValue() {
+        // ADR-062 (2026-07-24): a FAMILY:ETH position of 2 held units carrying $4000 MARKET basis
+        // (avco $2000/ETH) but only $2000 NET basis (avco $1000/ETH — half arrived as free held reward
+        // income, never sold ⇒ zero realized). Under NET the header break-even numerator is the NET
+        // held basis and the series numerator is the NET blended AVCO, so BOTH reconcile at the LOWER
+        // net value ($1000/ETH), below the market average cost ($2000/ETH). Proves the held zero-cost
+        // income is credited free in header AND series (no double-count: zero realized offset).
+        UserSession session = new UserSession();
+        session.setId("session-held-income");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("wallet-a");
+        wallet.setNetworks(List.of(NetworkId.BASE));
+        session.setWallets(List.of(wallet));
+
+        AssetLedgerPoint ethReward = point(
+                "1", "wallet-a", NetworkId.BASE, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.ACQUIRE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "2", "4000", "0", "0", "2", "4000"
+        );
+        ethReward.setNormalizedType("BUY");
+        ethReward.setBlockTimestamp(Instant.parse("2026-04-05T10:00:00Z"));
+        // Net (real-cash) lane: only $2000 of real cash cost across the 2 held units (avco $1000).
+        ethReward.setNetAvcoAfterUsd(new BigDecimal("1000"));
+        ethReward.setNetTotalCostBasisAfterUsd(new BigDecimal("2000"));
+        ethReward.setNetCostBasisDeltaUsd(new BigDecimal("2000"));
+
+        when(userSessionRepository.findById("session-held-income")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-held-income",
+                List.of("wallet-a"),
+                List.of("wallet-a")
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-held-income", "FAMILY:ETH"
+        )).thenReturn(List.of(ethReward));
+        when(normalizedTransactionRepository.findAllById(List.of("1")))
+                .thenReturn(List.of(normalized("1", "Coinbase", "ETH", "BUY", "2", "4000")));
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(
+                balance("wallet-a", NetworkId.BASE, "ETH", "2")
+        ));
+
+        AssetLedgerQueryService.SessionAssetLedgerView view = service()
+                .findSessionFamilyLedger("session-held-income", "FAMILY:ETH")
+                .orElseThrow();
+
+        // Header break-even on the NET lane: $2000 net basis / 2 ETH = $1000/ETH (NOT $2000 market).
+        assertThat(view.current().breakEvenUsd()).isEqualByComparingTo("1000");
+        // Market average cost stays $2000/ETH (Market-lane diagnostic, unchanged).
+        assertThat(view.current().avcoUsd()).isEqualByComparingTo("2000");
+        assertThat(view.current().breakEvenUsd()).isLessThan(view.current().avcoUsd());
+        // Series terminal reconciles with the header scalar at the SAME lower net value.
+        AssetLedgerQueryService.TimelineEntryView terminal = view.timeline().get(view.timeline().size() - 1);
+        assertThat(terminal.effectiveCostAfterUsd()).isEqualByComparingTo("1000");
+        assertThat(terminal.effectiveCostAfterUsd()).isEqualByComparingTo(view.current().breakEvenUsd());
+    }
+
+    @Test
+    void sessionFamilyLedgerEffectiveCostSeriesDustDenominatorIsGuardedNotExploded() {
+        // ADR-062 Wave 3 (AC-7 / AC-10 parity) — T3 series-explosion regression. During an LP-deployment
+        // window the ETH-equivalent covered quantity collapses to a dust sliver while an attributed
+        // cmETH cluster LOSS (unfloored per AC-8) is already woven as a NEGATIVE offset. Dividing that
+        // (correct, deterministic) offset by the sliver denominator would otherwise render an
+        // economically meaningless per-unit spike ($0.40 basis − (−$100) offset ÷ 0.0002 ETH ≈
+        // $502,000). The fail-closed dust guard renders the dust point UNAVAILABLE ("—"/null) exactly
+        // where the blended AVCO is dust-guarded — while the HEALTHY terminal still reconciles with the
+        // scalar header break-even. No ledger/replay/realized-PnL value changes.
+        UserSession session = new UserSession();
+        session.setId("session-dust");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("wallet-a");
+        wallet.setNetworks(List.of(NetworkId.BASE));
+        session.setWallets(List.of(wallet));
+
+        AssetLedgerPoint ethBuy = point(
+                "1", "wallet-a", NetworkId.BASE, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.ACQUIRE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "1", "2000", "0", "0", "1", "2000"
+        );
+        ethBuy.setNormalizedType("BUY");
+        ethBuy.setBlockTimestamp(Instant.parse("2026-04-05T10:00:00Z"));
+
+        // Attributed cmETH cluster LOSS (unfloored NEGATIVE offset), woven before the dust event.
+        AssetLedgerPoint methLoss = point(
+                "5", "wallet-a", NetworkId.BASE, "FAMILY:METH",
+                AssetLedgerPoint.BasisEffect.DISPOSE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "-1", "-2000", "-100", "0", "0", "0"
+        );
+        methLoss.setAssetSymbol("CMETH");
+        methLoss.setFamilyDisplaySymbol("CMETH");
+        methLoss.setNormalizedType("SELL");
+        methLoss.setNetRealisedPnlDeltaUsd(new BigDecimal("-100"));
+        methLoss.setBlockTimestamp(Instant.parse("2026-04-05T10:02:00Z"));
+
+        // ETH liquid pool drains to a sub-$1 dust residual (0.0002 ETH @ $0.40 → avco $2000).
+        AssetLedgerPoint ethDrain = point(
+                "3", "wallet-a", NetworkId.BASE, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.DISPOSE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "-0.9998", "-1999.60", "0", "0", "0.0002", "0.40"
+        );
+        ethDrain.setNormalizedType("SELL");
+        ethDrain.setBlockTimestamp(Instant.parse("2026-04-05T10:05:00Z"));
+
+        // ETH re-acquired back to a HEALTHY terminal (1 ETH @ $2000).
+        AssetLedgerPoint ethReacquire = point(
+                "4", "wallet-a", NetworkId.BASE, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.ACQUIRE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "0.9998", "1999.60", "0", "0", "1", "2000"
+        );
+        ethReacquire.setNormalizedType("BUY");
+        ethReacquire.setBlockTimestamp(Instant.parse("2026-04-05T10:10:00Z"));
+
+        when(userSessionRepository.findById("session-dust")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-dust",
+                List.of("wallet-a"),
+                List.of("wallet-a")
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-dust", "FAMILY:ETH"
+        )).thenReturn(List.of(ethBuy, ethDrain, ethReacquire));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-dust", "FAMILY:METH"
+        )).thenReturn(List.of(methLoss));
+        when(normalizedTransactionRepository.findAllById(List.of("1", "3", "4")))
+                .thenReturn(List.of(
+                        normalized("1", "Coinbase", "ETH", "BUY", "1", "2000"),
+                        normalized("3", "Uniswap", "ETH", "SELL", "-0.9998", null),
+                        normalized("4", "Coinbase", "ETH", "BUY", "0.9998", "2000")
+                ));
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(
+                balance("wallet-a", NetworkId.BASE, "ETH", "1")
+        ));
+
+        AssetLedgerQueryService.SessionAssetLedgerView view = service()
+                .findSessionFamilyLedger("session-dust", "FAMILY:ETH")
+                .orElseThrow();
+
+        assertThat(view.timeline()).hasSize(3);
+        AssetLedgerQueryService.TimelineEntryView dust = view.timeline().get(1);
+        AssetLedgerQueryService.TimelineEntryView terminal = view.timeline().get(2);
+
+        // Dust point: the sub-$1 covered basis fails the AC-10 guard, so BOTH the blended AVCO and the
+        // effective-cost series render UNAVAILABLE — never the exploded per-unit value.
+        assertThat(dust.blendedAvcoAfterUsd()).as("blended AVCO dust-guarded to null").isNull();
+        assertThat(dust.effectiveCostAfterUsd()).as("effective-cost series dust-guarded, not exploded").isNull();
+
+        // Healthy terminal still reconciles with the scalar header break-even (offset −(−$100) raises
+        // it above avg cost per R2/AC-8): ($2000 + $100) / 1 ETH = $2100.
+        assertThat(terminal.effectiveCostAfterUsd()).isEqualByComparingTo("2100");
+        assertThat(view.current().breakEvenUsd()).isEqualByComparingTo("2100");
+        assertThat(terminal.effectiveCostAfterUsd()).isEqualByComparingTo(view.current().breakEvenUsd());
+    }
+
+    @Test
+    void sessionFamilyLedgerEffectiveCostSeriesOverSliverSpikeIsSuppressedNotExploded() {
+        // ADR-062 Wave 3 (T3, 2026-07-23 re-audit) — over-sliver artifact regression. The $1 dust guard
+        // only catches sub-dollar covered basis; an LP/lending-parked window whose covered basis is a
+        // small-but-above-$1 sliver ($100 here, > the $1 guard) slips through, and the large woven
+        // NEGATIVE cluster offset divided by the sliver denominator renders a spurious ~$40k per-unit
+        // spike. The additive over-sliver guard suppresses that point (BOTH sliver-denominated:
+        // 0.05 ETH < 5% of the 3.85-ETH peak, AND over-blended-AVCO: $40k > $2000 × 1.1) to null, while
+        // (a) a normal in-range point ($2000 at AVCO), (b) a legitimate $0 offset-recoup floor on a
+        // HEALTHY denominator, and (c) the healthy terminal (reconciling with the scalar header) all
+        // stay visible. No ledger/replay/AVCO/terminal value changes.
+        UserSession session = new UserSession();
+        session.setId("session-sliver");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("wallet-a");
+        wallet.setNetworks(List.of(NetworkId.BASE));
+        session.setWallets(List.of(wallet));
+
+        // Point 0: buy 3.85 ETH @ $2000 (basis $7700). Establishes the family ETH-equivalent peak and
+        // is itself a NORMAL in-range point (no offset woven yet → effective cost == AVCO $2000).
+        AssetLedgerPoint ethBuy = point(
+                "1", "wallet-a", NetworkId.BASE, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.ACQUIRE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "3.85", "7700", "0", "0", "3.85", "7700"
+        );
+        ethBuy.setNormalizedType("BUY");
+        ethBuy.setBlockTimestamp(Instant.parse("2026-04-05T10:00:00Z"));
+
+        // Attributed cmETH cluster RECOUP (+$8000 net realized), woven before the hold point below.
+        AssetLedgerPoint methRecoup = point(
+                "2", "wallet-a", NetworkId.BASE, "FAMILY:METH",
+                AssetLedgerPoint.BasisEffect.DISPOSE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "-4", "-10000", "8000", "0", "0", "0"
+        );
+        methRecoup.setAssetSymbol("CMETH");
+        methRecoup.setFamilyDisplaySymbol("CMETH");
+        methRecoup.setNormalizedType("SELL");
+        methRecoup.setNetRealisedPnlDeltaUsd(new BigDecimal("8000"));
+        methRecoup.setBlockTimestamp(Instant.parse("2026-04-05T10:01:00Z"));
+
+        // Point 1: hold 3.85 ETH (no quantity change). Cumulative offset is now +$8000, which fully
+        // recoups the $7700 basis → $0 offset-recoup floor on a HEALTHY denominator (must stay visible).
+        AssetLedgerPoint ethHold = point(
+                "3", "wallet-a", NetworkId.BASE, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.ACQUIRE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "0", "0", "0", "0", "3.85", "7700"
+        );
+        ethHold.setNormalizedType("BUY");
+        ethHold.setBlockTimestamp(Instant.parse("2026-04-05T10:02:00Z"));
+
+        // Attributed cmETH cluster LOSS (-$9900 net realized), woven before the parked-sliver point so
+        // the cumulative offset flips to -$1900 (recoup $8000 - loss $9900).
+        AssetLedgerPoint methLoss = point(
+                "4", "wallet-a", NetworkId.BASE, "FAMILY:METH",
+                AssetLedgerPoint.BasisEffect.DISPOSE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "-4", "-8000", "-9900", "0", "0", "0"
+        );
+        methLoss.setAssetSymbol("CMETH");
+        methLoss.setFamilyDisplaySymbol("CMETH");
+        methLoss.setNormalizedType("SELL");
+        methLoss.setNetRealisedPnlDeltaUsd(new BigDecimal("-9900"));
+        methLoss.setBlockTimestamp(Instant.parse("2026-04-05T10:04:00Z"));
+
+        // Point 2: ETH deployed into LP so the liquid pool drains to a 0.05-ETH sliver (covered basis
+        // $100, > the $1 dust guard, AVCO still $2000). effectiveCost = (100 - (-1900)) / 0.05 = $40k
+        // → over-sliver artifact (0.05 < 5% × 3.85 peak AND $40k > $2000 × 1.1) → suppressed to null.
+        AssetLedgerPoint ethSliver = point(
+                "5", "wallet-a", NetworkId.BASE, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.DISPOSE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "-3.80", "-7600", "0", "0", "0.05", "100"
+        );
+        ethSliver.setNormalizedType("SELL");
+        ethSliver.setBlockTimestamp(Instant.parse("2026-04-05T10:05:00Z"));
+
+        // Point 3: ETH re-acquired back to a HEALTHY 3.85-ETH terminal (basis $7700). Not sliver-
+        // denominated → the -$1900 offset elevates it to (7700 + 1900) / 3.85 = $2493.51 and it stays
+        // visible, reconciling with the scalar header break-even.
+        AssetLedgerPoint ethReacquire = point(
+                "6", "wallet-a", NetworkId.BASE, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.ACQUIRE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "3.80", "7600", "0", "0", "3.85", "7700"
+        );
+        ethReacquire.setNormalizedType("BUY");
+        ethReacquire.setBlockTimestamp(Instant.parse("2026-04-05T10:10:00Z"));
+
+        when(userSessionRepository.findById("session-sliver")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-sliver",
+                List.of("wallet-a"),
+                List.of("wallet-a")
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-sliver", "FAMILY:ETH"
+        )).thenReturn(List.of(ethBuy, ethHold, ethSliver, ethReacquire));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-sliver", "FAMILY:METH"
+        )).thenReturn(List.of(methRecoup, methLoss));
+        when(normalizedTransactionRepository.findAllById(List.of("1", "3", "5", "6")))
+                .thenReturn(List.of(
+                        normalized("1", "Coinbase", "ETH", "BUY", "3.85", "2000"),
+                        normalized("3", "Coinbase", "ETH", "BUY", "0", "2000"),
+                        normalized("5", "Uniswap", "ETH", "SELL", "-3.80", null),
+                        normalized("6", "Coinbase", "ETH", "BUY", "3.80", "2000")
+                ));
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(
+                balance("wallet-a", NetworkId.BASE, "ETH", "3.85")
+        ));
+
+        AssetLedgerQueryService.SessionAssetLedgerView view = service()
+                .findSessionFamilyLedger("session-sliver", "FAMILY:ETH")
+                .orElseThrow();
+
+        assertThat(view.timeline()).hasSize(4);
+        AssetLedgerQueryService.TimelineEntryView normalInRange = view.timeline().get(0);
+        AssetLedgerQueryService.TimelineEntryView zeroFloor = view.timeline().get(1);
+        AssetLedgerQueryService.TimelineEntryView sliver = view.timeline().get(2);
+        AssetLedgerQueryService.TimelineEntryView terminal = view.timeline().get(3);
+
+        // Control (a): a normal in-range point (no offset woven yet) stays visible at AVCO.
+        assertThat(normalInRange.effectiveCostAfterUsd())
+                .as("normal in-range point stays visible").isEqualByComparingTo("2000");
+
+        // Control (b): a legitimate $0 offset-recoup floor on a HEALTHY denominator stays visible.
+        assertThat(zeroFloor.effectiveCostAfterUsd())
+                .as("legitimate $0 offset-recoup floor stays visible").isEqualByComparingTo("0");
+        assertThat(zeroFloor.blendedAvcoAfterUsd()).as("healthy denominator blended AVCO present").isNotNull();
+
+        // Target: the over-sliver artifact ($100 covered basis > $1 guard, ~$40k per-unit spike) is
+        // suppressed to null — the $1 dust guard alone would NOT have caught it (covered basis > $1).
+        assertThat(sliver.blendedAvcoAfterUsd())
+                .as("sliver point covered basis $100 is above the $1 dust guard").isNotNull();
+        assertThat(sliver.effectiveCostAfterUsd())
+                .as("over-sliver effective-cost spike suppressed, not exploded").isNull();
+
+        // Control (c): the healthy terminal stays visible, is elevated above AVCO by the -$1900 offset
+        // ((7700 + 1900) / 3.85 ≈ $2493.51), and reconciles with the scalar header break-even.
+        BigDecimal expectedTerminal = new BigDecimal("9600")
+                .divide(new BigDecimal("3.85"), java.math.MathContext.DECIMAL128);
+        assertThat(terminal.effectiveCostAfterUsd()).as("healthy terminal stays visible").isNotNull();
+        assertThat(terminal.effectiveCostAfterUsd()).isGreaterThan(new BigDecimal("2000"));
+        assertThat(terminal.effectiveCostAfterUsd()).isEqualByComparingTo(expectedTerminal);
+        assertThat(terminal.effectiveCostAfterUsd()).isEqualByComparingTo(view.current().breakEvenUsd());
+    }
+
+    @Test
+    void sessionFamilyLedgerEffectiveCostSeriesOverSliverGuardUsesGlobalPeakNotRunningPeak() {
+        // ADR-062 Wave 3 (T3, 2026-07-23 retune) — the RUNNING-vs-GLOBAL peak trap. The family's liquid
+        // ETH-equivalent exposure ramps up over time: it holds only 0.6 ETH early, then a mid-timeline
+        // artifact window drains it to a 0.04-ETH sliver, and only LATER does it ramp to a 4.0-ETH
+        // terminal peak. A guard anchored on the RUNNING peak would measure the sliver against 0.6 ETH
+        // (0.04 / 0.6 ≈ 6.67% > 5% → NOT sliver-denominated → the ~$7k spike would SLIP THROUGH). The
+        // retuned guard anchors on the GLOBAL/terminal peak (4.0 ETH): 0.04 / 4.0 = 1% < 5% AND
+        // effectiveCost $7000 > blended AVCO $2000 × 1.1 → suppressed to null. Controls: a normal
+        // in-range point and a legitimate $0 offset-recoup floor stay visible, and the healthy terminal
+        // stays visible and reconciles with the scalar header break-even. No ledger/replay/AVCO value
+        // changes.
+        UserSession session = new UserSession();
+        session.setId("session-global-peak");
+        UserSession.SessionWallet wallet = new UserSession.SessionWallet();
+        wallet.setAddress("wallet-a");
+        wallet.setNetworks(List.of(NetworkId.BASE));
+        session.setWallets(List.of(wallet));
+
+        // Point 0: buy 0.6 ETH @ $2000 (basis $1200). Establishes the SMALL running peak (0.6 ETH) and
+        // is a NORMAL in-range point (no offset woven yet → effective cost == AVCO $2000).
+        AssetLedgerPoint ethSmallBuy = point(
+                "1", "wallet-a", NetworkId.BASE, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.ACQUIRE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "0.6", "1200", "0", "0", "0.6", "1200"
+        );
+        ethSmallBuy.setNormalizedType("BUY");
+        ethSmallBuy.setBlockTimestamp(Instant.parse("2026-04-05T10:00:00Z"));
+
+        // Attributed cmETH cluster RECOUP (+$1200 net realized), woven before the hold point below so
+        // the cumulative offset (+$1200) fully recoups the $1200 basis → $0 floor on a HEALTHY 0.6 ETH.
+        AssetLedgerPoint methRecoup = point(
+                "2", "wallet-a", NetworkId.BASE, "FAMILY:METH",
+                AssetLedgerPoint.BasisEffect.DISPOSE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "-4", "-10000", "1200", "0", "0", "0"
+        );
+        methRecoup.setAssetSymbol("CMETH");
+        methRecoup.setFamilyDisplaySymbol("CMETH");
+        methRecoup.setNormalizedType("SELL");
+        methRecoup.setNetRealisedPnlDeltaUsd(new BigDecimal("1200"));
+        methRecoup.setBlockTimestamp(Instant.parse("2026-04-05T10:01:00Z"));
+
+        // Point 1: hold 0.6 ETH (no quantity change). Cumulative offset +$1200 fully recoups the $1200
+        // basis → $0 offset-recoup floor on a HEALTHY denominator (0.6 / 4.0 = 15% > 5%, and $0 is not
+        // over-AVCO) → must stay visible.
+        AssetLedgerPoint ethHold = point(
+                "3", "wallet-a", NetworkId.BASE, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.ACQUIRE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "0", "0", "0", "0", "0.6", "1200"
+        );
+        ethHold.setNormalizedType("BUY");
+        ethHold.setBlockTimestamp(Instant.parse("2026-04-05T10:02:00Z"));
+
+        // Attributed cmETH cluster LOSS (-$1400 net realized), woven before the parked-sliver point so
+        // the cumulative offset flips to -$200 (recoup $1200 - loss $1400).
+        AssetLedgerPoint methLoss = point(
+                "4", "wallet-a", NetworkId.BASE, "FAMILY:METH",
+                AssetLedgerPoint.BasisEffect.DISPOSE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "-4", "-8000", "-1400", "0", "0", "0"
+        );
+        methLoss.setAssetSymbol("CMETH");
+        methLoss.setFamilyDisplaySymbol("CMETH");
+        methLoss.setNormalizedType("SELL");
+        methLoss.setNetRealisedPnlDeltaUsd(new BigDecimal("-1400"));
+        methLoss.setBlockTimestamp(Instant.parse("2026-04-05T10:04:00Z"));
+
+        // Point 2: ETH deployed into LP so the liquid pool drains to a 0.04-ETH sliver (covered basis
+        // $80, > the $1 dust guard, AVCO still $2000). effectiveCost = (80 - (-200)) / 0.04 = $7000.
+        // RUNNING peak here is only 0.6 ETH (0.04 / 0.6 ≈ 6.67% > 5% → a running-peak guard would KEEP
+        // it — the bug); GLOBAL peak is 4.0 ETH (0.04 / 4.0 = 1% < 5% AND $7000 > $2000 × 1.1) →
+        // suppressed to null.
+        AssetLedgerPoint ethSliver = point(
+                "5", "wallet-a", NetworkId.BASE, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.DISPOSE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "-0.56", "-1120", "0", "0", "0.04", "80"
+        );
+        ethSliver.setNormalizedType("SELL");
+        ethSliver.setBlockTimestamp(Instant.parse("2026-04-05T10:05:00Z"));
+
+        // Point 3: ETH ramps to a HEALTHY 4.0-ETH terminal (basis $8000) — the GLOBAL peak, reached only
+        // now. Not sliver-denominated → the -$200 offset elevates it to (8000 + 200) / 4.0 = $2050
+        // (avcoMult 1.025 < 1.1, so kept) and it stays visible, reconciling with the scalar header.
+        AssetLedgerPoint ethRamp = point(
+                "6", "wallet-a", NetworkId.BASE, "FAMILY:ETH",
+                AssetLedgerPoint.BasisEffect.ACQUIRE, AssetLedgerPoint.LifecycleKind.SPOT,
+                AssetLedgerPoint.LifecycleStage.SINGLE,
+                "3.96", "7920", "0", "0", "4.0", "8000"
+        );
+        ethRamp.setNormalizedType("BUY");
+        ethRamp.setBlockTimestamp(Instant.parse("2026-04-05T10:10:00Z"));
+
+        when(userSessionRepository.findById("session-global-peak")).thenReturn(Optional.of(session));
+        when(accountingUniverseService.resolveScope(session)).thenReturn(new AccountingUniverseService.AccountingUniverseScope(
+                "ACCOUNTING_UNIVERSE:session-global-peak",
+                List.of("wallet-a"),
+                List.of("wallet-a")
+        ));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-global-peak", "FAMILY:ETH"
+        )).thenReturn(List.of(ethSmallBuy, ethHold, ethSliver, ethRamp));
+        when(assetLedgerPointRepository.findAllByAccountingUniverseIdAndAccountingFamilyIdentityOrderByBlockTimestampAscTransactionIndexAscReplaySequenceAsc(
+                "ACCOUNTING_UNIVERSE:session-global-peak", "FAMILY:METH"
+        )).thenReturn(List.of(methRecoup, methLoss));
+        when(normalizedTransactionRepository.findAllById(List.of("1", "3", "5", "6")))
+                .thenReturn(List.of(
+                        normalized("1", "Coinbase", "ETH", "BUY", "0.6", "2000"),
+                        normalized("3", "Coinbase", "ETH", "BUY", "0", "2000"),
+                        normalized("5", "Uniswap", "ETH", "SELL", "-0.56", null),
+                        normalized("6", "Coinbase", "ETH", "BUY", "3.96", "2000")
+                ));
+        when(mongoOperations.find(any(), eq(OnChainBalance.class))).thenReturn(List.of(
+                balance("wallet-a", NetworkId.BASE, "ETH", "4.0")
+        ));
+
+        AssetLedgerQueryService.SessionAssetLedgerView view = service()
+                .findSessionFamilyLedger("session-global-peak", "FAMILY:ETH")
+                .orElseThrow();
+
+        assertThat(view.timeline()).hasSize(4);
+        AssetLedgerQueryService.TimelineEntryView normalInRange = view.timeline().get(0);
+        AssetLedgerQueryService.TimelineEntryView zeroFloor = view.timeline().get(1);
+        AssetLedgerQueryService.TimelineEntryView sliver = view.timeline().get(2);
+        AssetLedgerQueryService.TimelineEntryView terminal = view.timeline().get(3);
+
+        // The running-vs-global trap made explicit: the sliver covered (0.04 ETH) is ABOVE 5% of the
+        // running peak (0.6 ETH) but BELOW 5% of the global/terminal peak (4.0 ETH).
+        BigDecimal runningPeak = normalInRange.blendedCoveredQuantityAfter(); // 0.6 ETH
+        BigDecimal globalPeak = terminal.blendedCoveredQuantityAfter();       // 4.0 ETH
+        assertThat(sliver.blendedCoveredQuantityAfter()).isEqualByComparingTo("0.04");
+        assertThat(runningPeak).isEqualByComparingTo("0.6");
+        assertThat(globalPeak).isEqualByComparingTo("4.0");
+        assertThat(sliver.blendedCoveredQuantityAfter())
+                .as("sliver is ABOVE 5% of the running peak (a running-peak guard would miss it)")
+                .isGreaterThan(runningPeak.multiply(new BigDecimal("0.05")));
+        assertThat(sliver.blendedCoveredQuantityAfter())
+                .as("sliver is BELOW 5% of the global/terminal peak (the retuned guard catches it)")
+                .isLessThan(globalPeak.multiply(new BigDecimal("0.05")));
+
+        // Control (a): a normal in-range point (no offset woven yet) stays visible at AVCO.
+        assertThat(normalInRange.effectiveCostAfterUsd())
+                .as("normal in-range point stays visible").isEqualByComparingTo("2000");
+
+        // Control (b): a legitimate $0 offset-recoup floor on a HEALTHY denominator stays visible.
+        assertThat(zeroFloor.effectiveCostAfterUsd())
+                .as("legitimate $0 offset-recoup floor stays visible").isEqualByComparingTo("0");
+        assertThat(zeroFloor.blendedAvcoAfterUsd()).as("healthy denominator blended AVCO present").isNotNull();
+
+        // Target: the mid-timeline over-sliver artifact is suppressed to null ONLY because the guard now
+        // uses the global peak; its covered basis ($80) is above the $1 dust guard.
+        assertThat(sliver.blendedAvcoAfterUsd())
+                .as("sliver point covered basis $80 is above the $1 dust guard").isNotNull();
+        assertThat(sliver.effectiveCostAfterUsd())
+                .as("over-sliver spike suppressed via global peak, not exploded").isNull();
+
+        // Control (c): the healthy terminal stays visible, is elevated above AVCO by the -$200 offset
+        // ((8000 + 200) / 4.0 = $2050), and reconciles with the scalar header break-even.
+        BigDecimal expectedTerminal = new BigDecimal("8200")
+                .divide(new BigDecimal("4.0"), java.math.MathContext.DECIMAL128);
+        assertThat(terminal.effectiveCostAfterUsd()).as("healthy terminal stays visible").isNotNull();
+        assertThat(terminal.effectiveCostAfterUsd()).isGreaterThan(new BigDecimal("2000"));
+        assertThat(terminal.effectiveCostAfterUsd()).isEqualByComparingTo(expectedTerminal);
         assertThat(terminal.effectiveCostAfterUsd()).isEqualByComparingTo(view.current().breakEvenUsd());
     }
 

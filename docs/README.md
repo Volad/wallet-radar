@@ -91,6 +91,7 @@ Global reference for product context, domain model, backend pipeline stages, fro
 | [Linking](examples/linking-examples.md) | Pairing and continuity |
 | [Pricing](examples/pricing-examples.md) | Resolver paths |
 | [AVCO / replay](examples/avco-replay-examples.md) | Ledger point math |
+| [Effective cost / break-even](examples/effective-cost-breakeven-examples.md) | Balance AVCO vs Effective cost; held rewards credited free |
 | [Move basis carry](examples/move-basis-carry-examples.md) | CARRY_OUT / CARRY_IN |
 | [LP cycle](examples/lp-cycle-example.md) | Entry → exit |
 | [Lending cycle](examples/lending-cycle-example.md) | Deposit → borrow → close |

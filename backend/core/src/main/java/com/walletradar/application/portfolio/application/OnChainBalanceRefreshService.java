@@ -5,10 +5,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.walletradar.application.costbasis.support.AccountingAssetIdentitySupport;
+import com.walletradar.application.costbasis.application.balance.NonEvmOnChainBalanceLoader;
 import com.walletradar.application.costbasis.application.port.OnChainBalanceRefresher;
 import com.walletradar.application.costbasis.application.OnChainBalanceRefreshQueryService;
 import com.walletradar.application.costbasis.domain.OnChainBalance;
 import com.walletradar.application.costbasis.domain.OnChainBalanceRepository;
+import com.walletradar.application.lending.application.LendingAssetSymbolSupport;
 import com.walletradar.domain.common.Decimal128Support;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.platform.networks.RpcEndpointRotator;
@@ -31,12 +33,14 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.EnumMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -67,6 +71,8 @@ public class OnChainBalanceRefreshService implements OnChainBalanceRefresher {
     private final AnkrAccountBalanceProvider ankrAccountBalanceProvider;
     private final EtherscanV2ExplorerProvider etherscanExplorerProvider;
     private final BlockScoutExplorerProvider blockScoutExplorerProvider;
+    // Non-EVM (Solana, TON) balance loader (ADR-067); EVM path stays candidate-driven above.
+    private final NonEvmOnChainBalanceLoader nonEvmBalanceLoader;
 
     public int refreshCurrentBalances(Instant capturedAt) {
         return refreshCurrentBalancesInternal(null, queryService.loadCandidates(), capturedAt, null);
@@ -93,71 +99,310 @@ public class OnChainBalanceRefreshService implements OnChainBalanceRefresher {
             Runnable heartbeat
     ) {
         heartbeat(heartbeat);
-        ResolutionResult resolution = resolveCandidates(rawCandidates);
-        if (resolution.candidates().isEmpty()) {
-            deleteBalances(sessionId);
-            log.info("On-chain balance refresh complete: candidates=0, refreshed=0, skippedUnsupported={}",
-                    resolution.skippedUnsupported());
+        List<OnChainBalanceRefreshQueryService.BalanceRefreshCandidate> evmRawCandidates = new ArrayList<>();
+        List<OnChainBalanceRefreshQueryService.BalanceRefreshCandidate> nonEvmRawCandidates = new ArrayList<>();
+        for (OnChainBalanceRefreshQueryService.BalanceRefreshCandidate candidate : rawCandidates) {
+            if (candidate == null || candidate.networkId() == null) {
+                continue;
+            }
+            if (nonEvmBalanceLoader.handles(candidate.networkId())) {
+                nonEvmRawCandidates.add(candidate);
+            } else {
+                evmRawCandidates.add(candidate);
+            }
+        }
+
+        // A3: load the last-known snapshot for this scope so a failed/partial fetch can fall back to it
+        // (never drop) and so stale rows are cleaned up by targeted id-delete — never a destructive
+        // delete-then-write nor an unconditional deleteAll() that a fetch failure could ride through.
+        Map<String, OnChainBalance> existingById = loadExistingById(sessionId);
+
+        boolean noCandidates = evmRawCandidates.isEmpty() && nonEvmRawCandidates.isEmpty();
+        if (noCandidates) {
+            // Genuinely empty universe (no tracked candidates at all) — safe to drop stale rows for
+            // this scope. Targeted by id so a concurrent session's rows are never touched, and gated
+            // on the raw-candidate set (not on empty fetch results) so a transient query/RPC failure
+            // that yields zero candidates does not erase the read model.
+            deleteStaleRows(existingById.keySet(), Set.of());
+            log.info("On-chain balance refresh complete: candidates=0, refreshed=0, skippedUnsupported=0");
             return 0;
         }
 
-        List<ResolvedCandidate> candidates = resolution.candidates();
-        Map<NetworkId, Map<String, Integer>> knownDecimalsByNetwork = loadKnownDecimals(candidates, sessionId);
-        ProviderResolutionResult providerResult = loadProviderBalances(candidates, capturedAt, sessionId, heartbeat);
-        List<ResolvedCandidate> afterProvider = candidates.stream()
-                .filter(candidate -> !providerResult.handledKeys().contains(refreshKey(candidate)))
-                .toList();
-        ProviderResolutionResult blockScoutResult = loadBlockScoutBalances(
-                afterProvider,
-                knownDecimalsByNetwork,
-                capturedAt,
-                sessionId,
-                heartbeat
+        ResolutionResult resolution = resolveCandidates(evmRawCandidates);
+        List<OnChainBalance> nonEvmBalances = nonEvmBalanceLoader.load(
+                nonEvmRawCandidates, capturedAt, sessionId, heartbeat
         );
-        List<ResolvedCandidate> afterBlockScout = afterProvider.stream()
-                .filter(candidate -> !blockScoutResult.handledKeys().contains(refreshKey(candidate)))
-                .toList();
-        ProviderResolutionResult etherscanResult = loadExplorerBalances(
-                afterBlockScout,
-                knownDecimalsByNetwork,
-                capturedAt,
-                sessionId,
-                heartbeat
-        );
-        List<ResolvedCandidate> rpcCandidates = afterBlockScout.stream()
-                .filter(candidate -> !etherscanResult.handledKeys().contains(refreshKey(candidate)))
-                .toList();
-        Map<NetworkId, Map<String, Integer>> decimalsByNetwork = loadDecimals(
-                rpcCandidates,
-                knownDecimalsByNetwork,
-                heartbeat
-        );
-        List<OnChainBalance> refreshedBalances = new ArrayList<>(providerResult.balances());
-        refreshedBalances.addAll(blockScoutResult.balances());
-        refreshedBalances.addAll(etherscanResult.balances());
-        refreshedBalances.addAll(loadRpcBalances(rpcCandidates, decimalsByNetwork, capturedAt, sessionId, heartbeat));
+        // A non-EVM provider returning nothing for a non-empty candidate set is treated as a partial
+        // fetch (retry-safe): skip destructive cleanup so a TON/Solana RPC hiccup cannot erase rows.
+        boolean nonEvmComplete = nonEvmRawCandidates.isEmpty() || !nonEvmBalances.isEmpty();
 
-        deleteBalances(sessionId);
+        EvmLoadResult evmResult = loadEvmBalances(resolution.candidates(), existingById, capturedAt, sessionId, heartbeat);
+
+        List<OnChainBalance> refreshedBalances = new ArrayList<>(evmResult.balances());
+        refreshedBalances.addAll(nonEvmBalances);
+
+        // A3: idempotent upsert per bucket (deterministic _id = prefix:wallet:network:accountingIdentity).
         if (!refreshedBalances.isEmpty()) {
             onChainBalanceRepository.saveAll(refreshedBalances);
+        }
+
+        // A3: targeted stale-row cleanup only when the fetch was complete (no fallbacks). A partial or
+        // failed fetch leaves survivor rows intact rather than wiping them.
+        boolean fetchComplete = !evmResult.hadFailure() && nonEvmComplete;
+        Set<String> refreshedIds = refreshedBalances.stream()
+                .map(OnChainBalance::getId)
+                .filter(Objects::nonNull)
+                .collect(java.util.stream.Collectors.toCollection(HashSet::new));
+        if (fetchComplete) {
+            deleteStaleRows(existingById.keySet(), refreshedIds);
         }
         heartbeat(heartbeat);
 
         log.info(
-                "On-chain balance refresh complete: candidates={}, refreshed={}, skippedUnsupported={}",
-                candidates.size(),
-                refreshedBalances.size(),
-                resolution.skippedUnsupported()
+                "On-chain balance refresh complete: evmCandidates={}, nonEvmBalances={}, refreshed={}, "
+                        + "fallbacks={}, fetchComplete={}, skippedUnsupported={}",
+                resolution.candidates().size(), nonEvmBalances.size(), refreshedBalances.size(),
+                evmResult.hadFailure(), fetchComplete, resolution.skippedUnsupported()
         );
         return refreshedBalances.size();
     }
 
-    private void deleteBalances(String sessionId) {
-        if (sessionId == null || sessionId.isBlank()) {
-            onChainBalanceRepository.deleteAll();
+    private EvmLoadResult loadEvmBalances(
+            List<ResolvedCandidate> candidates,
+            Map<String, OnChainBalance> existingById,
+            Instant capturedAt,
+            String sessionId,
+            Runnable heartbeat
+    ) {
+        if (candidates.isEmpty()) {
+            return new EvmLoadResult(List.of(), false);
+        }
+        Map<NetworkId, Map<String, Integer>> knownDecimalsByNetwork = loadKnownDecimals(candidates, sessionId);
+
+        // Interest-accruing lending receipt/debt tokens (Aave aTokens & variable/stable debt tokens)
+        // rebase their balanceOf over time. Indexed balance providers (Ankr, block explorers) report the
+        // scaled/principal amount, which omits accrued interest and under-reports both collateral and debt,
+        // corrupting lending health, net exposure and PnL. Force these through the live RPC balanceOf path
+        // (on-chain ground truth). Detection is registry-grammar based; no hardcoded token contracts,
+        // wallet addresses or networks.
+        List<ResolvedCandidate> liveBalanceOfCandidates = candidates.stream()
+                .filter(OnChainBalanceRefreshService::requiresLiveBalanceOf)
+                .toList();
+        List<ResolvedCandidate> indexedCandidates = candidates.stream()
+                .filter(candidate -> !requiresLiveBalanceOf(candidate))
+                .toList();
+
+        ProviderResolutionResult providerResult = loadProviderBalances(indexedCandidates, capturedAt, sessionId, heartbeat);
+        List<ResolvedCandidate> afterProvider = indexedCandidates.stream()
+                .filter(candidate -> !providerResult.handledKeys().contains(refreshKey(candidate)))
+                .toList();
+        ProviderResolutionResult blockScoutResult = loadBlockScoutBalances(
+                afterProvider, knownDecimalsByNetwork, capturedAt, sessionId, heartbeat);
+        List<ResolvedCandidate> afterBlockScout = afterProvider.stream()
+                .filter(candidate -> !blockScoutResult.handledKeys().contains(refreshKey(candidate)))
+                .toList();
+        ProviderResolutionResult etherscanResult = loadExplorerBalances(
+                afterBlockScout, knownDecimalsByNetwork, capturedAt, sessionId, heartbeat);
+        List<ResolvedCandidate> rpcCandidates = new ArrayList<>(afterBlockScout.stream()
+                .filter(candidate -> !etherscanResult.handledKeys().contains(refreshKey(candidate)))
+                .toList());
+        // A2: forced-live candidates keep live RPC balanceOf as the PRIMARY (accrual ground truth).
+        rpcCandidates.addAll(liveBalanceOfCandidates);
+        Map<NetworkId, Map<String, Integer>> decimalsByNetwork = loadDecimals(
+                rpcCandidates, knownDecimalsByNetwork, heartbeat);
+        ProviderResolutionResult rpcResult = loadRpcBalances(
+                rpcCandidates, decimalsByNetwork, capturedAt, sessionId, heartbeat);
+
+        List<OnChainBalance> evmBalances = new ArrayList<>(providerResult.balances());
+        evmBalances.addAll(blockScoutResult.balances());
+        evmBalances.addAll(etherscanResult.balances());
+        evmBalances.addAll(rpcResult.balances());
+
+        Set<RefreshKey> handled = new HashSet<>();
+        handled.addAll(providerResult.handledKeys());
+        handled.addAll(blockScoutResult.handledKeys());
+        handled.addAll(etherscanResult.handledKeys());
+        handled.addAll(rpcResult.handledKeys());
+
+        // A2: forced-live candidates whose live RPC read failed fall through the indexed provider chain
+        // (BlockScout snapshots then Etherscan) instead of the old single fallback-less RPC path. The
+        // fallback accepts only a value a provider genuinely reports for the token — never a
+        // synthesized/zero-default — so it can never mask a failed capture by zeroing a still-held
+        // accruing lot.
+        List<ResolvedCandidate> forcedLiveUnresolved = liveBalanceOfCandidates.stream()
+                .filter(candidate -> !handled.contains(refreshKey(candidate)))
+                .toList();
+        if (!forcedLiveUnresolved.isEmpty()) {
+            ProviderResolutionResult forcedLiveFallback = loadForcedLiveProviderFallback(
+                    forcedLiveUnresolved, knownDecimalsByNetwork, capturedAt, sessionId, heartbeat);
+            evmBalances.addAll(forcedLiveFallback.balances());
+            handled.addAll(forcedLiveFallback.handledKeys());
+        }
+
+        // A1: any candidate that resolved a nonzero net-flow but has no fresh row from any live source
+        // must NOT be silently dropped. Fall back to the last-known snapshot (retained value + prior
+        // capturedAt, marked captureFallback so the read model flags it) and record a fetch failure so
+        // destructive cleanup is skipped. When no prior snapshot exists the bucket is genuinely missing
+        // and the dashboard coverage guard (ADR-078) weights it off the ledger-covered quantity.
+        boolean hadFailure = false;
+        for (ResolvedCandidate candidate : candidates) {
+            if (handled.contains(refreshKey(candidate))) {
+                continue;
+            }
+            hadFailure = true;
+            OnChainBalance lastKnown = existingById.get(balanceId(sessionId, candidate));
+            if (lastKnown != null && lastKnown.getQuantity() != null) {
+                evmBalances.add(fallbackBalance(candidate, lastKnown, sessionId));
+                log.warn(
+                        "On-chain balance refresh retained last-known snapshot (all live sources failed): "
+                                + "walletAddress={}, networkId={}, accountingIdentity={}, capturedAt={}",
+                        candidate.walletAddress(), candidate.networkId(), candidate.accountingIdentity(),
+                        lastKnown.getCapturedAt()
+                );
+            } else {
+                log.warn(
+                        "On-chain balance refresh has no live value and no prior snapshot (coverage gap "
+                                + "handled by ledger-covered weighting): walletAddress={}, networkId={}, "
+                                + "accountingIdentity={}",
+                        candidate.walletAddress(), candidate.networkId(), candidate.accountingIdentity()
+                );
+            }
+        }
+        return new EvmLoadResult(evmBalances, hadFailure);
+    }
+
+    /**
+     * Safe multi-provider fallback for forced-live lending receipt/debt tokens whose live RPC read
+     * failed (A2). Consults the indexed providers but accepts <b>only</b> a value the provider actually
+     * reports for the token — never a zero-default or synthesized zero — so a fallback never masks a
+     * failed capture by writing a bogus zero for a still-held accruing lot. Ankr reported quantities
+     * first, then BlockScout token-balance snapshots.
+     */
+    private ProviderResolutionResult loadForcedLiveProviderFallback(
+            List<ResolvedCandidate> candidates,
+            Map<NetworkId, Map<String, Integer>> knownDecimalsByNetwork,
+            Instant capturedAt,
+            String sessionId,
+            Runnable heartbeat
+    ) {
+        ArrayList<OnChainBalance> balances = new ArrayList<>();
+        Map<RefreshKey, Boolean> handledKeys = new LinkedHashMap<>();
+
+        // Ankr: only accept genuinely-reported keys (no zero-default).
+        Map<String, List<ResolvedCandidate>> byWallet = new LinkedHashMap<>();
+        for (ResolvedCandidate candidate : candidates) {
+            if (ankrAccountBalanceProvider.supports(candidate.networkId())) {
+                byWallet.computeIfAbsent(candidate.walletAddress(), ignored -> new ArrayList<>()).add(candidate);
+            }
+        }
+        for (Map.Entry<String, List<ResolvedCandidate>> entry : byWallet.entrySet()) {
+            heartbeat(heartbeat);
+            try {
+                Map<RefreshKey, BigDecimal> quantities = providerQuantities(entry.getKey(), entry.getValue());
+                for (ResolvedCandidate candidate : entry.getValue()) {
+                    BigDecimal quantity = quantities.get(refreshKey(candidate));
+                    if (quantity != null) {
+                        balances.add(balanceDocument(candidate, quantity, capturedAt, sessionId));
+                        handledKeys.put(refreshKey(candidate), Boolean.TRUE);
+                    }
+                }
+            } catch (Exception providerFailure) {
+                log.warn(
+                        "On-chain balance refresh forced-live Ankr fallback failed: walletAddress={}, fallback=BlockScout",
+                        entry.getKey(), providerFailure
+                );
+            }
+        }
+
+        // BlockScout: only accept present token snapshots (skip the synthesize-zero branch).
+        Map<WalletNetworkKey, List<ResolvedCandidate>> grouped = new LinkedHashMap<>();
+        for (ResolvedCandidate candidate : candidates) {
+            if (handledKeys.containsKey(refreshKey(candidate))
+                    || candidate.queryKind() != QueryKind.ERC20
+                    || !blockScoutExplorerProvider.supports(candidate.networkId())) {
+                continue;
+            }
+            grouped.computeIfAbsent(
+                    new WalletNetworkKey(candidate.walletAddress(), candidate.networkId()),
+                    ignored -> new ArrayList<>()
+            ).add(candidate);
+        }
+        for (Map.Entry<WalletNetworkKey, List<ResolvedCandidate>> entry : grouped.entrySet()) {
+            heartbeat(heartbeat);
+            WalletNetworkKey key = entry.getKey();
+            try {
+                Map<String, BlockScoutExplorerProvider.TokenBalanceSnapshot> tokenBalances =
+                        blockScoutExplorerProvider.getTokenBalances(key.walletAddress(), key.networkId());
+                for (ResolvedCandidate candidate : entry.getValue()) {
+                    BlockScoutExplorerProvider.TokenBalanceSnapshot snapshot =
+                            tokenBalances.get(candidate.assetContract().toLowerCase(Locale.ROOT));
+                    if (snapshot == null || snapshot.rawQuantity() == null || snapshot.decimals() < 0) {
+                        continue;
+                    }
+                    BigDecimal quantity = Decimal128Support.normalize(
+                            new BigDecimal(snapshot.rawQuantity()).movePointLeft(Math.max(0, snapshot.decimals()))
+                    );
+                    balances.add(balanceDocument(candidate, quantity, snapshot.decimals(), capturedAt, sessionId));
+                    handledKeys.put(refreshKey(candidate), Boolean.TRUE);
+                }
+            } catch (Exception explorerFailure) {
+                log.warn(
+                        "On-chain balance refresh forced-live BlockScout fallback failed: walletAddress={}, networkId={}, "
+                                + "fallback=last-known-snapshot",
+                        key.walletAddress(), key.networkId(), explorerFailure
+                );
+            }
+        }
+        return new ProviderResolutionResult(List.copyOf(balances), handledKeys.keySet());
+    }
+
+    private void deleteStaleRows(Set<String> existingIds, Set<String> refreshedIds) {
+        if (existingIds == null || existingIds.isEmpty()) {
             return;
         }
-        onChainBalanceRepository.deleteAllBySessionId(sessionId);
+        List<String> staleIds = existingIds.stream()
+                .filter(Objects::nonNull)
+                .filter(id -> !refreshedIds.contains(id))
+                .toList();
+        if (!staleIds.isEmpty()) {
+            onChainBalanceRepository.deleteAllById(staleIds);
+        }
+    }
+
+    private Map<String, OnChainBalance> loadExistingById(String sessionId) {
+        List<OnChainBalance> existing = sessionId == null || sessionId.isBlank()
+                ? onChainBalanceRepository.findBySessionIdIsNull()
+                : onChainBalanceRepository.findBySessionId(sessionId);
+        if (existing == null || existing.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, OnChainBalance> byId = new LinkedHashMap<>();
+        for (OnChainBalance balance : existing) {
+            if (balance != null && balance.getId() != null) {
+                byId.putIfAbsent(balance.getId(), balance);
+            }
+        }
+        return byId;
+    }
+
+    /**
+     * Retained last-known snapshot re-emitted for a candidate whose live capture failed (A1/A2). Keeps
+     * the prior quantity/decimals and the prior {@code capturedAt} (does <b>not</b> backfill it to the
+     * current capture time so fallback staleness stays measurable) and marks {@code captureFallback}.
+     */
+    private OnChainBalance fallbackBalance(ResolvedCandidate candidate, OnChainBalance lastKnown, String sessionId) {
+        OnChainBalance balance = new OnChainBalance();
+        balance.setId(balanceId(sessionId, candidate));
+        balance.setSessionId(sessionId);
+        balance.setWalletAddress(candidate.walletAddress());
+        balance.setNetworkId(candidate.networkId());
+        balance.setAssetSymbol(candidate.assetSymbol() == null ? lastKnown.getAssetSymbol() : candidate.assetSymbol());
+        balance.setAssetContract(candidate.assetContract());
+        balance.setTokenDecimals(lastKnown.getTokenDecimals());
+        balance.setQuantity(lastKnown.getQuantity());
+        balance.setCapturedAt(lastKnown.getCapturedAt());
+        balance.setCaptureFallback(Boolean.TRUE);
+        return balance;
     }
 
     private ResolutionResult resolveCandidates(List<OnChainBalanceRefreshQueryService.BalanceRefreshCandidate> rawCandidates) {
@@ -559,7 +804,19 @@ public class OnChainBalanceRefreshService implements OnChainBalanceRefresher {
                             List.of(Map.of("to", contract, "data", ERC20_DECIMALS_SELECTOR), "latest")
                     ))
                     .toList();
-            JsonNode responses = callBatchWithRetry(networkId, requests);
+            JsonNode responses;
+            try {
+                responses = callBatchWithRetry(networkId, requests);
+            } catch (RuntimeException decimalsFailure) {
+                // A1: a transient decimals() RPC failure must not abort the whole refresh. Leave these
+                // contracts without decimals so their candidates stay unresolved and route to the
+                // last-known-snapshot fallback rather than being silently dropped.
+                log.warn(
+                        "On-chain balance refresh decimals lookup failed: networkId={}, contracts={}, fallback=snapshot",
+                        networkId, contracts, decimalsFailure
+                );
+                continue;
+            }
             Map<Integer, JsonNode> byId = responsesById(responses);
             Map<String, Integer> decimalsByContract = new LinkedHashMap<>();
             for (int i = 0; i < contracts.size(); i++) {
@@ -580,7 +837,7 @@ public class OnChainBalanceRefreshService implements OnChainBalanceRefresher {
         return decimalsByNetwork;
     }
 
-    private List<OnChainBalance> loadRpcBalances(
+    private ProviderResolutionResult loadRpcBalances(
             List<ResolvedCandidate> candidates,
             Map<NetworkId, Map<String, Integer>> decimalsByNetwork,
             Instant capturedAt,
@@ -596,6 +853,7 @@ public class OnChainBalanceRefreshService implements OnChainBalanceRefresher {
         }
 
         List<OnChainBalance> balances = new ArrayList<>();
+        Map<RefreshKey, Boolean> handledKeys = new LinkedHashMap<>();
         for (Map.Entry<WalletNetworkKey, List<ResolvedCandidate>> entry : grouped.entrySet()) {
             heartbeat(heartbeat);
             WalletNetworkKey walletNetworkKey = entry.getKey();
@@ -620,6 +878,9 @@ public class OnChainBalanceRefreshService implements OnChainBalanceRefresher {
                 }
                 Integer decimals = decimalsByContract.get(candidate.assetContract());
                 if (decimals == null) {
+                    // Decimals lookup failed for this candidate (A1): do not emit a row here — leaving
+                    // the key unhandled routes it to the last-known-snapshot fallback rather than a
+                    // silent drop.
                     continue;
                 }
                 descriptors.add(new RequestDescriptor(candidate, decimals));
@@ -639,15 +900,29 @@ public class OnChainBalanceRefreshService implements OnChainBalanceRefresher {
                 continue;
             }
 
-            JsonNode responses = callBatchWithRetry(walletNetworkKey.networkId(), requests);
+            JsonNode responses;
+            try {
+                responses = callBatchWithRetry(walletNetworkKey.networkId(), requests);
+            } catch (RuntimeException rpcFailure) {
+                // A1/A2: RPC exhausted all endpoints for this wallet/network group. Do not propagate
+                // (that would abort the whole refresh) and do not mark these keys handled — they route
+                // to the forced-live provider fallback and/or last-known-snapshot fallback.
+                log.warn(
+                        "On-chain balance refresh RPC group failed after retries: walletAddress={}, networkId={}, fallback=snapshot",
+                        walletNetworkKey.walletAddress(), walletNetworkKey.networkId(), rpcFailure
+                );
+                continue;
+            }
             Map<Integer, JsonNode> byId = responsesById(responses);
             for (int i = 0; i < descriptors.size(); i++) {
                 RequestDescriptor descriptor = descriptors.get(i);
                 JsonNode response = byId.get(i + 1);
                 BigInteger rawQuantity = parseOptionalBigIntegerQuantity(response);
                 if (rawQuantity == null) {
+                    // Transient balanceOf error / missing result (A1): leave unhandled so the candidate
+                    // falls back to its last-known snapshot instead of being silently dropped.
                     log.warn(
-                            "On-chain balance refresh skipped balance lookup: walletAddress={}, networkId={}, accountingIdentity={}",
+                            "On-chain balance refresh missing balance result: walletAddress={}, networkId={}, accountingIdentity={}, fallback=snapshot",
                             descriptor.candidate().walletAddress(),
                             descriptor.candidate().networkId(),
                             descriptor.candidate().accountingIdentity()
@@ -664,9 +939,10 @@ public class OnChainBalanceRefreshService implements OnChainBalanceRefresher {
                         capturedAt,
                         sessionId
                 ));
+                handledKeys.put(refreshKey(descriptor.candidate()), Boolean.TRUE);
             }
         }
-        return balances;
+        return new ProviderResolutionResult(List.copyOf(balances), handledKeys.keySet());
     }
 
     private <T> List<T> runBounded(
@@ -769,6 +1045,19 @@ public class OnChainBalanceRefreshService implements OnChainBalanceRefresher {
 
     private RefreshKey refreshKey(ResolvedCandidate candidate) {
         return new RefreshKey(candidate.walletAddress(), candidate.networkId(), candidate.accountingIdentity());
+    }
+
+    /**
+     * True when a token's {@code balanceOf} must be read live via RPC rather than through indexed
+     * balance providers. Interest-accruing lending receipt/debt tokens (Aave aTokens, variable/stable
+     * debt tokens) rebase over time; indexers report the scaled/principal balance and under-report
+     * accrued interest, which corrupts lending health, net exposure and PnL. RPC {@code balanceOf} is
+     * the on-chain ground truth for these tokens.
+     */
+    private static boolean requiresLiveBalanceOf(ResolvedCandidate candidate) {
+        return candidate != null
+                && candidate.queryKind() == QueryKind.ERC20
+                && LendingAssetSymbolSupport.isLendingReceiptOrDebtSymbol(candidate.assetSymbol());
     }
 
     private JsonNode callBatchWithRetry(NetworkId networkId, List<RpcRequest> requests) {
@@ -940,6 +1229,18 @@ public class OnChainBalanceRefreshService implements OnChainBalanceRefresher {
     private record ProviderResolutionResult(
             List<OnChainBalance> balances,
             java.util.Set<RefreshKey> handledKeys
+    ) {
+    }
+
+    /**
+     * Outcome of the EVM balance load. {@code hadFailure} is {@code true} when at least one candidate
+     * that resolved a nonzero net-flow could not be freshly captured from any live source and fell
+     * back to its last-known snapshot (or is genuinely missing) — the signal that destructive stale-row
+     * cleanup must be skipped so a partial fetch never erases the read model.
+     */
+    private record EvmLoadResult(
+            List<OnChainBalance> balances,
+            boolean hadFailure
     ) {
     }
 

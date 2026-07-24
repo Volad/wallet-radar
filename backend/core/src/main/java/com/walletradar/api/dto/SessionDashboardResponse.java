@@ -74,7 +74,17 @@ public record SessionDashboardResponse(
             /** ADR-062 informational zero-basis income booked against this family's cluster. */
             BigDecimal incomeReceivedUsd,
             /** ADR-062 parent family this row's realized P&L contributes to; null when self. */
-            String attributionTargetFamily
+            String attributionTargetFamily,
+            /** ADR-062 deviation guard: coveredQuantity / quantity in [0,1]; null when quantity is zero. */
+            BigDecimal coveredRatio,
+            /** ADR-062 deviation guard: true when a $0 break-even is a low-coverage artifact, not real. */
+            Boolean breakEvenSuppressed,
+            /**
+             * ADR-062 §5 "Average cost": family-level weighted market cost basis ÷ ETH-equivalent
+             * covered quantity (parity with the move-basis header). Equals {@code avcoUsd} for a
+             * single-wallet family row; {@code avcoUsd}/{@code netAvcoUsd} stay as demoted diagnostics.
+             */
+            BigDecimal averageCostUsd
     ) {
     }
 }

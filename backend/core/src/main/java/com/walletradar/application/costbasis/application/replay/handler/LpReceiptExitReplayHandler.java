@@ -246,8 +246,14 @@ public class LpReceiptExitReplayHandler {
             if (flow == null
                     || flow.getRole() != NormalizedLegRole.TRANSFER
                     || flow.getQuantityDelta() == null
-                    || flow.getQuantityDelta().signum() >= 0
-                    || !receiptSymbol.equalsIgnoreCase(flow.getAssetSymbol())) {
+                    || flow.getQuantityDelta().signum() >= 0) {
+                continue;
+            }
+            // ADR-081 (C1): match the burn leg either by the correlation's receipt symbol (EVM /
+            // Balancer BPT) or by the durable LP-receipt flag (Meteora DAMM MLP — confusable symbol).
+            boolean isReceiptBurn = Boolean.TRUE.equals(flow.getLpReceipt())
+                    || receiptSymbol.equalsIgnoreCase(flow.getAssetSymbol());
+            if (!isReceiptBurn) {
                 continue;
             }
             // Drain the corrId-keyed synthetic position (NFT-style LP receipts — qty=1, full basis).
@@ -299,6 +305,13 @@ public class LpReceiptExitReplayHandler {
     private boolean isLpReceiptBurnBySymbol(String corrId, NormalizedTransaction.Flow flow) {
         if (flow.getRole() != NormalizedLegRole.TRANSFER || flow.getQuantityDelta().signum() >= 0) {
             return false;
+        }
+        // ADR-081 (C1): durable flag route — a Meteora DAMM MLP burn leg is flagged at normalization
+        // (the fungible MLP symbol is confusable across pools and does not match the correlation's
+        // receipt symbol grammar). Skipping it here defers the burn to drainMaterializedReceiptMarker,
+        // preventing a double UNKNOWN + REALLOCATE_OUT record on the same flow.
+        if (Boolean.TRUE.equals(flow.getLpReceipt())) {
+            return true;
         }
         String receiptSymbol = LpReceiptSymbolSupport.fromLpPositionCorrelation(corrId);
         if (receiptSymbol == null || flow.getAssetSymbol() == null) {

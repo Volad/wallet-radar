@@ -67,8 +67,50 @@ Equilibria Finance is a Pendle yield optimizer that wraps Pendle LP tokens (PEND
 
 ---
 
+## Addendum — RC-6: STAKING_DEPOSIT of an LP receipt is a non-realizing wrap
+
+**Status:** Accepted
+**Date:** 2026-07-22
+**Scope:** basis rule for the LP-receipt leg of an Equilibria/Penpie `STAKING_DEPOSIT` / `STAKING_WITHDRAW`
+
+### Problem
+
+The original decision (above) correctly reclassified `0x8dd9dbad` from `LP_EXIT (Pendle)` to `STAKING_DEPOSIT (Equilibria)` and kept the `pendle-lp:*` basis pool untouched at deposit time. However, the **PENDLE-LPT out-leg itself** was still booked as `role=SELL → basisEffect=DISPOSE`. Because a SELL leg is market-priced, the deposit realized a **phantom loss of −$23.178** (proceeds $3,357.566 vs. `avcoAtSale` $7,596.478) even though staking the receipt into the 1:1 Equilibria booster is a continuation of the same LP position, not a sale. The authoritative basis for the position lives in the `pendle-lp:*` receipt basis pool (deposited at LP entry, restored at the zap-out `LP_EXIT`), so realizing anything on the wrap double-counts P&L.
+
+### Decision
+
+The LP-receipt leg of a `STAKING_DEPOSIT` (and the symmetric `STAKING_WITHDRAW` / zap-out unwrap) is a **non-realizing wrap**:
+
+- **Leg role.** `OnChainClassificationSupport.resolveRole` maps any LP-receipt leg (identity via the durable `lpReceipt` flag, the `FAMILY:LP_RECEIPT` identity, or the deterministic `-LPT`/`-LP` receipt symbol grammar) on a `STAKING_DEPOSIT`/`STAKING_WITHDRAW` to `role=TRANSFER` (never `SELL`/`BUY`). `TRANSFER` legs are excluded from market pricing by `PriceableFlowPolicy` (which prices `FEE`/`BUY`/`SELL` only), eliminating the phantom proceeds.
+- **Basis effect.** `ReplayDispatcher.applyFlow` detects the wrap via `LpReceiptStakeWrapSupport.isNonRealizingLpReceiptStakeLeg` (type is `STAKING_DEPOSIT`/`STAKING_WITHDRAW`, leg is an LP receipt, and the transaction has an Equilibria/Penpie `PROTOCOL` counterparty **or** an LP correlation `pendle-lp:*`/`lp-position:*`) and books it via `applyLpReceiptStakeWrap`: outbound → `removeFromPosition` + `CARRY_OUT`; inbound → `applyUnknownTransfer` + `CARRY_IN`. Both set `realisedPnlUsd=null` and `avcoAtTimeOfSale=null`. The `pendle-lp:*` receipt basis pool is **not** touched, so the zap-out `LP_EXIT` REALLOCATE_IN path is unchanged.
+
+### Negative cases (must NOT carry)
+
+- An LP receipt sold into a DEX router/pool for an unrelated asset is classified `SWAP` (never `STAKING_*`) and remains a genuine sale.
+- The plain `PENDLE` reward/governance token is not an `-LPT` receipt, so a claimed reward stays income, not basis.
+
+### Flag propagation
+
+Detection reads `type`, `protocolName`, `correlationId`, and the flow's `role`/`lpReceipt`/symbol. These are preserved through every copy-and-replace persistence cycle: `StatValidationService.copy()`, `PricingResultMapper`, and `IdempotentNormalizedTransactionStore` all carry `role`, `lpReceipt`, `correlationId`, `protocolName`, and `receiptBearingCollateral`.
+
+### Consequences
+
+- `0x8dd9` no longer realizes −$23.178; the position basis stays in the receipt pool.
+- The `0xf7f8` `zapOutV3SingleToken` `LP_EXIT` continues to REALLOCATE_IN cmETH from the `pendle-lp:*` pool at LP cost — verified by regression test.
+- Rule is protocol-generic (Equilibria/Penpie counterparty + LP-receipt identity); no wallet/tx hardcoding.
+
+### Tests
+
+- `ReplayDispatcherLpReceiptStakeWrapTest` — Equilibria `STAKING_DEPOSIT` of PENDLE-LPT → `CARRY_OUT`, realized $0, no `DISPOSE`.
+- `StakeWrapLegRoleTest` — LP-receipt staking leg resolves to `TRANSFER` and is not priced; LP-receipt `SWAP` sale stays `SELL`.
+- `LpReceiptStakeWrapSupportTest` — positive/negative detection grammar (Equilibria/Penpie, `pendle-lp:` correlation; excludes PENDLE reward, plain liquid-staking receipts, DEX sales, and the `LP_EXIT` path).
+- `PositionScopedLpExitReplayHandlerTest.pendleZapOutLpExitStillReallocatesUnderlyingFromReceiptPool` — regression guard that the zap-out still REALLOCATE_INs the underlying from the pool.
+
+---
+
 ## References
 
 - Implementation plan: `docs/tasks/equilibria-lp-entry-classification-fix-plan.md`
+- Authoritative RC-6 spec: `results/lp-phantom-open-required-changes.md` (RC-6), `results/lp-phantom-open-protocol-rule-pack.md` (Family A rules 11–13)
 - Related: ADR-046 (INIT Capital borrow classification)
 - Transactions: `0x8dd9dbad` (deposit), `0xf7f8908b` (exit), `0xfaf8160c` (Pendle LP entry)

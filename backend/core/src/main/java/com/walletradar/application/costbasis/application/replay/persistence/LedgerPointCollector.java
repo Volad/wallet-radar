@@ -68,6 +68,14 @@ public final class LedgerPointCollector {
         if (familyIdentity == null || familyIdentity.isBlank()) {
             familyIdentity = AssetLedgerSupport.accountingFamilyIdentity(transaction, flow);
         }
+        // ADR-080/ADR-081 (C1, durable flag route): an LP-receipt leg flagged at classification
+        // (e.g. the Meteora DAMM fungible MLP whose symbol is confusable across pools, so its
+        // symbol/contract resolves to the pool-mint family) must carry FAMILY:LP_RECEIPT. Driven by
+        // LP-correlation membership, not the symbol — so the dashboard, spot-family aggregation and
+        // LP-receipt isolation all exclude it regardless of the confusable symbol.
+        if (Boolean.TRUE.equals(flow.getLpReceipt())) {
+            familyIdentity = AccountingAssetFamilySupport.FAMILY_LP_RECEIPT;
+        }
         point.setAccountingFamilyIdentity(familyIdentity);
         point.setFamilyDisplaySymbol(AssetLedgerSupport.familyDisplaySymbol(familyIdentity, assetKey.assetSymbol()));
         point.setAssetSymbol(assetKey.assetSymbol());

@@ -366,7 +366,7 @@ AVCO math application per type:
 |------|---------------|
 | `BUY` | Standard ACQUIRE formula |
 | `SELL` | Standard DISPOSE; PnL if priced |
-| `SWAP` | SELL leg(s) then BUY leg(s); multi-sell uses combined cost |
+| `SWAP` | SELL leg(s) then BUY leg(s); multi-sell uses combined cost. **Intra-cluster cross-canonical (ADR-083):** `CLUSTER_CARRY` REALLOCATE, PnL=0 (e.g. cmETH↔ETH) |
 | `FEE` | GAS_ONLY consumption |
 | `INTERNAL_TRANSFER` | CARRY only; no AVCO change on net family basis |
 | `BRIDGE_OUT` / `BRIDGE_IN` | Bridge carry path; proportional covered share |
@@ -375,14 +375,14 @@ AVCO math application per type:
 | `REWARD_CLAIM` / `LP_FEE_CLAIM` | ACQUIRE at FMV |
 | `LENDING_DEPOSIT` | REALLOCATE_OUT from spot |
 | `LENDING_WITHDRAW` | REALLOCATE_IN to spot |
-| `VAULT_DEPOSIT` / `VAULT_WITHDRAW` | Same as lending |
+| `VAULT_DEPOSIT` / `VAULT_WITHDRAW` | Same as lending; **intra-cluster identity change** → `CLUSTER_CARRY` REALLOCATE, PnL=0 (ADR-083, e.g. yvVBETH↔vBETH) |
 | `LP_ENTRY` | Principal to receipt pool; no synthetic LP token lot |
 | `LP_EXIT` | Restore from per-asset receipt pool (ADR-022); net lane restored from `netBasisHeldUsd` (BB-LP-CMETH-1) |
 | `LP_ENTRY_REQUEST` / `LP_EXIT_REQUEST` | Escrow REALLOCATE; no PnL |
 | `BORROW` | Reserve BUY + liability record |
 | `REPAY` | Reserve SELL + liability match (zero-PnL roundtrip when matched) |
-| `STAKING_DEPOSIT` | **C1↔C1 same canonical identity:** REALLOCATE, no P&amp;L. **C1↔C2 or C2↔C2 identity change:** generic DISPOSE+ACQUIRE at market, realize P&amp;L (ADR-054) |
-| `STAKING_WITHDRAW` | Symmetric to `STAKING_DEPOSIT` (ADR-054) |
+| `STAKING_DEPOSIT` | **Intra-cluster (same staking cluster, ADR-083):** `CLUSTER_CARRY` REALLOCATE, **PnL=0** both lanes (incl. cross-family same-cluster ETH↔mETH, AVAX↔sAVAX, SOL↔mSOL). **Cluster↔non-cluster / cross-cluster:** generic DISPOSE+ACQUIRE at market, realize P&amp;L (ADR-054) |
+| `STAKING_WITHDRAW` | Symmetric to `STAKING_DEPOSIT` (ADR-054 / ADR-083) |
 | `LENDING_LOOP_OPEN` | ACQUIRE share at event-local price |
 | `LENDING_LOOP_REBALANCE` | CARRY between share assets |
 | `LENDING_LOOP_DECREASE` / `CLOSE` | DISPOSE share; ACQUIRE returned asset |

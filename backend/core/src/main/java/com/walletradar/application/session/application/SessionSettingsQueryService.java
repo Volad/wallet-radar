@@ -39,6 +39,19 @@ public class SessionSettingsQueryService {
                                 venue.getNetworks() == null ? List.of() : venue.getNetworks().stream().map(Enum::name).toList()
                         ))
                         .toList();
+        List<ExternalCustodyDestinationView> externalCustodyDestinations = session.getSettings() == null
+                || session.getSettings().getExternalCustodyDestinations() == null
+                ? List.of()
+                : session.getSettings().getExternalCustodyDestinations().stream()
+                        .map(destination -> new ExternalCustodyDestinationView(
+                                destination.getAddress(),
+                                destination.getProvider(),
+                                destination.getLabel(),
+                                destination.getNetworks() == null
+                                        ? List.of()
+                                        : destination.getNetworks().stream().map(Enum::name).toList()
+                        ))
+                        .toList();
         return new SessionSettingsView(
                 session.getId(),
                 session.getWallets() == null ? List.of() : session.getWallets().stream()
@@ -53,6 +66,7 @@ public class SessionSettingsQueryService {
                         .map(this::toIntegrationView)
                         .toList(),
                 externalVenues,
+                externalCustodyDestinations,
                 session.getSettings() == null || session.getSettings().getHideSmallAssets() == null
                         ? Boolean.TRUE
                         : session.getSettings().getHideSmallAssets(),
@@ -104,8 +118,17 @@ public class SessionSettingsQueryService {
             List<WalletView> wallets,
             List<IntegrationView> integrations,
             List<ExternalVenueView> externalVenues,
+            List<ExternalCustodyDestinationView> externalCustodyDestinations,
             Boolean hideSmallAssets,
             Boolean showReconciliationWarnings
+    ) {
+    }
+
+    public record ExternalCustodyDestinationView(
+            String address,
+            String provider,
+            String label,
+            List<String> networks
     ) {
     }
 

@@ -613,7 +613,11 @@ class BybitCanonicalTransactionBuilderTest {
     }
 
     @Test
-    void stakingPairKeepsSameFamilyLiquidStakingAsContinuityTransfer() {
+    void stakingPairRoutesCrossCanonicalEthToMethToPendingPrice() {
+        // D1 (ADR-054 §9): ETH (FAMILY:ETH) → mETH (FAMILY:METH) is a cross-canonical identity change,
+        // not a same-family continuity carry. Both principal TRANSFER legs must enter the pricing chain
+        // (PENDING_PRICE + crossCanonicalStakingConversion flag) so the acquired mETH receipt books a
+        // real cost basis instead of a $0-basis lot that strips the ETH family's basis.
         BybitCanonicalTransactionBuilder builder = new BybitCanonicalTransactionBuilder();
         ExternalLedgerRaw stake = new ExternalLedgerRaw();
         stake.setId("stake");
@@ -640,7 +644,8 @@ class BybitCanonicalTransactionBuilderTest {
         var transaction = builder.buildStakingPair(stake, mint, Instant.parse("2026-03-25T12:01:00Z"));
 
         assertThat(transaction.getType()).isEqualTo(NormalizedTransactionType.STAKING_DEPOSIT);
-        assertThat(transaction.getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(transaction.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(transaction.getCrossCanonicalStakingConversion()).isTrue();
         assertThat(transaction.getFlows())
                 .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getRole().name() + ":" + flow.getQuantityDelta())
                 .containsExactlyInAnyOrder(
@@ -650,7 +655,10 @@ class BybitCanonicalTransactionBuilderTest {
     }
 
     @Test
-    void stakingPairKeepsCmethSubscriptionAsContinuityTransfer() {
+    void stakingPairRoutesCrossCanonicalEthToCmethToPendingPrice() {
+        // D1 (ADR-054 §9): ETH (FAMILY:ETH) → cmETH (FAMILY:METH) is likewise cross-canonical and must
+        // be priced. (A same-family fusion such as mETH → cmETH stays CONFIRMED — see
+        // BybitNormalizationServiceTest.extractedLiquidStakingPairThatCrossesBybitSubAccountsIsFusedOntoUmbrella.)
         BybitCanonicalTransactionBuilder builder = new BybitCanonicalTransactionBuilder();
         ExternalLedgerRaw stake = new ExternalLedgerRaw();
         stake.setId("stake-cmeth");
@@ -679,7 +687,8 @@ class BybitCanonicalTransactionBuilderTest {
         var transaction = builder.buildStakingPair(stake, mint, Instant.parse("2026-03-25T12:01:00Z"));
 
         assertThat(transaction.getType()).isEqualTo(NormalizedTransactionType.STAKING_DEPOSIT);
-        assertThat(transaction.getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        assertThat(transaction.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(transaction.getCrossCanonicalStakingConversion()).isTrue();
         assertThat(transaction.getFlows())
                 .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getRole().name() + ":" + flow.getQuantityDelta())
                 .containsExactlyInAnyOrder(

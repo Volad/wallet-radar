@@ -23,7 +23,10 @@ import java.time.Instant;
 import java.util.Optional;
 
 /**
- * Basis-neutral BORROW inflow with parallel liability tracking (ADR-012 §D2).
+ * BORROW inflow: borrowed principal enters BOTH lanes at market-at-borrow basis (ADR-040 §5,
+ * 2026-07-18 amendment), with parallel liability tracking in {@code borrow_liabilities}. The
+ * liability — not a $0 Net asset basis — is what offsets net worth (supersedes the ADR-012 §D2
+ * net-$0 borrow phrasing).
  */
 @Component
 public class BorrowReplayHandler {
@@ -111,12 +114,22 @@ public class BorrowReplayHandler {
             }
         }
 
-        // ADR-012 §D2 / Bug D: borrowed assets are liabilities, not economic acquisitions.
-        // Tax (market) AVCO reflects the market price at borrow time so sell→repay cycles
-        // price correctly for tax purposes. Net AVCO is $0: the borrowed unit has no net
-        // cost basis since the corresponding liability exactly offsets the asset.
+        // ADR-040 §5 (2026-07-18 amendment): borrowed principal enters BOTH lanes at
+        // market-at-borrow basis. The Market lane already priced sell→repay cycles correctly; the
+        // Net lane must match it — not book $0 — because the tracked liability in
+        // {@code borrow_liabilities} (recorded above), not a $0 asset basis, is what offsets net
+        // worth over the loan lifecycle. Booking Net at $0 (the retired ADR-012 §D2 "basis-neutral"
+        // phrasing) left the borrowed units with nothing to offset the disposal, so any REPAY /
+        // EXTERNAL_TRANSFER_OUT / SWAP of the principal booked phantom Net realized income
+        // ≈ marketAvco × qty. Passing acquisitionCostUsd to both lanes makes netAvco == marketAvco
+        // for a pure borrowed pool, so a borrow→dispose round-trip nets ≈ $0 in the Net lane and
+        // only genuine interest/fees and price change on independently-held units surface.
+        // BORROW is deliberately excluded from ZeroCostAcquisitionSupport (unlike genuine
+        // REWARD_CLAIM / LP_FEE_CLAIM, which stay net-$0). When portfolioAvco resolved to ZERO as a
+        // last resort (no unit price and no market-at-borrow quote) both lanes are ZERO, which is
+        // fine — neither lane fabricates basis.
         BigDecimal acquisitionCostUsd = qty.multiply(portfolioAvco, MC);
-        flowSupport.applyBuyWithExplicitNetCost(flow, position, acquisitionCostUsd, BigDecimal.ZERO);
+        flowSupport.applyBuyWithExplicitNetCost(flow, position, acquisitionCostUsd, acquisitionCostUsd);
 
         replayState.ledgerPointCollector().record(
                 transaction,

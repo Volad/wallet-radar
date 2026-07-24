@@ -4,9 +4,9 @@ import { map } from 'rxjs/operators';
 import { smartFormatUsd } from '../utils/amount.util';
 
 import {
+  ALL_NETWORK_PRESENTATION_BY_ID,
   COLORS,
   EMPTY_DASHBOARD_DATA,
-  EVM_NETWORK_PRESENTATION_BY_ID,
   SECTIONS,
 } from '../data/dashboard.constants';
 import {
@@ -18,7 +18,8 @@ import {
   WalletDomain,
   WalletInfo,
 } from '../models/dashboard.models';
-import { EvmNetworkId, SessionDashboardResponse } from '../models/wallet-api.models';
+import { SessionDashboardResponse } from '../models/wallet-api.models';
+import { normalizeWalletAddress } from '../utils/wallet-address.util';
 import { WalletApiService } from './wallet-api.service';
 
 @Injectable({ providedIn: 'root' })
@@ -36,10 +37,10 @@ export class DashboardDataService {
 
   private toDashboardData(response: SessionDashboardResponse): DashboardData {
     const wallets: ReadonlyArray<WalletInfo> = response.wallets.map((wallet) => ({
-      id: wallet.address.toLowerCase(),
-      label: wallet.label,
-      address: wallet.address.toLowerCase(),
-      color: wallet.color,
+      id: normalizeWalletAddress(wallet.address),
+      label: wallet.label ?? '',
+      address: normalizeWalletAddress(wallet.address),
+      color: wallet.color ?? '#808080',
     }));
 
     const networkIds = new Set<string>();
@@ -108,11 +109,14 @@ export class DashboardDataService {
         unrealizedPnlUsd: position.unrealizedPnlUsd,
         realizedPnlUsd: position.realizedPnlUsd,
         breakEvenUsd: position.breakEvenUsd ?? null,
+        averageCostUsd: position.averageCostUsd ?? null,
+        coveredRatio: position.coveredRatio ?? null,
+        breakEvenSuppressed: position.breakEvenSuppressed ?? false,
         lockedSurplusUsd: position.lockedSurplusUsd ?? 0,
         incomeReceivedUsd: position.incomeReceivedUsd ?? 0,
         attributionTargetFamily: position.attributionTargetFamily ?? null,
         networkId: position.networkId,
-        walletId: position.walletAddress.toLowerCase(),
+        walletId: normalizeWalletAddress(position.walletAddress),
         issue: this.toIssueCode(position.issue),
         valuationModel: position.valuationModel,
         valuationUnderlyingSymbol: position.valuationUnderlyingSymbol,
@@ -175,11 +179,13 @@ export class DashboardDataService {
   }
 
   private toNetworkInfo(networkId: string): NetworkInfo {
-    const presentation = EVM_NETWORK_PRESENTATION_BY_ID.get(networkId as EvmNetworkId);
+    const presentation = ALL_NETWORK_PRESENTATION_BY_ID.get(networkId);
     if (presentation !== undefined) {
       return {
-        ...presentation,
         id: networkId,
+        icon: presentation.icon,
+        label: presentation.label,
+        color: presentation.color,
       };
     }
     return {

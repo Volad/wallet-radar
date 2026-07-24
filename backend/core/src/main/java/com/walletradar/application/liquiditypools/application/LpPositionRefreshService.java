@@ -2,6 +2,7 @@ package com.walletradar.application.liquiditypools.application;
 
 import com.walletradar.application.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.application.costbasis.domain.LpReceiptBasisPool;
+import com.walletradar.application.costbasis.support.WalletAddressReadScope;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.session.UserSessionRepository;
@@ -130,6 +131,10 @@ public class LpPositionRefreshService {
         userSessionRepository.findById(sessionId).ifPresent(session ->
                 closeExitedSnapshots(accountingUniverseService.resolveScope(session).accountingUniverseId()));
         Map<String, LpPositionContext> contexts = discoverOpenContextsForSession(sessionId);
+        userSessionRepository.findById(sessionId).ifPresent(session ->
+                closeGhostSolanaSnapshots(
+                        accountingUniverseService.resolveScope(session).accountingUniverseId(),
+                        contexts.keySet()));
         int saved = 0;
         int skipped = 0;
         boolean persistStaleOnFailure = trigger != RefreshTrigger.MANUAL && trigger != RefreshTrigger.BULK;
@@ -178,12 +183,42 @@ public class LpPositionRefreshService {
         }
     }
 
+    /**
+     * Closes any Solana LP snapshot that is no longer discovered as open. After the discovery change
+     * above, a Solana correlation only stays open while a live basis pool (qtyHeld &gt; 0) backs it.
+     * Snapshots left over from entry-only ghost positions (no basis pool, uncaptured exit) would
+     * otherwise linger as {@code in_range}/{@code unknown} pools the user has already closed.
+     */
+    private void closeGhostSolanaSnapshots(String universeId, Set<String> openCorrelationIds) {
+        if (universeId == null || universeId.isBlank()) {
+            return;
+        }
+        for (LpPositionSnapshot snapshot : snapshotService.findByUniverseId(universeId)) {
+            String corr = snapshot.getCorrelationId();
+            if (!Boolean.TRUE.equals(snapshot.getLpConcentrated()) || openCorrelationIds.contains(corr)) {
+                continue;
+            }
+            if (!"closed".equals(snapshot.getStatus())) {
+                String previousStatus = snapshot.getStatus();
+                snapshot.setStatus("closed");
+                snapshot.setSnapshotStale(false);
+                snapshot.setUnavailableReason(null);
+                snapshotService.upsert(snapshot);
+                log.info("LP snapshot closed (no live Solana basis pool): correlationId={}, prevStatus={}",
+                        corr, previousStatus);
+            }
+        }
+    }
+
     private Optional<LpPositionSnapshot> refreshPosition(
             String sessionId,
             LpPositionContext context,
             boolean persistStaleOnFailure
     ) {
-        if (context.closed()) {
+        // A closed context is normally not refreshed. The one exception is a closed position that a
+        // reader can still enrich (Solana Meteora resolving its pair from the captured LbPair pool);
+        // for those we proceed so a closed snapshot carrying the correct pair label gets persisted.
+        if (context.closed() && !enrichmentService.supportsClosed(context)) {
             return Optional.empty();
         }
         String correlationId = context.correlationId();
@@ -220,7 +255,11 @@ public class LpPositionRefreshService {
             snapshot.setUniverseId(context.universeId());
             applyMarks(sessionId, snapshot, !persistStaleOnFailure);
             snapshotService.upsert(snapshot);
-            upsertTodayEarningPoint(context, snapshot);
+            // Closed positions have zero TVL/fees — no daily earning point to record; recording one
+            // would only add noise. Only accrue earning points for live positions.
+            if (!context.closed()) {
+                upsertTodayEarningPoint(context, snapshot);
+            }
             refreshStateService.markSynced(correlationId);
             return Optional.of(snapshot);
         } catch (Exception error) {
@@ -423,27 +462,25 @@ public class LpPositionRefreshService {
                 .and("correlationId").regex("^(lp-position:|pendle-lp:|gmx-lp:)"));
         List<NormalizedTransaction> txs = mongoOperations.find(txQuery, NormalizedTransaction.class);
 
-        Map<String, Boolean> closedByCorrelation = new LinkedHashMap<>();
-        for (NormalizedTransaction tx : txs) {
-            String corr = tx.getCorrelationId();
-            if (corr == null) {
-                continue;
-            }
-            if (tx.getType() == NormalizedTransactionType.LP_EXIT_FINAL) {
-                closedByCorrelation.put(corr, true);
-            } else {
-                closedByCorrelation.putIfAbsent(corr, false);
-            }
-        }
-
         // Load ALL basis pools (both open and closed) so that pools with qtyHeld = 0
         // can be added to the excludedByBasisPool set in the loop below.
         // Pre-filtering to qtyHeld > 0 would silently drop closed pools, allowing the TX
         // fallback to re-add them even though the pipeline already confirmed they are fully burned.
+        // Loaded up front so closed-detection can tell whether a Solana position still has a
+        // position-scoped basis pool (see the LP_EXIT rule below).
         Query basisQuery = new Query(
                 Criteria.where("universeId").is(scope.accountingUniverseId())
         );
         List<LpReceiptBasisPool> basisPools = mongoOperations.find(basisQuery, LpReceiptBasisPool.class);
+        Set<String> correlationsWithBasisPool = new LinkedHashSet<>();
+        for (LpReceiptBasisPool pool : basisPools) {
+            if (pool.getLpCorrelationId() != null) {
+                correlationsWithBasisPool.add(pool.getLpCorrelationId());
+            }
+        }
+
+        Map<String, Boolean> closedByCorrelation = computeClosedByCorrelation(txs, correlationsWithBasisPool);
+
         // Track corr IDs that were intentionally excluded by the basisPool loop
         // (zero qty held + LP activity recorded) so the TX fallback loop won't re-add them.
         java.util.Set<String> excludedByBasisPool = new java.util.LinkedHashSet<>();
@@ -471,9 +508,76 @@ public class LpPositionRefreshService {
             if (excludedByBasisPool.contains(corr)) {
                 continue;
             }
+            // Solana DLMM/CLMM positions are only genuinely open when backed by a live
+            // position-scoped basis pool (qtyHeld > 0), which the basisPool loop above already
+            // turned into a context. Entry-only correlations that never produced a basis pool are
+            // stale/exited (their LP_EXIT was not captured) — enriching them from the raw tx here
+            // yields ghost 'in_range' pools the user has already closed. Trust the basis pool
+            // exclusively for concentrated-liquidity positions and never resurrect one from the tx
+            // fallback. WS-8: driven by the stamped lpConcentrated flag, not a network/prefix check.
+            if (Boolean.TRUE.equals(tx.getLpConcentrated()) && !contexts.containsKey(corr)) {
+                continue;
+            }
             contexts.putIfAbsent(corr, buildContext(scope.accountingUniverseId(), corr, null, txs, closedByCorrelation));
         }
+
+        // Closed Meteora DLMM positions that carry a captured LbPair pool address: emit a
+        // closed-marked context so the reader resolves and persists the SOL/<SPL> pair once. The
+        // user's position PDA is deallocated, so the shared LbPair is the only pair source. This is
+        // idempotent — skipped once a snapshot already carries a two-sided pair — and cheap (bounded
+        // by the number of closed Meteora correlations that still lack a resolved pair).
+        addClosedMeteoraPairContexts(scope.accountingUniverseId(), contexts, txs, closedByCorrelation);
         return contexts;
+    }
+
+    /**
+     * Adds contexts for CLOSED Solana Meteora DLMM correlations that have a captured LbPair pool
+     * address but whose persisted snapshot does not yet carry a two-sided pair. Enriching these once
+     * writes a closed snapshot with the correct SOL/&lt;SPL&gt; label; open/two-sided positions and
+     * legacy rows without a captured LbPair are left untouched.
+     */
+    private void addClosedMeteoraPairContexts(
+            String universeId,
+            Map<String, LpPositionContext> contexts,
+            List<NormalizedTransaction> txs,
+            Map<String, Boolean> closedByCorrelation
+    ) {
+        Set<String> candidates = new LinkedHashSet<>();
+        for (NormalizedTransaction tx : txs) {
+            String corr = tx.getCorrelationId();
+            if (corr == null || contexts.containsKey(corr)) {
+                continue;
+            }
+            // WS-8 (ADR-074): gate on the stamped lpConcentrated capability, not a network-named
+            // correlation prefix. Both Meteora DLMM and Raydium CLMM are concentrated; the
+            // lpPoolAddress presence check below is the real gate (only positions that captured a
+            // pool address at normalization qualify), and the reader resolves the pair per protocol.
+            if (!Boolean.TRUE.equals(closedByCorrelation.get(corr))
+                    || !Boolean.TRUE.equals(tx.getLpConcentrated())) {
+                continue;
+            }
+            if (tx.getLpPoolAddress() != null && !tx.getLpPoolAddress().isBlank()) {
+                candidates.add(corr);
+            }
+        }
+        if (candidates.isEmpty()) {
+            return;
+        }
+        Set<String> alreadyPaired = snapshotService.findByUniverseId(universeId).stream()
+                .filter(LpPositionRefreshService::hasTwoSidedPair)
+                .map(LpPositionSnapshot::getCorrelationId)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        for (String corr : candidates) {
+            if (alreadyPaired.contains(corr)) {
+                continue;
+            }
+            contexts.putIfAbsent(corr, buildContext(universeId, corr, null, txs, closedByCorrelation));
+        }
+    }
+
+    private static boolean hasTwoSidedPair(LpPositionSnapshot snapshot) {
+        return snapshot.getToken0() != null && snapshot.getToken0().getSym() != null
+                && snapshot.getToken1() != null && snapshot.getToken1().getSym() != null;
     }
 
     private LpPositionContext buildContext(
@@ -498,6 +602,7 @@ public class LpPositionRefreshService {
         String protocol = isBridgeProtocol(rawProtocol) ? null : rawProtocol;
         String nfpm = null;
         String tokenId = null;
+        String poolContract = null;
         String lpToken = basisPool != null ? basisPool.getAssetContract() : null;
         String marketSlug = null;
         if (correlationId.startsWith("lp-position:")) {
@@ -505,6 +610,19 @@ public class LpPositionRefreshService {
             if (parts.length >= 4) {
                 nfpm = parts[2];
                 tokenId = parts[3];
+            }
+            // v2 (fungible) gauge stake: lp-position:<net>:<stakedLpToken>:vault[:<gauge>].
+            // The staked AMM LP token is the correlation contract (segment 2); when a gauge is
+            // carried (segment 5) expose it as the pool contract so FungiblePoolReader can value the
+            // staked balance via gauge.balanceOf(wallet) (the wallet's direct LP balance is 0 while
+            // staked). Identity stays keyed on the staked LP token.
+            if ("vault".equalsIgnoreCase(tokenId)) {
+                if (lpToken == null) {
+                    lpToken = nfpm;
+                }
+                if (parts.length >= 5 && parts[4] != null && !parts[4].isBlank()) {
+                    poolContract = parts[4];
+                }
             }
         } else if (correlationId.startsWith("gmx-lp:")) {
             String[] parts = correlationId.split(":");
@@ -521,6 +639,10 @@ public class LpPositionRefreshService {
                 .anyMatch(tx -> correlationId.equals(tx.getCorrelationId())
                         && tx.getType() == NormalizedTransactionType.LP_POSITION_STAKE);
         Instant entryAt = extractEntryAt(txs, correlationId);
+        // Meteora DLMM LbPair pool address captured at normalization (accounts[1]). Persisted on the
+        // normalized row so the reader can resolve the SOL/<SPL> pair for a later-closed position
+        // whose position PDA is deallocated. Any leg for the correlation carries the same LbPair.
+        String lpPoolAddress = extractLpPoolAddress(txs, correlationId);
         return new LpPositionContext(
                 correlationId,
                 universeId,
@@ -529,14 +651,25 @@ public class LpPositionRefreshService {
                 protocol,
                 inferFamily(correlationId),
                 nfpm,
-                null,
+                poolContract,
                 tokenId,
                 lpToken,
                 marketSlug,
+                lpPoolAddress,
                 Boolean.TRUE.equals(closedByCorrelation.get(correlationId)),
                 staked,
                 entryAt
         );
+    }
+
+    /** The captured LP pool address (Meteora DLMM LbPair) from any normalized leg of this position. */
+    private static String extractLpPoolAddress(List<NormalizedTransaction> txs, String correlationId) {
+        return txs.stream()
+                .filter(tx -> correlationId.equals(tx.getCorrelationId()))
+                .map(NormalizedTransaction::getLpPoolAddress)
+                .filter(pool -> pool != null && !pool.isBlank())
+                .findFirst()
+                .orElse(null);
     }
 
     /** Returns the earliest LP_ENTRY_REQUEST or LP_ENTRY_SETTLEMENT timestamp for this position. */
@@ -589,6 +722,13 @@ public class LpPositionRefreshService {
 
     private static String inferFamily(String correlationId) {
         if (correlationId.startsWith("lp-position:")) {
+            // A non-numeric ":vault" tokenId denotes a fungible LP-token position (e.g. a
+            // Velodrome/Aerodrome v2 gauge staked AMM LP token) rather than a concentrated-liquidity
+            // NFT; route it to FungiblePoolReader so its two-sided pair (token0/token1) can resolve.
+            String[] parts = correlationId.split(":");
+            if (parts.length >= 4 && "vault".equalsIgnoreCase(parts[3])) {
+                return "FUNGIBLE_LP";
+            }
             return "CL_NFT";
         }
         if (correlationId.startsWith("gmx-lp:")) {
@@ -618,11 +758,71 @@ public class LpPositionRefreshService {
                 .anyMatch(b -> b.equalsIgnoreCase(normalized));
     }
 
+    /**
+     * Family-aware canonicalization of a wallet address for read-path {@code walletAddress}
+     * matching. EVM/CEX refs are lowercased; Solana base58 public keys are case-preserved; TON
+     * addresses collapse to their preferred member ref. Blindly lowercasing (the previous behavior)
+     * corrupted base58 Solana/TON addresses so the discovery {@code walletAddress $in} query never
+     * matched the session wallet, hiding every Solana/TON LP position.
+     */
     private static String normalizeAddress(String address) {
-        if (address == null) {
-            return "";
+        return WalletAddressReadScope.normalize(address);
+    }
+
+    /**
+     * Computes, per LP correlation id, whether the position is closed based on its normalized LP
+     * transactions and whether a position-scoped basis pool still exists.
+     *
+     * <ul>
+     *   <li>EVM: a position is closed only on a terminal {@code LP_EXIT_FINAL}; partial exits
+     *       ({@code LP_EXIT_PARTIAL}) keep it open. Unchanged legacy behavior.</li>
+     *   <li>Solana ({@code lp-position:solana:*}): DLMM/CLMM full removals are recorded as
+     *       {@code LP_EXIT} (never {@code LP_EXIT_FINAL}). A recorded {@code LP_EXIT} with no
+     *       position-scoped basis pool means the position PDA/NFT was fully removed with no
+     *       remaining {@code qtyHeld} signal, so the position is closed. When a basis pool exists,
+     *       the {@code qtyHeld<=0} signal and the on-chain reader govern closure instead.</li>
+     * </ul>
+     */
+    static Map<String, Boolean> computeClosedByCorrelation(
+            List<NormalizedTransaction> txs, Set<String> correlationsWithBasisPool) {
+        Map<String, Boolean> closedByCorrelation = new LinkedHashMap<>();
+        for (NormalizedTransaction tx : txs) {
+            String corr = tx.getCorrelationId();
+            if (corr == null) {
+                continue;
+            }
+            if (tx.getType() == NormalizedTransactionType.LP_EXIT_FINAL) {
+                closedByCorrelation.put(corr, true);
+            } else {
+                closedByCorrelation.putIfAbsent(corr, false);
+            }
         }
-        return address.trim().toLowerCase(Locale.ROOT);
+        // Solana DLMM/CLMM: concentrated-liquidity positions rebalance their token amounts while in
+        // the pool, so the LP-receipt basis qtyHeld is a poor open/closed signal — a fully withdrawn
+        // position keeps a non-zero residual (you get back a different SOL/USDC split than you put in).
+        // Decide open/closed by the latest lifecycle event instead: a correlation whose most recent LP
+        // event is a terminal LP_EXIT is closed, regardless of any residual basis pool. This replaces
+        // the earlier "LP_EXIT + no basis pool" heuristic that left exited pools stuck as open ghosts.
+        Map<String, NormalizedTransaction> latestSolanaLpEvent = new LinkedHashMap<>();
+        for (NormalizedTransaction tx : txs) {
+            String corr = tx.getCorrelationId();
+            if (corr == null || !Boolean.TRUE.equals(tx.getLpConcentrated()) || tx.getBlockTimestamp() == null
+                    || !isSolanaLpLifecycleEvent(tx.getType())) {
+                continue;
+            }
+            latestSolanaLpEvent.merge(corr, tx, (existing, candidate) ->
+                    candidate.getBlockTimestamp().isBefore(existing.getBlockTimestamp()) ? existing : candidate);
+        }
+        latestSolanaLpEvent.forEach((corr, tx) ->
+                closedByCorrelation.put(corr, tx.getType() == NormalizedTransactionType.LP_EXIT));
+        return closedByCorrelation;
+    }
+
+    private static boolean isSolanaLpLifecycleEvent(NormalizedTransactionType type) {
+        return type == NormalizedTransactionType.LP_ENTRY
+                || type == NormalizedTransactionType.LP_EXIT
+                || type == NormalizedTransactionType.LP_ENTRY_SETTLEMENT
+                || type == NormalizedTransactionType.LP_ENTRY_REQUEST;
     }
 
     private static BigDecimal zeroIfNull(BigDecimal value) {

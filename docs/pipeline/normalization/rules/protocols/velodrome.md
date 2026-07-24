@@ -51,6 +51,31 @@ semantics that are relevant to:
 - decrease / burn / collect paths with real inbound principal remain `LP_EXIT`
   or `LP_FEE_CLAIM` according to wallet-boundary movement
 
+### v2 (fungible) gauge staking
+
+Velodrome/Aerodrome ship **two** gauge kinds; distinguish them by on-chain grammar
+(`DexGaugePoolResolver`), never by address or protocol string:
+
+- **CL / Slipstream gauge** — exposes `nft()` (the NonfungiblePositionManager). Its stake is a real
+  ERC-721 position; keep the registry `underlyingPositionManager` + numeric `tokenId` correlation path.
+- **v2 (AMM) gauge** — `nft()` **reverts**, `pool()` returns the staked v2 AMM LP token (an ERC-20
+  pair). A `deposit(uint256)` / `withdraw(uint256)` argument is an **amount**, not a tokenId.
+
+For a v2 gauge `LP_POSITION_STAKE`/`LP_POSITION_UNSTAKE`, `LpRegistryClassifier` keys the correlation on
+the on-chain staked LP token (`gauge.pool()`), carrying the gauge for valuation:
+
+```
+lp-position:<net>:<stakedLpToken>:vault:<gauge>
+```
+
+Enrichment (`FungiblePoolReader`) resolves the pair from the staked LP token's `token0()`/`token1()` +
+`symbol()`/`decimals()` and values the staked balance via `gauge.balanceOf(wallet)` (the wallet's direct
+LP balance is 0 while staked); status is `in_range`. This replaces the previous unresolvable
+`:vault`-on-NFPM correlation that surfaced as **"Unknown pair"**. See
+[ADR-077](/Users/vladislav/projects/wallet-radar/docs/adr/ADR-077-v2-fungible-gauge-lp-identity.md).
+
+Evidence anchor (Optimism): gauge `0xbc6043a5…`, `pool()` = `0x4da46c6a…` (USD₮0/USDT), rewards in VELO.
+
 ## Clarification Rules
 
 - clarification may be used only when receipt evidence can actually close LP

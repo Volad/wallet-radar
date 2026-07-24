@@ -855,6 +855,659 @@ class PositionScopedLpExitReplayHandlerTest {
         assertThat(wethPool.getBasisHeldUsd()).isEqualByComparingTo("0");
     }
 
+    /**
+     * RC-6 regression guard: the Equilibria {@code zapOutV3SingleToken} LP_EXIT must keep restoring the
+     * underlying (cmETH) from the {@code pendle-lp:*} receipt basis pool via REALLOCATE_IN. The RC-6
+     * fix makes the upstream STAKING_DEPOSIT a non-realizing wrap that leaves this pool untouched, so
+     * the pool-backed exit path must continue to work unchanged.
+     */
+    @Test
+    void pendleZapOutLpExitStillReallocatesUnderlyingFromReceiptPool() {
+        String corr = "pendle-lp:mantle:pendle-lpt:0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f";
+        String universe = "PENDLE";
+        ReplayAssetSupport assetSupport = new ReplayAssetSupport();
+        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine(null));
+        ReplaySettlementAllocator settlementAllocator =
+                new ReplaySettlementAllocator(assetSupport, flowSupport);
+        LpReceiptBasisPoolRepository repo = mock(LpReceiptBasisPoolRepository.class);
+        when(repo.findByUniverseId(anyString())).thenReturn(List.of());
+        LpReceiptBasisPoolService poolService = new LpReceiptBasisPoolService(repo);
+        ReplayPendingTransferKeyFactory keyFactory = new ReplayPendingTransferKeyFactory(assetSupport);
+        PositionScopedLpExitReplayHandler handler = new PositionScopedLpExitReplayHandler(
+                assetSupport,
+                flowSupport,
+                settlementAllocator,
+                poolService,
+                keyFactory
+        );
+
+        // zapOutV3SingleToken: eqbPENDLE-LPT net-zero unwrap → +0.862 cmETH underlying returned.
+        NormalizedTransaction exit = new NormalizedTransaction();
+        exit.setId("pendle-zapout");
+        exit.setTxHash("0xf7f8");
+        exit.setWalletAddress("0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f");
+        exit.setNetworkId(NetworkId.MANTLE);
+        exit.setSource(NormalizedTransactionSource.ON_CHAIN);
+        exit.setType(NormalizedTransactionType.LP_EXIT);
+        exit.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        exit.setBlockTimestamp(Instant.parse("2026-03-26T11:00:00Z"));
+        exit.setCorrelationId(corr);
+        NormalizedTransaction.Flow cmethIn = new NormalizedTransaction.Flow();
+        cmethIn.setRole(NormalizedLegRole.TRANSFER);
+        cmethIn.setAssetSymbol("cmETH");
+        cmethIn.setAssetContract("0xcmeth");
+        cmethIn.setQuantityDelta(new BigDecimal("0.862"));
+        cmethIn.setPriceSource(PriceSource.UNKNOWN);
+        exit.setFlows(List.of(cmethIn));
+
+        // Basis parked at LP entry lives in the pendle-lp receipt pool keyed by the underlying identity.
+        String underlyingIdentity = assetSupport.continuityIdentity(exit, cmethIn);
+        LinkedHashMap<LpReceiptBasisPoolKey, LpReceiptBasisPool> pools = new LinkedHashMap<>();
+        HashSet<LpReceiptBasisPoolKey> dirty = new HashSet<>();
+        LpReceiptBasisPool pool = poolService.lookupOrCreate(
+                universe,
+                corr,
+                "0x1a87f12ac07e9746e9b053b8d7ef1d45270d693f",
+                NetworkId.MANTLE,
+                underlyingIdentity,
+                "cmETH",
+                "0xcmeth",
+                pools,
+                dirty,
+                Instant.parse("2026-03-25T09:00:00Z")
+        );
+        poolService.deposit(pool, new BigDecimal("0.862"), new BigDecimal("3380.66"), BigDecimal.ZERO);
+
+        List<AssetLedgerPoint> points = new ArrayList<>();
+        ReplayExecutionState state = new ReplayExecutionState(
+                null,
+                new LedgerPointCollector(universe, points, Instant.now()),
+                null,
+                null,
+                new LpReceiptBasisPoolReplayContext(universe, pools, dirty)
+        );
+
+        handler.apply(exit, state);
+
+        AssetLedgerPoint cmethReallocate = points.stream()
+                .filter(p -> "CMETH".equalsIgnoreCase(p.getAssetSymbol()))
+                .filter(p -> p.getBasisEffect() == AssetLedgerPoint.BasisEffect.REALLOCATE_IN)
+                .reduce((a, b) -> b)
+                .orElseThrow(() -> new AssertionError("Expected cmETH REALLOCATE_IN from pendle-lp pool"));
+        assertThat(cmethReallocate.getTotalCostBasisAfterUsd()).isEqualByComparingTo("3380.66");
+        // Pool fully drained by the exit.
+        assertThat(pool.getQtyHeld()).isEqualByComparingTo("0");
+        assertThat(pool.getBasisHeldUsd()).isEqualByComparingTo("0");
+    }
+
+    /**
+     * R6a all-stablecoin per-lane cap: an all-stable Balancer V3 exit (GHO/USDT/USDC boosted pool)
+     * has NO volatile absorber. The default same-asset peg-cap would clamp each stable leg to
+     * qty×$1 and strand the above-$1 compounded yield (here $5.85). Because each stablecoin drains
+     * its OWN per-asset pool, Σ carried == combinedBasis exactly when the real pool basis is carried,
+     * so the cap is skipped for the {@code :balancerv3:} correlation. Evidence anchor (AVALANCHE):
+     * boosted-stable BPT {@code 0xfcec3c8d…}.
+     */
+    @Test
+    void allStableBalancerV3ExitCarriesRealPoolBasisWithoutPegCap() {
+        String corr = "lp-position:avalanche:balancerv3:0xfcec3c8d86329defb548202fe1b86ff2188603a8";
+        String universe = "R6A";
+        ReplayAssetSupport assetSupport = new ReplayAssetSupport();
+        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine(null));
+        ReplaySettlementAllocator settlementAllocator = new ReplaySettlementAllocator(assetSupport, flowSupport);
+        LpReceiptBasisPoolRepository repo = mock(LpReceiptBasisPoolRepository.class);
+        when(repo.findByUniverseId(anyString())).thenReturn(List.of());
+        LpReceiptBasisPoolService poolService = new LpReceiptBasisPoolService(repo);
+        ReplayPendingTransferKeyFactory keyFactory = new ReplayPendingTransferKeyFactory(assetSupport);
+        PositionScopedLpExitReplayHandler handler = new PositionScopedLpExitReplayHandler(
+                assetSupport, flowSupport, settlementAllocator, poolService, keyFactory);
+
+        LinkedHashMap<LpReceiptBasisPoolKey, LpReceiptBasisPool> pools = new LinkedHashMap<>();
+        HashSet<LpReceiptBasisPoolKey> dirty = new HashSet<>();
+        Instant entryTs = Instant.parse("2026-03-25T09:00:00Z");
+
+        // USDC pool: 100 qty, $103 tax basis ($1.03/unit compounded), $101 net basis.
+        LpReceiptBasisPool usdcPool = poolService.lookupOrCreate(
+                universe, corr, "wallet-r6a", NetworkId.AVALANCHE,
+                "FAMILY:USDC", "USDC", "0xusdc", pools, dirty, entryTs);
+        poolService.deposit(usdcPool, new BigDecimal("100"), new BigDecimal("103"),
+                new BigDecimal("101"), BigDecimal.ZERO);
+
+        // USDT pool: 100 qty, $102.85 tax basis, $101 net basis.
+        LpReceiptBasisPool usdtPool = poolService.lookupOrCreate(
+                universe, corr, "wallet-r6a", NetworkId.AVALANCHE,
+                "FAMILY:USDT", "USDT", "0xusdt", pools, dirty, entryTs);
+        poolService.deposit(usdtPool, new BigDecimal("100"), new BigDecimal("102.85"),
+                new BigDecimal("101"), BigDecimal.ZERO);
+
+        List<AssetLedgerPoint> points = new ArrayList<>();
+        ReplayExecutionState state = new ReplayExecutionState(
+                null,
+                new LedgerPointCollector(universe, points, Instant.now()),
+                null, null,
+                new LpReceiptBasisPoolReplayContext(universe, pools, dirty));
+
+        NormalizedTransaction exit = new NormalizedTransaction();
+        exit.setId("r6a-allstable-exit");
+        exit.setTxHash("0xr6aallstable");
+        exit.setWalletAddress("wallet-r6a");
+        exit.setNetworkId(NetworkId.AVALANCHE);
+        exit.setSource(NormalizedTransactionSource.ON_CHAIN);
+        exit.setType(NormalizedTransactionType.LP_EXIT_FINAL);
+        exit.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        exit.setBlockTimestamp(Instant.parse("2026-03-25T11:00:00Z"));
+        exit.setCorrelationId(corr);
+
+        NormalizedTransaction.Flow usdcIn = new NormalizedTransaction.Flow();
+        usdcIn.setRole(NormalizedLegRole.TRANSFER);
+        usdcIn.setAssetSymbol("USDC");
+        usdcIn.setAssetContract("0xusdc");
+        usdcIn.setQuantityDelta(new BigDecimal("100"));
+        usdcIn.setPriceSource(PriceSource.UNKNOWN);
+
+        NormalizedTransaction.Flow usdtIn = new NormalizedTransaction.Flow();
+        usdtIn.setRole(NormalizedLegRole.TRANSFER);
+        usdtIn.setAssetSymbol("USDT");
+        usdtIn.setAssetContract("0xusdt");
+        usdtIn.setQuantityDelta(new BigDecimal("100"));
+        usdtIn.setPriceSource(PriceSource.UNKNOWN);
+
+        exit.setFlows(List.of(usdcIn, usdtIn));
+        handler.apply(exit, state);
+
+        // USDC carries its FULL pool basis ($103), NOT the $100 peg cap.
+        AssetLedgerPoint usdcPoint = points.stream()
+                .filter(p -> "USDC".equals(p.getAssetSymbol())
+                        && p.getBasisEffect() == AssetLedgerPoint.BasisEffect.REALLOCATE_IN)
+                .reduce((a, b) -> b).orElseThrow();
+        assertThat(usdcPoint.getTotalCostBasisAfterUsd()).isEqualByComparingTo("103");
+
+        // USDT carries its FULL pool basis ($102.85), NOT the $100 peg cap.
+        AssetLedgerPoint usdtPoint = points.stream()
+                .filter(p -> "USDT".equals(p.getAssetSymbol())
+                        && p.getBasisEffect() == AssetLedgerPoint.BasisEffect.REALLOCATE_IN)
+                .reduce((a, b) -> b).orElseThrow();
+        assertThat(usdtPoint.getTotalCostBasisAfterUsd()).isEqualByComparingTo("102.85");
+
+        // Σ carried == combined pool basis exactly (no fabrication, no destruction).
+        assertThat(usdcPoint.getTotalCostBasisAfterUsd().add(usdtPoint.getTotalCostBasisAfterUsd()))
+                .isEqualByComparingTo("205.85");
+
+        // Both pools fully drained.
+        assertThat(usdcPool.getQtyHeld()).isEqualByComparingTo("0");
+        assertThat(usdtPool.getQtyHeld()).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void d1_dualTokenExitVolatileLegFirst_strandedStableSurplusCarriedNotAcquired() {
+        // D1/D2 (R2 Option-B2): dual-token WETH+USDC full exit where the VOLATILE leg is processed
+        // BEFORE the stable leg. The old inject-to-sibling path relied on stable-before-volatile
+        // ordering; here WETH drains first (pool → 0), then the USDC peg-cap surplus is injected into
+        // the already-drained WETH pool and would be destroyed at drain. The D2 net-lane carry sweeps
+        // that leftover onto WETH as REALLOCATE_IN so the combined LP basis is fully conserved and NO
+        // principal is booked as a market-priced ACQUIRE.
+        String corr = "lp-position:base:uniswap:924461";
+        String universe = "D1";
+        ReplayAssetSupport assetSupport = new ReplayAssetSupport();
+        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine(null));
+        ReplaySettlementAllocator settlementAllocator = new ReplaySettlementAllocator(assetSupport, flowSupport);
+        LpReceiptBasisPoolRepository repo = mock(LpReceiptBasisPoolRepository.class);
+        when(repo.findByUniverseId(anyString())).thenReturn(List.of());
+        LpReceiptBasisPoolService poolService = new LpReceiptBasisPoolService(repo);
+        ReplayPendingTransferKeyFactory keyFactory = new ReplayPendingTransferKeyFactory(assetSupport);
+        PositionScopedLpExitReplayHandler handler = new PositionScopedLpExitReplayHandler(
+                assetSupport, flowSupport, settlementAllocator, poolService, keyFactory);
+
+        LinkedHashMap<LpReceiptBasisPoolKey, LpReceiptBasisPool> pools = new LinkedHashMap<>();
+        HashSet<LpReceiptBasisPoolKey> dirty = new HashSet<>();
+        Instant entryTs = Instant.parse("2026-03-25T09:00:00Z");
+
+        // WETH pool: 0.1 qty, $150 tax / $150 net.
+        LpReceiptBasisPool wethPool = poolService.lookupOrCreate(
+                universe, corr, "wallet-d1", NetworkId.BASE,
+                "FAMILY:ETH", "WETH", "0x4200000000000000000000000000000000000006",
+                pools, dirty, entryTs);
+        poolService.deposit(wethPool, new BigDecimal("0.1"), new BigDecimal("150"),
+                new BigDecimal("150"), BigDecimal.ZERO);
+
+        // USDC pool: 100 qty, $250 tax / $250 net ($2.50/unit compounded above peg).
+        LpReceiptBasisPool usdcPool = poolService.lookupOrCreate(
+                universe, corr, "wallet-d1", NetworkId.BASE,
+                "FAMILY:USDC", "USDC", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                pools, dirty, entryTs);
+        poolService.deposit(usdcPool, new BigDecimal("100"), new BigDecimal("250"),
+                new BigDecimal("250"), BigDecimal.ZERO);
+
+        List<AssetLedgerPoint> points = new ArrayList<>();
+        ReplayExecutionState state = new ReplayExecutionState(
+                null,
+                new LedgerPointCollector(universe, points, Instant.now()),
+                null, null,
+                new LpReceiptBasisPoolReplayContext(universe, pools, dirty));
+
+        NormalizedTransaction exit = new NormalizedTransaction();
+        exit.setId("d1-exit");
+        exit.setTxHash("0x924461exit");
+        exit.setWalletAddress("wallet-d1");
+        exit.setNetworkId(NetworkId.BASE);
+        exit.setSource(NormalizedTransactionSource.ON_CHAIN);
+        exit.setType(NormalizedTransactionType.LP_EXIT_FINAL);
+        exit.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        exit.setBlockTimestamp(Instant.parse("2026-03-25T11:00:00Z"));
+        exit.setCorrelationId(corr);
+
+        // WETH FIRST (volatile), USDC second (stable) — the ordering the old inject path could not handle.
+        NormalizedTransaction.Flow wethIn = new NormalizedTransaction.Flow();
+        wethIn.setRole(NormalizedLegRole.TRANSFER);
+        wethIn.setAssetSymbol("WETH");
+        wethIn.setAssetContract("0x4200000000000000000000000000000000000006");
+        wethIn.setQuantityDelta(new BigDecimal("0.1"));
+        wethIn.setPriceSource(PriceSource.UNKNOWN);
+
+        NormalizedTransaction.Flow usdcIn = new NormalizedTransaction.Flow();
+        usdcIn.setRole(NormalizedLegRole.TRANSFER);
+        usdcIn.setAssetSymbol("USDC");
+        usdcIn.setAssetContract("0x833589fcd6edb6e08f4c7c32d4f71b54bda02913");
+        usdcIn.setQuantityDelta(new BigDecimal("100"));
+        usdcIn.setPriceSource(PriceSource.UNKNOWN);
+
+        exit.setFlows(List.of(wethIn, usdcIn));
+        handler.apply(exit, state);
+
+        // No principal leg may be booked as a market-priced ACQUIRE (the D1 defect).
+        assertThat(points.stream()
+                .filter(p -> p.getBasisEffect() == AssetLedgerPoint.BasisEffect.ACQUIRE)
+                .anyMatch(p -> "WETH".equals(p.getAssetSymbol()) || "USDC".equals(p.getAssetSymbol())))
+                .as("no principal ACQUIRE (return-of-capital must be REALLOCATE_IN)")
+                .isFalse();
+
+        // USDC peg-capped to $1/unit → $100. WETH absorbs the remainder: $150 own + $150 USDC surplus = $300.
+        AssetLedgerPoint usdcPoint = points.stream()
+                .filter(p -> "USDC".equals(p.getAssetSymbol())
+                        && p.getBasisEffect() == AssetLedgerPoint.BasisEffect.REALLOCATE_IN)
+                .reduce((a, b) -> b).orElseThrow();
+        assertThat(usdcPoint.getTotalCostBasisAfterUsd()).isEqualByComparingTo("100");
+
+        AssetLedgerPoint wethPoint = points.stream()
+                .filter(p -> "WETH".equals(p.getAssetSymbol())
+                        && p.getBasisEffect() == AssetLedgerPoint.BasisEffect.REALLOCATE_IN)
+                .reduce((a, b) -> b).orElseThrow();
+        assertThat(wethPoint.getTotalCostBasisAfterUsd()).isEqualByComparingTo("300");
+
+        // Combined LP basis fully conserved ($400 = $150 + $250) and both lanes obey net ≤ tax.
+        assertThat(usdcPoint.getTotalCostBasisAfterUsd().add(wethPoint.getTotalCostBasisAfterUsd()))
+                .isEqualByComparingTo("400");
+        assertThat(wethPoint.getNetTotalCostBasisAfterUsd())
+                .isLessThanOrEqualTo(wethPoint.getTotalCostBasisAfterUsd());
+        assertThat(usdcPoint.getNetTotalCostBasisAfterUsd())
+                .isLessThanOrEqualTo(usdcPoint.getTotalCostBasisAfterUsd());
+
+        // Pools fully zeroed on close (tax, net, qty).
+        assertThat(wethPool.getQtyHeld()).isEqualByComparingTo("0");
+        assertThat(wethPool.getBasisHeldUsd()).isEqualByComparingTo("0");
+        assertThat(wethPool.getNetBasisHeldUsd()).isEqualByComparingTo("0");
+        assertThat(usdcPool.getQtyHeld()).isEqualByComparingTo("0");
+        assertThat(usdcPool.getBasisHeldUsd()).isEqualByComparingTo("0");
+        assertThat(usdcPool.getNetBasisHeldUsd()).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void d2_fullExitCarriesNetLaneOntoExitAssetBeforeZeroingPool() {
+        // D2 (R3 net-lane carry): a terminal exit leaves residual pool basis (returned qty < pool
+        // qty on a final close). The pre-fix drain zeroed the tax lane AND destroyed the net lane.
+        // The fix carries BOTH lanes onto the exit asset first, THEN zeroes — so netBasisHeldUsd is
+        // conserved onto the returned principal (net ≤ tax preserved).
+        String corr = "lp-position:optimism:uniswap:2984825";
+        String universe = "D2";
+        ReplayAssetSupport assetSupport = new ReplayAssetSupport();
+        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine(null));
+        ReplaySettlementAllocator settlementAllocator = new ReplaySettlementAllocator(assetSupport, flowSupport);
+        LpReceiptBasisPoolRepository repo = mock(LpReceiptBasisPoolRepository.class);
+        when(repo.findByUniverseId(anyString())).thenReturn(List.of());
+        LpReceiptBasisPoolService poolService = new LpReceiptBasisPoolService(repo);
+        ReplayPendingTransferKeyFactory keyFactory = new ReplayPendingTransferKeyFactory(assetSupport);
+        PositionScopedLpExitReplayHandler handler = new PositionScopedLpExitReplayHandler(
+                assetSupport, flowSupport, settlementAllocator, poolService, keyFactory);
+
+        LinkedHashMap<LpReceiptBasisPoolKey, LpReceiptBasisPool> pools = new LinkedHashMap<>();
+        HashSet<LpReceiptBasisPoolKey> dirty = new HashSet<>();
+        Instant entryTs = Instant.parse("2026-03-25T09:00:00Z");
+
+        // WETH pool: 0.2 qty, $300 tax / $240 net (reward-discounted below tax).
+        LpReceiptBasisPool wethPool = poolService.lookupOrCreate(
+                universe, corr, "wallet-d2", NetworkId.OPTIMISM,
+                "FAMILY:ETH", "WETH", "0x4200000000000000000000000000000000000006",
+                pools, dirty, entryTs);
+        poolService.deposit(wethPool, new BigDecimal("0.2"), new BigDecimal("300"),
+                new BigDecimal("240"), BigDecimal.ZERO);
+
+        List<AssetLedgerPoint> points = new ArrayList<>();
+        ReplayExecutionState state = new ReplayExecutionState(
+                null,
+                new LedgerPointCollector(universe, points, Instant.now()),
+                null, null,
+                new LpReceiptBasisPoolReplayContext(universe, pools, dirty));
+
+        // LP_EXIT_FINAL returns only half the pooled qty (0.1 of 0.2) — the position is closed on
+        // chain (final), so the remaining pool basis must be carried, not stranded.
+        NormalizedTransaction exit = new NormalizedTransaction();
+        exit.setId("d2-exit");
+        exit.setTxHash("0x2984825exit");
+        exit.setWalletAddress("wallet-d2");
+        exit.setNetworkId(NetworkId.OPTIMISM);
+        exit.setSource(NormalizedTransactionSource.ON_CHAIN);
+        exit.setType(NormalizedTransactionType.LP_EXIT_FINAL);
+        exit.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        exit.setBlockTimestamp(Instant.parse("2026-03-25T11:00:00Z"));
+        exit.setCorrelationId(corr);
+
+        NormalizedTransaction.Flow wethIn = new NormalizedTransaction.Flow();
+        wethIn.setRole(NormalizedLegRole.TRANSFER);
+        wethIn.setAssetSymbol("WETH");
+        wethIn.setAssetContract("0x4200000000000000000000000000000000000006");
+        wethIn.setQuantityDelta(new BigDecimal("0.1"));
+        wethIn.setPriceSource(PriceSource.UNKNOWN);
+        exit.setFlows(List.of(wethIn));
+        handler.apply(exit, state);
+
+        // The final WETH point must carry BOTH lanes: tax $300 and net $240 (nothing destroyed).
+        AssetLedgerPoint wethPoint = points.stream()
+                .filter(p -> "WETH".equals(p.getAssetSymbol())
+                        && p.getBasisEffect() == AssetLedgerPoint.BasisEffect.REALLOCATE_IN)
+                .reduce((a, b) -> b).orElseThrow();
+        assertThat(wethPoint.getTotalCostBasisAfterUsd()).isEqualByComparingTo("300");
+        assertThat(wethPoint.getNetTotalCostBasisAfterUsd()).isEqualByComparingTo("240");
+        assertThat(wethPoint.getNetTotalCostBasisAfterUsd())
+                .isLessThanOrEqualTo(wethPoint.getTotalCostBasisAfterUsd());
+
+        // Pool fully zeroed AFTER carry — net lane conserved, not destroyed.
+        assertThat(wethPool.getQtyHeld()).isEqualByComparingTo("0");
+        assertThat(wethPool.getBasisHeldUsd()).isEqualByComparingTo("0");
+        assertThat(wethPool.getNetBasisHeldUsd()).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void d3_stablecoinExitNetLaneNeverFabricatedAbovePooledNet() {
+        // D3 (net-lane peg-cap clamp): the pre-fix restore floored the NET lane up to qty×$1
+        // (pegFlooredStablecoinCarryBasis) while the TAX lane stayed at the below-face pool basis —
+        // producing net > tax (the 450450 / 2984825 fabrications). Here the USDC pool net ($80) is
+        // materially below peg (< 0.90/unit) so the old floor would inflate it to $100 > tax $95.
+        // The fix carries the pooled net exactly (no floor) and clamps 0 ≤ net ≤ tax.
+        String corr = "lp-position:base:aerodrome:450450";
+        String universe = "D3";
+        ReplayAssetSupport assetSupport = new ReplayAssetSupport();
+        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine(null));
+        ReplaySettlementAllocator settlementAllocator = new ReplaySettlementAllocator(assetSupport, flowSupport);
+        LpReceiptBasisPoolRepository repo = mock(LpReceiptBasisPoolRepository.class);
+        when(repo.findByUniverseId(anyString())).thenReturn(List.of());
+        LpReceiptBasisPoolService poolService = new LpReceiptBasisPoolService(repo);
+        ReplayPendingTransferKeyFactory keyFactory = new ReplayPendingTransferKeyFactory(assetSupport);
+        PositionScopedLpExitReplayHandler handler = new PositionScopedLpExitReplayHandler(
+                assetSupport, flowSupport, settlementAllocator, poolService, keyFactory);
+
+        LinkedHashMap<LpReceiptBasisPoolKey, LpReceiptBasisPool> pools = new LinkedHashMap<>();
+        HashSet<LpReceiptBasisPoolKey> dirty = new HashSet<>();
+        Instant entryTs = Instant.parse("2026-03-25T09:00:00Z");
+
+        // USDC pool: 100 qty, $95 tax ($0.95/unit — above the 0.90 floor threshold, NOT floored),
+        // $80 net ($0.80/unit — below 0.90 → the old net floor would inflate to $100).
+        LpReceiptBasisPool usdcPool = poolService.lookupOrCreate(
+                universe, corr, "wallet-d3", NetworkId.BASE,
+                "FAMILY:USDC", "USDC", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                pools, dirty, entryTs);
+        poolService.deposit(usdcPool, new BigDecimal("100"), new BigDecimal("95"),
+                new BigDecimal("80"), BigDecimal.ZERO);
+
+        List<AssetLedgerPoint> points = new ArrayList<>();
+        ReplayExecutionState state = new ReplayExecutionState(
+                null,
+                new LedgerPointCollector(universe, points, Instant.now()),
+                null, null,
+                new LpReceiptBasisPoolReplayContext(universe, pools, dirty));
+
+        NormalizedTransaction exit = new NormalizedTransaction();
+        exit.setId("d3-exit");
+        exit.setTxHash("0x450450exit");
+        exit.setWalletAddress("wallet-d3");
+        exit.setNetworkId(NetworkId.BASE);
+        exit.setSource(NormalizedTransactionSource.ON_CHAIN);
+        exit.setType(NormalizedTransactionType.LP_EXIT);
+        exit.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        exit.setBlockTimestamp(Instant.parse("2026-03-25T11:00:00Z"));
+        exit.setCorrelationId(corr);
+
+        NormalizedTransaction.Flow usdcIn = new NormalizedTransaction.Flow();
+        usdcIn.setRole(NormalizedLegRole.TRANSFER);
+        usdcIn.setAssetSymbol("USDC");
+        usdcIn.setAssetContract("0x833589fcd6edb6e08f4c7c32d4f71b54bda02913");
+        usdcIn.setQuantityDelta(new BigDecimal("100"));
+        usdcIn.setPriceSource(PriceSource.UNKNOWN);
+        exit.setFlows(List.of(usdcIn));
+        handler.apply(exit, state);
+
+        AssetLedgerPoint usdcPoint = points.stream()
+                .filter(p -> "USDC".equals(p.getAssetSymbol())
+                        && p.getBasisEffect() == AssetLedgerPoint.BasisEffect.REALLOCATE_IN)
+                .reduce((a, b) -> b).orElseThrow();
+        // Tax lane unchanged ($0.95/unit ≥ 0.90 floor → $95). Net lane carried as pooled ($80),
+        // NOT fabricated up to the $100 face value → net ≤ tax holds.
+        assertThat(usdcPoint.getTotalCostBasisAfterUsd()).isEqualByComparingTo("95");
+        assertThat(usdcPoint.getNetTotalCostBasisAfterUsd()).isEqualByComparingTo("80");
+        assertThat(usdcPoint.getNetTotalCostBasisAfterUsd())
+                .as("net lane must never exceed tax lane (no fabrication)")
+                .isLessThanOrEqualTo(usdcPoint.getTotalCostBasisAfterUsd());
+    }
+
+    @Test
+    void d4_lpFeeIncomeLegBooksFmvInTaxLaneAndZeroInNetLane() {
+        // D4 (fee-income pricing): a priced LP_FEE_INCOME leg must book fee income at FMV in the tax
+        // (market) lane and $0 in the net lane (zero-cost acquisition). Pre-fix the passed cost was
+        // hard-coded to $0, so FMV was dropped even after the leg was priced.
+        String corr = "lp-position:base:uniswap:fee-income";
+        String universe = "D4";
+        ReplayAssetSupport assetSupport = new ReplayAssetSupport();
+        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine(null));
+        ReplaySettlementAllocator settlementAllocator = new ReplaySettlementAllocator(assetSupport, flowSupport);
+        LpReceiptBasisPoolRepository repo = mock(LpReceiptBasisPoolRepository.class);
+        when(repo.findByUniverseId(anyString())).thenReturn(List.of());
+        LpReceiptBasisPoolService poolService = new LpReceiptBasisPoolService(repo);
+        ReplayPendingTransferKeyFactory keyFactory = new ReplayPendingTransferKeyFactory(assetSupport);
+        PositionScopedLpExitReplayHandler handler = new PositionScopedLpExitReplayHandler(
+                assetSupport, flowSupport, settlementAllocator, poolService, keyFactory);
+
+        LinkedHashMap<LpReceiptBasisPoolKey, LpReceiptBasisPool> pools = new LinkedHashMap<>();
+        HashSet<LpReceiptBasisPoolKey> dirty = new HashSet<>();
+        List<AssetLedgerPoint> points = new ArrayList<>();
+        ReplayExecutionState state = new ReplayExecutionState(
+                null,
+                new LedgerPointCollector(universe, points, Instant.now()),
+                null, null,
+                new LpReceiptBasisPoolReplayContext(universe, pools, dirty));
+
+        NormalizedTransaction exit = new NormalizedTransaction();
+        exit.setId("d4-exit");
+        exit.setTxHash("0xfeeincome");
+        exit.setWalletAddress("wallet-d4");
+        exit.setNetworkId(NetworkId.BASE);
+        exit.setSource(NormalizedTransactionSource.ON_CHAIN);
+        exit.setType(NormalizedTransactionType.LP_EXIT);
+        exit.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        exit.setBlockTimestamp(Instant.parse("2026-03-25T11:00:00Z"));
+        exit.setCorrelationId(corr);
+
+        // Priced WETH fee-income leg: 0.01 WETH @ $2,500 → FMV $25.
+        NormalizedTransaction.Flow feeIn = new NormalizedTransaction.Flow();
+        feeIn.setRole(NormalizedLegRole.LP_FEE_INCOME);
+        feeIn.setAssetSymbol("WETH");
+        feeIn.setAssetContract("0x4200000000000000000000000000000000000006");
+        feeIn.setQuantityDelta(new BigDecimal("0.01"));
+        feeIn.setUnitPriceUsd(new BigDecimal("2500"));
+        feeIn.setPriceSource(PriceSource.COINGECKO);
+        exit.setFlows(List.of(feeIn));
+        handler.apply(exit, state);
+
+        AssetLedgerPoint feePoint = points.stream()
+                .filter(p -> "WETH".equals(p.getAssetSymbol())
+                        && p.getBasisEffect() == AssetLedgerPoint.BasisEffect.ACQUIRE)
+                .reduce((a, b) -> b).orElseThrow();
+        // Tax lane = FMV $25, net lane = $0 (zero-cost LP_FEE_CLAIM).
+        assertThat(feePoint.getTotalCostBasisAfterUsd()).isEqualByComparingTo("25");
+        assertThat(feePoint.getNetTotalCostBasisAfterUsd()).isEqualByComparingTo("0");
+    }
+
+    /**
+     * R6a (M1 replay defect) regression: partial Balancer V3 BPT burn while a portion of the BPT
+     * remains staked, followed by a final burn of the un-staked residual.
+     *
+     * <p>Lifecycle modelled on the boosted-stable {@code 0xfcec3c8d…} pool (Avalanche): an all-stable
+     * GHO/USDT/USDC BPT is entered (pools + LP-RECEIPT marker seeded), most of the BPT is burned in a
+     * partial exit ({@code 0xe84d…}) while ~2% stays staked in Aura, and the remaining 2% is later
+     * unstaked and burned ({@code 0xdf5c…}).</p>
+     *
+     * <p>Pre-fix defect: the partial burn drained the per-asset pools by returned-underlying quantity,
+     * which — because a rebalanced stable exit returns MORE of one leg than that leg's own pool held —
+     * swept the sibling pool leftover too and released the FULL combined basis ($2,214 on the real
+     * position) while the LP-RECEIPT marker only decremented proportionally ($2,169). The pools were
+     * thus emptied and the final burn self-assigned {@code UNKNOWN} at face (the +$43.37 fabrication).</p>
+     *
+     * <p>Post-fix: the partial burn releases only {@code burnFraction × combinedBasis} (proportional to
+     * the BPT actually burned), leaving the still-staked portion's basis in the pools so the final burn
+     * draws it as {@code REALLOCATE_IN} — no over-return at burn #1, no {@code UNKNOWN} at the final
+     * burn, correlation Σ net ≈ $0, and all receipt pools drain to 0.</p>
+     */
+    @Test
+    void partialBalancerBptBurnWhileStakedReturnsProportionalBasisAndFinalBurnDrawsResidual() {
+        String corr = "lp-position:avalanche:balancerv3:0xfcec3c8d86329defb548202fe1b86ff2188603a8";
+        String receiptSymbol = "LP-RECEIPT:AVALANCHE:BALANCERV3:0xfcec3c8d86329defb548202fe1b86ff2188603a8";
+        String universe = "R6A-PARTIAL";
+        BigDecimal eps = new BigDecimal("0.0001");
+
+        ReplayAssetSupport assetSupport = new ReplayAssetSupport();
+        ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine(null));
+        ReplaySettlementAllocator settlementAllocator = new ReplaySettlementAllocator(assetSupport, flowSupport);
+        LpReceiptBasisPoolRepository repo = mock(LpReceiptBasisPoolRepository.class);
+        when(repo.findByUniverseId(anyString())).thenReturn(List.of());
+        LpReceiptBasisPoolService poolService = new LpReceiptBasisPoolService(repo);
+        ReplayPendingTransferKeyFactory keyFactory = new ReplayPendingTransferKeyFactory(assetSupport);
+        PositionScopedLpExitReplayHandler handler = new PositionScopedLpExitReplayHandler(
+                assetSupport, flowSupport, settlementAllocator, poolService, keyFactory);
+
+        LinkedHashMap<LpReceiptBasisPoolKey, LpReceiptBasisPool> pools = new LinkedHashMap<>();
+        HashSet<LpReceiptBasisPoolKey> dirty = new HashSet<>();
+        Instant entryTs = Instant.parse("2026-03-25T09:00:00Z");
+
+        // Entry composition parked at LP_ENTRY: USDC 60 ($60) + USDT 40 ($40) = combined $100 for 100 BPT.
+        LpReceiptBasisPool usdcPool = poolService.lookupOrCreate(
+                universe, corr, "wallet-r6a", NetworkId.AVALANCHE,
+                "FAMILY:USDC", "USDC", "0xusdc", pools, dirty, entryTs);
+        poolService.deposit(usdcPool, new BigDecimal("60"), new BigDecimal("60"), BigDecimal.ZERO);
+        LpReceiptBasisPool usdtPool = poolService.lookupOrCreate(
+                universe, corr, "wallet-r6a", NetworkId.AVALANCHE,
+                "FAMILY:USDT", "USDT", "0xusdt", pools, dirty, entryTs);
+        poolService.deposit(usdtPool, new BigDecimal("40"), new BigDecimal("40"), BigDecimal.ZERO);
+
+        List<AssetLedgerPoint> points = new ArrayList<>();
+        ReplayExecutionState state = new ReplayExecutionState(
+                null,
+                new LedgerPointCollector(universe, points, Instant.now()),
+                null, null,
+                new LpReceiptBasisPoolReplayContext(universe, pools, dirty));
+
+        // Seed the LP-RECEIPT (BPT) marker position with the full 100 BPT / $100 combined basis, keyed
+        // as the Balancer V3 burn flow resolves it (assetKey off the explicit receipt burn leg).
+        NormalizedTransaction partialBurn = new NormalizedTransaction();
+        partialBurn.setId("burn1");
+        partialBurn.setTxHash("0xe84d");
+        partialBurn.setWalletAddress("wallet-r6a");
+        partialBurn.setNetworkId(NetworkId.AVALANCHE);
+        partialBurn.setSource(NormalizedTransactionSource.ON_CHAIN);
+        partialBurn.setType(NormalizedTransactionType.LP_EXIT);
+        partialBurn.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        partialBurn.setBlockTimestamp(Instant.parse("2026-03-25T10:00:00Z"));
+        partialBurn.setCorrelationId(corr);
+        NormalizedTransaction.Flow burn1Receipt = flow(NormalizedLegRole.TRANSFER, receiptSymbol, null, "-98");
+        AssetKey receiptKey = assetSupport.assetKey(partialBurn, burn1Receipt);
+        PositionState receiptPos = state.position(receiptKey);
+        receiptPos.setQuantity(new BigDecimal("100"));
+        receiptPos.setTotalCostBasisUsd(new BigDecimal("100"));
+        receiptPos.setNetTotalCostBasisUsd(new BigDecimal("100"));
+
+        // ---- Burn #1 (PARTIAL): burn 98 of 100 BPT; returns a REBALANCED stable mix (USDT 48 > its
+        // own $40 pool) that historically over-drained the whole combined basis. ----
+        partialBurn.setFlows(List.of(
+                flow(NormalizedLegRole.TRANSFER, "USDC", "0xusdc", "50"),
+                flow(NormalizedLegRole.TRANSFER, "USDT", "0xusdt", "48"),
+                burn1Receipt));
+        handler.apply(partialBurn, state);
+        List<AssetLedgerPoint> burn1Points = new ArrayList<>(points);
+
+        // Proportional return: burn #1 releases only burnFraction(0.98) × $100 = $98, NOT the full $100.
+        BigDecimal burn1Returned = burn1Points.stream()
+                .filter(p -> p.getBasisEffect() == AssetLedgerPoint.BasisEffect.REALLOCATE_IN)
+                .map(AssetLedgerPoint::getCostBasisDeltaUsd)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        assertThat(burn1Returned)
+                .as("partial burn returns proportional basis (no over-return of the still-staked portion)")
+                .isCloseTo(new BigDecimal("98"), org.assertj.core.api.Assertions.within(eps));
+
+        // The still-staked ~2% survives in the receipt pools for the later burn.
+        BigDecimal residualPoolBasis = usdcPool.getBasisHeldUsd().add(usdtPool.getBasisHeldUsd());
+        assertThat(residualPoolBasis)
+                .as("un-burned (still-staked) fraction retained in the receipt pools")
+                .isCloseTo(new BigDecimal("2"), org.assertj.core.api.Assertions.within(eps));
+        // Marker decremented proportionally (mirrors the pools).
+        assertThat(receiptPos.quantity()).isEqualByComparingTo("2");
+        assertThat(receiptPos.totalCostBasisUsd())
+                .isCloseTo(new BigDecimal("2"), org.assertj.core.api.Assertions.within(eps));
+
+        // ---- Final burn: the residual 2 BPT is unstaked and burned (full close). ----
+        NormalizedTransaction finalBurn = new NormalizedTransaction();
+        finalBurn.setId("burn2");
+        finalBurn.setTxHash("0xdf5c");
+        finalBurn.setWalletAddress("wallet-r6a");
+        finalBurn.setNetworkId(NetworkId.AVALANCHE);
+        finalBurn.setSource(NormalizedTransactionSource.ON_CHAIN);
+        finalBurn.setType(NormalizedTransactionType.LP_EXIT);
+        finalBurn.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        finalBurn.setBlockTimestamp(Instant.parse("2026-03-25T12:00:00Z"));
+        finalBurn.setCorrelationId(corr);
+        finalBurn.setFlows(List.of(
+                flow(NormalizedLegRole.TRANSFER, "USDC", "0xusdc", "1"),
+                flow(NormalizedLegRole.TRANSFER, "USDT", "0xusdt", "1"),
+                flow(NormalizedLegRole.TRANSFER, receiptSymbol, null, "-2")));
+        handler.apply(finalBurn, state);
+        List<AssetLedgerPoint> finalBurnPoints = points.subList(burn1Points.size(), points.size());
+
+        // The final burn draws the residual as REALLOCATE_IN from the pool — NOT UNKNOWN at face.
+        List<AssetLedgerPoint> finalStablePoints = finalBurnPoints.stream()
+                .filter(p -> "USDC".equals(p.getAssetSymbol()) || "USDT".equals(p.getAssetSymbol()))
+                .toList();
+        assertThat(finalStablePoints)
+                .as("final burn stables must be return-of-capital, not fabricated income")
+                .isNotEmpty()
+                .allSatisfy(p -> assertThat(p.getBasisEffect())
+                        .isEqualTo(AssetLedgerPoint.BasisEffect.REALLOCATE_IN));
+        BigDecimal burn2Returned = finalStablePoints.stream()
+                .map(AssetLedgerPoint::getCostBasisDeltaUsd)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        assertThat(burn2Returned)
+                .as("final burn returns the surviving ~2% residual")
+                .isCloseTo(new BigDecimal("2"), org.assertj.core.api.Assertions.within(eps));
+
+        // Combined basis fully conserved across both burns (Σ ≈ combined $100 → no fabrication).
+        assertThat(burn1Returned.add(burn2Returned))
+                .isCloseTo(new BigDecimal("100"), org.assertj.core.api.Assertions.within(eps));
+
+        // All receipt pools for the correlation drain to 0/0 and the marker is fully closed.
+        assertThat(usdcPool.getQtyHeld()).isEqualByComparingTo("0");
+        assertThat(usdcPool.getBasisHeldUsd()).isEqualByComparingTo("0");
+        assertThat(usdtPool.getQtyHeld()).isEqualByComparingTo("0");
+        assertThat(usdtPool.getBasisHeldUsd()).isEqualByComparingTo("0");
+        assertThat(receiptPos.quantity()).isEqualByComparingTo("0");
+        // No fabricated income anywhere in the lifecycle.
+        assertThat(points).noneMatch(p -> p.getBasisEffect() == AssetLedgerPoint.BasisEffect.UNKNOWN);
+    }
+
     private static PositionScopedLpExitReplayHandler handler() {
         ReplayAssetSupport assetSupport = new ReplayAssetSupport();
         ReplayFlowSupport flowSupport = new ReplayFlowSupport(new GenericFlowReplayEngine(null));

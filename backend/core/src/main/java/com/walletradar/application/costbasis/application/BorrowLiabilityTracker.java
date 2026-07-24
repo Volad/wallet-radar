@@ -15,7 +15,9 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Tracks crypto-loan principal by {@code orderId} for zero-PnL roundtrips (ADR-012 §D2–D3).
+ * Tracks crypto-loan principal by {@code orderId} for zero-PnL roundtrips (ADR-012 §D2–D3). Since
+ * the ADR-040 §5 (2026-07-18) borrow net-basis fix, borrowed principal enters both the Market and
+ * Net lanes at market-at-borrow basis, so a matched borrow→repay roundtrip nets ≈ $0 in BOTH lanes.
  */
 @Service
 @RequiredArgsConstructor

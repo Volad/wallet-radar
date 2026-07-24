@@ -1,0 +1,15 @@
+{
+  "description": "Global custodial-operator registry (ADR-079). Maps a well-known custodial hot-wallet operator address to a human-labeled EXTERNAL_CUSTODY counterparty (ADR-072 model). Distinct from ADR-072's per-session, user-designated externalCustodyDestinations: this is a maintained global default for shared, well-known operator pools a user cannot be expected to configure (e.g. Telegram Wallet). Keyed by TON address in ANY canonical form (raw workchain 0:hex or friendly EQ/UQ) — TonAddressCanonicalizer expands each configured key to its equivalent forms. TON addresses are case-sensitive and never lowercased. Detection is registry-deterministic; tonapi account name/interfaces and the wallet_highload_v3r1 interface are OFFLINE DISCOVERY AIDS ONLY used to seed/extend this file — never queried on the per-row pipeline path. The highload interface alone is NEVER sufficient for a custodial label: an operator not listed here stays UNKNOWN_EOA (never guessed as Telegram). Existing deterministic classifiers keep priority (Bybit highload -> AccountingUniverseService EXCHANGE_ACCOUNT; TON DEX routers -> TonProtocolRegistry family DEX).",
+  "operators": {
+    "0:DD6FF02C59634745529B99A8D5BEEEA9F6C38A9188E6A7E96A424E3820C8AC0A": {
+      "provider": "Telegram Wallet",
+      "label": "Telegram Wallet",
+      "note": "Telegram Wallet custodial hot wallet (wallet_highload_v3r1, tonapi name 'Wallet in Telegram'). The app-shown 'your TG-Wallet address' UQDdb_As... encodes to this raw form (shared custodial address, not a personal wallet)."
+    },
+    "0:023895AEF955024920A291C6F3715E291DF1B3DD254EAFA8B09E21A2D58D5897": {
+      "provider": "Telegram Wallet",
+      "label": "Telegram Wallet",
+      "note": "Telegram Wallet custodial hot wallet (wallet_highload_v3r1). Observed sending both TON and 13 USDT to the tracked wallet."
+    }
+  }
+}

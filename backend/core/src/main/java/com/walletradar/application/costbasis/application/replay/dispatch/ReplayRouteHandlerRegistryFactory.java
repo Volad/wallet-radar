@@ -34,7 +34,7 @@ public final class ReplayRouteHandlerRegistryFactory {
                 new ReplayRouteHandlerAdapters.LpReceiptEntryRouteHandler(lpReceiptEntryReplayHandler),
                 new ReplayRouteHandlerAdapters.AsyncLpExitSettlementRouteHandler(genericAsyncLifecycleReplayHandler),
                 new ReplayRouteHandlerAdapters.PositionScopedLpExitRouteHandler(positionScopedLpExitReplayHandler),
-                new ReplayRouteHandlerAdapters.LiquidStakingRouteHandler(liquidStakingReplayHandler),
+                new ReplayRouteHandlerAdapters.ClusterCarryRouteHandler(liquidStakingReplayHandler),
                 new ReplayRouteHandlerAdapters.FamilyEquivalentCustodyRouteHandler(familyEquivalentCustodyReplayHandler),
                 new ReplayRouteHandlerAdapters.GenericRouteHandler()
         ));

@@ -1,6 +1,8 @@
 package com.walletradar.application.pricing.latest;
 
 import com.walletradar.application.pricing.domain.CanonicalAssetCatalog;
+import com.walletradar.domain.common.NetworkId;
+import com.walletradar.platform.networks.descriptor.NetworkRegistry;
 import lombok.RequiredArgsConstructor;
 import org.bson.Document;
 import org.bson.types.Decimal128;
@@ -50,6 +52,7 @@ public class TrackedAssetRegistryMaintainer {
     private final MongoOperations mongoOperations;
     private final TrackedPriceAssetRepository trackedPriceAssetRepository;
     private final LatestPriceProperties latestPriceProperties;
+    private final NetworkRegistry networkRegistry;
 
     /**
      * Rebuilds the tracked asset registry from all live balance and LP sources.
@@ -91,6 +94,11 @@ public class TrackedAssetRegistryMaintainer {
      */
     private Map<String, SymbolWithKind> collectAllSymbols() {
         Map<String, SymbolWithKind> result = new LinkedHashMap<>();
+
+        // WS-6 ordering fix: seed every network's native symbol FIRST so majors (notably non-EVM
+        // SOL / TON) are always tracked — even on the first cycle where the registry is rebuilt
+        // before non-EVM on_chain_balances have populated. Descriptor-driven, so no hardcoded list.
+        seedNativeSymbols(result);
 
         // on_chain_balances
         List<Document> onChain = mongoOperations.find(new Query(), Document.class, "on_chain_balances");
@@ -140,6 +148,13 @@ public class TrackedAssetRegistryMaintainer {
         return result;
     }
 
+    /** Seeds the native symbol of every wallet-supported network so majors are tracked pre-balance. */
+    private void seedNativeSymbols(Map<String, SymbolWithKind> target) {
+        for (NetworkId networkId : networkRegistry.walletSupportedNetworks()) {
+            addSymbol(target, networkRegistry.nativeSymbol(networkId), false);
+        }
+    }
+
     private void addLpTokenSymbol(Map<String, SymbolWithKind> target, Document snap, String field) {
         Document token = snap.get(field, Document.class);
         if (token == null) return;
@@ -157,8 +172,12 @@ public class TrackedAssetRegistryMaintainer {
         TrackedPriceAssetDocument.Kind kind;
         if (CanonicalAssetCatalog.isUsdStablecoin(null, null, canonical, null)) {
             kind = TrackedPriceAssetDocument.Kind.STABLECOIN;
+        } else if (forceEquity || CanonicalAssetCatalog.isEquityBacked(canonical)) {
+            // WS-6 (B4): xStock jettons (AMZNx→AMZN, MSTRx→MSTR) are equity-priced; stamp EQUITY so
+            // the Dzengi equity ticker (SYMBOL.) is matched instead of a crypto ticker.
+            kind = TrackedPriceAssetDocument.Kind.EQUITY;
         } else {
-            kind = forceEquity ? TrackedPriceAssetDocument.Kind.EQUITY : TrackedPriceAssetDocument.Kind.CRYPTO;
+            kind = TrackedPriceAssetDocument.Kind.CRYPTO;
         }
         // Only overwrite if the new kind is EQUITY (more authoritative than CRYPTO/UNKNOWN)
         target.merge(canonical, new SymbolWithKind(canonical, kind),

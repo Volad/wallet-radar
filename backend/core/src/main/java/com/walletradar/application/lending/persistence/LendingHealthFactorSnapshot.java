@@ -34,6 +34,10 @@ public class LendingHealthFactorSnapshot {
     private String networkId;
     private String walletAddress;
     private BigDecimal healthFactor;
+    /** Liquidation threshold as a fraction (e.g. 0.85). Surfaced for LTV/HF context (WS-3). */
+    private BigDecimal liquidationThreshold;
+    /** Current loan-to-value as a fraction (e.g. 0.564). Surfaced next to the health factor (WS-3). */
+    private BigDecimal loanToValue;
     private String source;
     private Instant capturedAt;
     private Long blockNumber;

@@ -4,6 +4,7 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.walletradar.application.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.application.costbasis.domain.LpReceiptBasisPool;
+import com.walletradar.application.costbasis.support.WalletAddressReadScope;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.common.PriceSource;
 import com.walletradar.domain.session.UserSession;
@@ -208,6 +209,34 @@ public class SessionLpQueryService {
         return derivePairFromCorrelationId(correlationId);
     }
 
+    /**
+     * Chooses the pair label, preferring a <b>two-sided</b> ("X/Y") value. The accumulator's
+     * flow-derived pair is preferred when it is two-sided (it reflects the actual tokens the user
+     * deposited/withdrew, with historical accuracy). When the accumulator only yields a single symbol
+     * — e.g. a closed single-sided Meteora SOL deposit whose second pool token never appeared in any
+     * flow — a two-sided pair from the enriched snapshot (resolved from the captured LbPair pool) wins
+     * so the position displays the correct SOL/&lt;SPL&gt; pair instead of a lone "SOL". Falls back to
+     * whichever single value is available, then to the correlation-id-derived label.
+     */
+    private static String resolvePairLabel(PositionAccumulator acc, LpPositionSnapshot snapshot) {
+        String accPair = acc.pair();
+        if (isTwoSided(accPair)) {
+            return accPair;
+        }
+        String snapshotPair = derivePairFromSnapshot(snapshot);
+        if (isTwoSided(snapshotPair)) {
+            return snapshotPair;
+        }
+        if (accPair != null) {
+            return accPair;
+        }
+        return snapshotPair != null ? snapshotPair : derivePairFromCorrelationId(acc.correlationId());
+    }
+
+    private static boolean isTwoSided(String pair) {
+        return pair != null && pair.contains("/");
+    }
+
     private static String derivePairFromSnapshot(LpPositionSnapshot snapshot) {
         if (snapshot == null) return null;
         String sym0 = snapshot.getToken0() != null ? snapshot.getToken0().getSym() : null;
@@ -223,7 +252,10 @@ public class SessionLpQueryService {
      * token symbols are available. Supports:
      * <ul>
      *   <li>{@code gmx-lp:{network}:{slug}} → slug tokens uppercased (e.g. "weth-usdc" → "WETH/USDC")</li>
-     *   <li>{@code pendle-lp:{network}:{slug}} → slug uppercased</li>
+     *   <li>{@code pendle-lp:{network}:{slug}} → slug uppercased (legacy ADR-023 D3 3-segment key)</li>
+     *   <li>{@code pendle-lp:{network}:{marketOrSyAddress}:{walletLower}} → market segment uppercased
+     *       (ADR-081 4-segment per-market + per-wallet key; the trailing wallet segment is a
+     *       disambiguator and is never part of the display label)</li>
      * </ul>
      */
     private static String derivePairFromCorrelationId(String correlationId) {
@@ -235,7 +267,11 @@ public class SessionLpQueryService {
                 slug = parts[2];
             }
         } else if (correlationId.startsWith("pendle-lp:")) {
-            String[] parts = correlationId.split(":", 3);
+            // ADR-081: the key may be 3-segment (legacy `pendle-lp:{network}:{slug}`) or 4-segment
+            // (`pendle-lp:{network}:{marketOrSyAddress}:{walletLower}`). The market/slug is always the
+            // third segment; any 4th segment is the per-wallet disambiguator and must be dropped from
+            // the label. Split without a limit so the wallet does not get folded into the slug.
+            String[] parts = correlationId.split(":");
             if (parts.length >= 3 && !parts[2].isBlank()) {
                 slug = parts[2];
             }
@@ -461,7 +497,7 @@ public class SessionLpQueryService {
                 resolvedFamily,
                 acc.networkId(),
                 acc.walletAddress(),
-                acc.pair() != null ? acc.pair() : derivePair(acc.correlationId(), snapshot),
+                resolvePairLabel(acc, snapshot),
                 acc.tokenId(),
                 resolveStatus(closed, snapshot),
                 snapshot != null && snapshot.getStaked() != null ? snapshot.getStaked() : acc.staked(),
@@ -531,6 +567,17 @@ public class SessionLpQueryService {
     }
 
     private static boolean resolveClosed(PositionAccumulator acc, LpPositionSnapshot snapshot) {
+        // Solana DLMM/CLMM open/closed is decided authoritatively by the LP refresh pipeline
+        // (event-sequence close detection + live position-scoped basis pool). It persists a snapshot
+        // ONLY for genuinely-open Solana positions. Concentrated-liquidity exits leave a non-zero
+        // residual basis ("dust"), so the read-side fullyExited()/qtyHeld heuristic would wrongly
+        // resurrect every exited position as an "unknown" ghost pool. Trust the snapshot exclusively:
+        // a concentrated-liquidity position without an open snapshot is closed, regardless of residual
+        // basis. WS-8: driven by the stamped lpConcentrated capability, not a "lp-position:solana:"
+        // correlation-id prefix, so the read path never branches on the network.
+        if (acc.lpConcentrated()) {
+            return snapshot == null || "closed".equals(snapshot.getStatus());
+        }
         if (acc.closed()) {
             return true;
         }
@@ -1069,7 +1116,11 @@ public class SessionLpQueryService {
     }
 
     private static String normalizeAddress(String address) {
-        return address == null ? "" : address.trim().toLowerCase(Locale.ROOT);
+        // Family-aware: EVM/CEX lowercased (legacy), Solana case-preserved, TON preferred member ref.
+        // Blind lowercasing corrupted base58 Solana/TON wallet addresses so the LP-transaction $in
+        // query never matched — Solana positions loaded with a null networkId and defeated the
+        // accumulator's open/closed detection, surfacing as ghost "unknown" pools on the LP page.
+        return address == null ? "" : WalletAddressReadScope.normalize(address);
     }
 
     private static BigDecimal zero(BigDecimal value) {
@@ -1085,6 +1136,12 @@ public class SessionLpQueryService {
         private String tokenId;
         private boolean staked;
         private boolean closed;
+        /**
+         * WS-8 concentrated-liquidity capability carried from the normalized rows: Solana DLMM/CLMM
+         * positions whose full removal is a terminal LP_EXIT (residual-tolerant, snapshot-driven
+         * closure). Replaces the {@code "lp-position:solana:"} correlation-id prefix test.
+         */
+        private boolean lpConcentrated;
         /** True if at least one LP_ENTRY / LP_ENTRY_SETTLEMENT / LP_ADJUST transaction was seen. */
         private boolean hasLpEntry;
         /** Total count of LP_POSITION_STAKE and LP_POSITION_UNSTAKE transactions. */
@@ -1129,6 +1186,9 @@ public class SessionLpQueryService {
                 protocol = nonBridgeProtocol(seed.getProtocolName());
                 networkId = seed.getNetworkId() != null ? seed.getNetworkId().name() : null;
                 walletAddress = seed.getWalletAddress();
+                if (Boolean.TRUE.equals(seed.getLpConcentrated())) {
+                    lpConcentrated = true;
+                }
             }
         }
 
@@ -1142,6 +1202,9 @@ public class SessionLpQueryService {
             }
             if (walletAddress == null) {
                 walletAddress = tx.getWalletAddress();
+            }
+            if (Boolean.TRUE.equals(tx.getLpConcentrated())) {
+                lpConcentrated = true;
             }
             // enteredAt = earliest LP_ENTRY / LP_ENTRY_SETTLEMENT timestamp; fall back to any earliest tx
             if (tx.getBlockTimestamp() != null) {
@@ -1440,6 +1503,7 @@ public class SessionLpQueryService {
         }
 
         String correlationId() { return correlationId; }
+        boolean lpConcentrated() { return lpConcentrated; }
         String protocol() { return protocol; }
         String family() { return family; }
         String networkId() { return networkId; }

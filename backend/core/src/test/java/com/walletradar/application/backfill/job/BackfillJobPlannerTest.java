@@ -10,8 +10,10 @@ import com.walletradar.platform.networks.config.IngestionNetworkProperties;
 import com.walletradar.integration.IntegrationBackfillPlanningService;
 import com.walletradar.application.session.application.AccountingUniverseService;
 import com.walletradar.application.session.application.SourceSyncPlanner;
+import com.walletradar.domain.sync.BackfillSegment;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -82,5 +84,65 @@ class BackfillJobPlannerTest {
         assertThat(planned).isZero();
         verify(sourceSyncPlanner, never()).repairOnChainBlockWindowIfMissing(any(), any());
         verify(backfillSegmentRepository, never()).saveAll(any());
+    }
+
+    @Test
+    void solanaTwoYearWindowPlansExactlyOneSegment() {
+        SyncStatus status = pendingOnChainStatus(
+                "sync-solana", NetworkId.SOLANA, 1L, 165_000_000L);
+        when(syncStatusRepository.findById("sync-solana")).thenReturn(Optional.of(status));
+        when(accountingUniverseService.isBackfillEnabled(any(), eq(status.getWalletAddress()), eq(NetworkId.SOLANA)))
+                .thenReturn(true);
+        when(sourceSyncPlanner.repairOnChainBlockWindowIfMissing(eq(status), any())).thenReturn(status);
+        when(backfillSegmentRepository.findBySyncStatusIdOrderBySegmentIndexAsc("sync-solana"))
+                .thenReturn(List.of());
+
+        int planned = backfillJobPlanner.planOnChainSyncStatus("sync-solana");
+
+        assertThat(planned).isEqualTo(1);
+        List<BackfillSegment> saved = captureSavedSegments();
+        assertThat(saved).hasSize(1);
+        assertThat(saved.get(0).getFromBlock()).isEqualTo(1L);
+        assertThat(saved.get(0).getToBlock()).isEqualTo(165_000_000L);
+    }
+
+    @Test
+    void evmNetworkKeepsMultiSegmentPlanning() {
+        // Small window (1..600) with default per-segment target of 1 block → many segments,
+        // proving EVM segmentation is untouched by the Solana/TON single-segment rule.
+        SyncStatus status = pendingOnChainStatus(
+                "sync-eth", NetworkId.ETHEREUM, 1L, 600L);
+        when(syncStatusRepository.findById("sync-eth")).thenReturn(Optional.of(status));
+        when(accountingUniverseService.isBackfillEnabled(any(), eq(status.getWalletAddress()), eq(NetworkId.ETHEREUM)))
+                .thenReturn(true);
+        when(sourceSyncPlanner.repairOnChainBlockWindowIfMissing(eq(status), any())).thenReturn(status);
+        when(backfillSegmentRepository.findBySyncStatusIdOrderBySegmentIndexAsc("sync-eth"))
+                .thenReturn(List.of());
+
+        int planned = backfillJobPlanner.planOnChainSyncStatus("sync-eth");
+
+        assertThat(planned).isGreaterThan(1);
+        List<BackfillSegment> saved = captureSavedSegments();
+        assertThat(saved).hasSizeGreaterThan(1);
+        assertThat(saved.get(0).getFromBlock()).isEqualTo(1L);
+        assertThat(saved.get(saved.size() - 1).getToBlock()).isEqualTo(600L);
+    }
+
+    private static SyncStatus pendingOnChainStatus(String id, NetworkId networkId, long fromBlock, long toBlock) {
+        SyncStatus status = new SyncStatus();
+        status.setId(id);
+        status.setStatus(SyncStatus.SyncStatusValue.PENDING);
+        status.setWalletAddress("wallet-" + networkId.name());
+        status.setNetworkId(networkId.name());
+        status.setWindowFromBlock(fromBlock);
+        status.setWindowToBlock(toBlock);
+        return status;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<BackfillSegment> captureSavedSegments() {
+        ArgumentCaptor<List<BackfillSegment>> captor = ArgumentCaptor.forClass(List.class);
+        verify(backfillSegmentRepository).saveAll(captor.capture());
+        return captor.getValue();
     }
 }

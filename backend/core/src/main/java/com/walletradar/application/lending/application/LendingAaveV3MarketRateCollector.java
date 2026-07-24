@@ -24,9 +24,10 @@ import java.util.Optional;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class LendingAaveV3MarketRateCollector {
+public class LendingAaveV3MarketRateCollector implements LendingMarketRateReader {
 
     private static final MathContext MC = MathContext.DECIMAL128;
+    private static final String PROTOCOL_MATCH = "AAVE";
     private static final BigDecimal RAY = new BigDecimal("1000000000000000000000000000");
     private static final BigDecimal ONE_HUNDRED = BigDecimal.valueOf(100);
     private static final BigDecimal SECONDS_PER_YEAR = BigDecimal.valueOf(31_536_000L);
@@ -39,6 +40,16 @@ public class LendingAaveV3MarketRateCollector {
     private final EvmRpcClient evmRpcClient;
     private final ObjectMapper objectMapper;
 
+    @Override
+    public boolean supports(String protocolKey, String networkId) {
+        if (protocolKey == null || networkId == null
+                || !protocolKey.trim().toUpperCase(Locale.ROOT).startsWith(PROTOCOL_MATCH)) {
+            return false;
+        }
+        return properties.getAaveV3().containsKey(networkId.trim().toUpperCase(Locale.ROOT));
+    }
+
+    @Override
     public Optional<LendingMarketRateSnapshot> collect(LendingActiveMarketDiscoveryService.ActiveMarket market) {
         String networkKey = market.networkId() == null ? "" : market.networkId().trim().toUpperCase(Locale.ROOT);
         LendingMarketRateProperties.AaveV3NetworkConfig config = properties.getAaveV3().get(networkKey);

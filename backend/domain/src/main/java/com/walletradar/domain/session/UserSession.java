@@ -122,6 +122,16 @@ public class UserSession {
          * Net Inflow/Outflow while {@code CounterpartyBasisPool} still carries AVCO.
          */
         private List<ExternalVenue> externalVenues = new ArrayList<>();
+
+        /**
+         * WS-5 (ADR-072): user-designated external custody destinations — off-chain / custodial
+         * venues we cannot read into (e.g. Telegram Wallet "Доход"/Earn operator pool). Unlike
+         * {@link #externalVenues}, these are <b>NOT</b> mirrored into {@code AccountingUniverse}:
+         * they are labeled counterparties only. Deposits are booked as {@code EXTERNAL_TRANSFER_OUT}
+         * and withdrawals as {@code EXTERNAL_TRANSFER_IN} (standard AVCO, yield realized on exit),
+         * and the address feeds only the informational custody ledger.
+         */
+        private List<ExternalCustodyDestination> externalCustodyDestinations = new ArrayList<>();
     }
 
     @NoArgsConstructor
@@ -130,6 +140,23 @@ public class UserSession {
     public static class ExternalVenue {
         private String address;
         private String provider;
+        private String label;
+        private List<NetworkId> networks = new ArrayList<>();
+    }
+
+    /**
+     * WS-5 (ADR-072): a labeled external custody destination. Never a universe member; never
+     * hardcoded (the operator address is supplied by the user via session settings).
+     */
+    @NoArgsConstructor
+    @Getter
+    @Setter
+    public static class ExternalCustodyDestination {
+        /** Canonical operator/pool address the user designates (e.g. Telegram Earn operator wallet). */
+        private String address;
+        /** Optional stable provider key (e.g. {@code TELEGRAM_EARN}). */
+        private String provider;
+        /** Human-readable label shown in the custody ledger (e.g. {@code Telegram Wallet Earn}). */
         private String label;
         private List<NetworkId> networks = new ArrayList<>();
     }

@@ -65,7 +65,7 @@ class ReplayRouteHandlerRegistryTest {
                 routeHandler(40, ReplayRoute.LP_RECEIPT_ENTRY),
                 routeHandler(50, ReplayRoute.ASYNC_LP_EXIT_SETTLEMENT),
                 routeHandler(60, ReplayRoute.POSITION_SCOPED_LP_EXIT),
-                routeHandler(70, ReplayRoute.LIQUID_STAKING),
+                routeHandler(70, ReplayRoute.CLUSTER_CARRY),
                 routeHandler(80, ReplayRoute.FAMILY_EQUIVALENT_CUSTODY),
                 routeHandler(100, ReplayRoute.GENERIC)
         );

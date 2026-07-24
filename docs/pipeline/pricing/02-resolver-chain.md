@@ -49,6 +49,18 @@ First resolver returning `Optional<PriceQuote>` wins for that pass.
 - **Multi-sell (ADR-021):** sums all SELL flow values as denominator when multiple same-direction legs share symbol
 - Multi-BUY same symbol: quantities summed; same derived unit price for each leg
 
+> **Swap-derived is authoritative for long-tail SOL/TON basis (WS-6 / ADR-068).** Swap-derived is the
+> **primary** basis mechanism for all networks, including Solana SPL memecoins and TON jettons. It
+> yields only a **ratio**, so it needs an external quote for **one** anchor leg (a stable/native/
+> externally-priced asset); the other leg's USD basis is then derived tx-locally — no external feed is
+> required for the long-tail asset itself. Notes: wSOL canonicalizes to `SOL` (`So111…112`) so a wSOL
+> leg is never a distinct asset or a circular counterpart; pTON is netted to 0 upstream (WS-2) so it
+> never appears as a swap sibling; cross-network SOL↔TON moves are **bridges**, never a single SWAP
+> row, and must not be swap-derived. When **both** legs are illiquid with no anchor, swap-derived
+> returns empty and the asset falls through to an **explicit UNPRICED** state (see below), never a $0
+> covered basis. External latest-price providers (Jupiter for SPL, STON.fi for TON jettons, Dzengi for
+> xStock equities) are **fallback only** — for the anchor/result leg and current mark-to-market marks.
+
 ### Continuity exclusion
 
 Event-local resolvers skip flows where `PriceableFlowPolicy.isContinuityPrincipal` is true — principal carry rows do not get market quotes.

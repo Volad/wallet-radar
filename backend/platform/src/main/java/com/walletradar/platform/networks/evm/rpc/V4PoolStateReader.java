@@ -18,7 +18,17 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Reads the current {@code sqrtPriceX96} of a Uniswap V4 / Pancake Infinity CL pool at a
- * specific historical block by calling {@code getSlot0(bytes32 poolId)} on the PoolManager.
+ * specific historical block by reading the packed {@code Pool.State.slot0} storage word directly
+ * from the PoolManager via {@code extsload(bytes32 slot)}.
+ *
+ * <p><b>Why not {@code getSlot0(bytes32)}?</b> {@code getSlot0} is <i>not</i> an external function
+ * on the V4 {@code PoolManager}; it lives only on the periphery {@code StateView} lens contract
+ * (and as an internal {@code StateLibrary} helper). The canonical singleton PoolManager exposes
+ * pool storage exclusively through {@code extsload}. The slot of {@code pools[poolId]} is
+ * {@code keccak256(abi.encodePacked(poolId, POOLS_SLOT))} with {@code POOLS_SLOT = 6}; the returned
+ * 32-byte word packs {@code sqrtPriceX96} in its bottom 160 bits (the upper bits hold tick /
+ * protocolFee / lpFee), so we mask to 160 bits. Source: Uniswap {@code v4-core}
+ * {@code StateLibrary.getSlot0} / {@code _getPoolStateSlot}.
  *
  * <p>This reader is used exclusively at classification time (during normalization) to compute the
  * V4 fee/principal split. It is block-tagged (archive-RPC) and fail-safe: if any RPC call fails
@@ -36,10 +46,20 @@ import java.util.concurrent.ConcurrentHashMap;
 public class V4PoolStateReader {
 
     /**
-     * {@code getSlot0(bytes32)} ABI selector — Uniswap V4 PoolManager / StateView.
-     * Computed via keccak256("getSlot0(bytes32)")[0..3].
+     * {@code extsload(bytes32)} ABI selector — Uniswap V4 PoolManager / Pancake Infinity CLPoolManager
+     * (both inherit {@code Extsload}). Computed via keccak256("extsload(bytes32)")[0..3].
      */
-    static final String GET_SLOT0_SELECTOR = "0x" + EvmAbiSupport.selector("getSlot0(bytes32)");
+    static final String EXTSLOAD_SELECTOR = "0x" + EvmAbiSupport.selector("extsload(bytes32)");
+
+    /**
+     * Index of the {@code pools} mapping in {@code PoolManager} storage (v4-core
+     * {@code StateLibrary.POOLS_SLOT}). {@code pools[poolId]}'s slot0 lives at
+     * {@code keccak256(abi.encodePacked(poolId, POOLS_SLOT))}.
+     */
+    private static final int POOLS_SLOT = 6;
+
+    /** Mask for the bottom 160 bits ({@code sqrtPriceX96} occupies the low 160 bits of slot0). */
+    private static final BigInteger SQRT_PRICE_MASK = BigInteger.ONE.shiftLeft(160).subtract(BigInteger.ONE);
 
     private final EvmRpcClient rpcClient;
     private final Map<String, RpcEndpointRotator> rotatorsByNetwork;
@@ -100,7 +120,7 @@ public class V4PoolStateReader {
             return Optional.empty();
         }
 
-        BigInteger sqrtPrice = callGetSlot0(rotator, poolManagerAddress, poolIdNorm, blockNumber);
+        BigInteger sqrtPrice = callSlot0Extsload(rotator, poolManagerAddress, poolIdNorm, blockNumber);
         if (sqrtPrice == null || sqrtPrice.signum() <= 0) {
             log.debug("V4 pool state: UNRESOLVED network={} poolId={} block={}", network, poolIdNorm, blockNumber);
             cache.put(cacheKey, UNRESOLVED_SENTINEL);
@@ -112,15 +132,16 @@ public class V4PoolStateReader {
         return Optional.of(sqrtPrice);
     }
 
-    private BigInteger callGetSlot0(
+    private BigInteger callSlot0Extsload(
             RpcEndpointRotator rotator,
             String poolManagerAddress,
             String poolId,
             long blockNumber
     ) {
-        // ABI-encode: selector + bytes32 poolId (already 64 hex chars)
-        String paddedPoolId = pad32(poolId);
-        String callData = GET_SLOT0_SELECTOR + paddedPoolId;
+        // slot0 of pools[poolId] = keccak256(abi.encodePacked(poolId(32B), POOLS_SLOT(32B)))
+        String stateSlot = poolStateSlot(poolId);
+        // ABI-encode: extsload(bytes32) selector + the 32-byte storage slot key
+        String callData = EXTSLOAD_SELECTOR + stateSlot;
         String blockTag = "0x" + Long.toHexString(blockNumber);
 
         for (String endpoint : rotator.getEndpoints()) {
@@ -147,12 +168,15 @@ public class V4PoolStateReader {
                 if (result == null || result.isBlank() || "0x".equalsIgnoreCase(result)) {
                     continue;
                 }
-                // First 32 bytes of result = sqrtPriceX96 (uint160, padded to 32 bytes)
+                // The extsload result is the packed slot0 word:
+                //   bits [0..159]   sqrtPriceX96
+                //   bits [160..183] tick, [184..207] protocolFee, [208..231] lpFee
+                // Mask the bottom 160 bits to recover sqrtPriceX96.
                 String word0 = EvmAbiSupport.wordAt(result, 0);
                 if (word0 == null) {
                     continue;
                 }
-                BigInteger sqrtPrice = EvmAbiSupport.uintFromWord(word0);
+                BigInteger sqrtPrice = EvmAbiSupport.uintFromWord(word0).and(SQRT_PRICE_MASK);
                 if (sqrtPrice.signum() > 0) {
                     return sqrtPrice;
                 }
@@ -161,6 +185,16 @@ public class V4PoolStateReader {
             }
         }
         return null;
+    }
+
+    /**
+     * Computes the storage slot of {@code pools[poolId].slot0}:
+     * {@code keccak256(abi.encodePacked(poolId(32B), POOLS_SLOT(32B)))}. Returns 64 lowercase hex.
+     */
+    static String poolStateSlot(String poolId) {
+        String poolIdWord = pad32(poolId);
+        String slotIndexWord = pad32(Integer.toHexString(POOLS_SLOT));
+        return EvmAbiSupport.keccak256Hex(poolIdWord + slotIndexWord);
     }
 
     /** Pads a hex string (with or without 0x) to exactly 64 hex characters (32 bytes). */

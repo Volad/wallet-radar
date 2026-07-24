@@ -5,6 +5,7 @@ import com.walletradar.application.costbasis.application.replay.model.CarryTrans
 import com.walletradar.application.costbasis.application.replay.model.PositionSnapshot;
 import com.walletradar.application.costbasis.application.replay.model.PositionState;
 import com.walletradar.application.costbasis.application.replay.model.QuantityConsumption;
+import com.walletradar.application.costbasis.support.UncoveredExternalInboundSupport;
 import com.walletradar.application.costbasis.support.ZeroCostAcquisitionSupport;
 import com.walletradar.domain.common.PriceSource;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
@@ -141,10 +142,23 @@ public class GenericFlowReplayEngine {
     }
 
     /**
-     * ADR-040 Bug B: SWAP net-cost propagation.
+     * ADR-040 Bug B / ADR-082: SWAP net-cost propagation.
      * Tax (market) lane uses the normal acquisition cost; Net lane uses the explicit
-     * {@code netAcquisitionCostUsd} which equals the net basis released from the disposed asset.
-     * This prevents swapping a reward-derived (net=$0) asset from raising Net AVCO.
+     * {@code netAcquisitionCostUsd}.
+     *
+     * <p>Two caller regimes (both keep {@code net ≤ market}):</p>
+     * <ul>
+     *   <li><b>Deferred / reward carry (ADR-040 Bug B):</b> {@code netAcquisitionCostUsd} equals the
+     *       (capped) net basis released from the disposed asset. Used when the paired disposal did
+     *       NOT bank NET realized PnL (counterparty-pool undo, unpriced disposal) or when the
+     *       disposed lot carried a genuine reward discount (net ≪ market). This preserves the
+     *       reward/deferred write-down (swapping a reward-derived net=$0 asset never raises Net AVCO).</li>
+     *   <li><b>Re-base on realize (ADR-082, FB-01):</b> for a realizing distinct-canonical swap whose
+     *       NET realized PnL was KEPT on a lot with no reward discount, the caller passes
+     *       {@code netAcquisitionCostUsd == taxAcquisitionCostUsd} (net = market). The discount was
+     *       already banked once at the disposal, so the acquired lot carries no residual discount —
+     *       preventing the NET-lane basis-recycling double-count.</li>
+     * </ul>
      */
     public void applyBuyWithExplicitNetCost(
             NormalizedTransaction.Flow flow,
@@ -287,7 +301,12 @@ public class GenericFlowReplayEngine {
     ) {
         BigDecimal basisBefore = position.totalCostBasisUsd() == null ? BigDecimal.ZERO : position.totalCostBasisUsd();
         BigDecimal quantity = flow.getQuantityDelta().abs();
-        if (replayMarketAuthority != null && transaction != null) {
+        // B2b: a sourceless bridge inbound (reclassified to EXTERNAL_TRANSFER_IN) has no provable
+        // basis, so skip every market/flow-price resolution and fall through to the uncovered /
+        // incomplete-history (PENDING) route below — the leg must not fabricate a market-at-arrival
+        // basis it never paid. Byte-identical for every row without the marker.
+        boolean basisUnknownInbound = UncoveredExternalInboundSupport.isBasisUnknownInbound(transaction);
+        if (!basisUnknownInbound && replayMarketAuthority != null && transaction != null) {
             Optional<ReplayMarketAuthority.ResolvedMarketPrice> authority =
                     replayMarketAuthority.resolve(transaction, flow);
             if (authority.isPresent()) {
@@ -306,7 +325,7 @@ public class GenericFlowReplayEngine {
                 return Optional.empty();
             }
         }
-        if (hasKnownPrice(flow)) {
+        if (!basisUnknownInbound && hasKnownPrice(flow)) {
             applyBuyWithAcquisitionCost(flow, position, quantity.multiply(flow.getUnitPriceUsd(), MC));
             clearResolvedPositionFlags(position);
             return Optional.of(nonNegative(position.totalCostBasisUsd().subtract(basisBefore, MC)));
@@ -571,6 +590,83 @@ public class GenericFlowReplayEngine {
     }
 
     /**
+     * D3 (LP-exit net-lane conservation): restores authoritative {@code lp_receipt_basis_pools}
+     * basis onto a returned principal position <b>without</b> applying the R-3* below-peg
+     * {@link #pegFlooredStablecoinCarryBasis} to the <b>net</b> lane.
+     *
+     * <p>The pooled net basis is the reward-discounted lane already carried into the pool at entry
+     * (net ≤ tax). Re-flooring it up to {@code qty × $1} on exit (as the generic
+     * {@link #restoreToPosition(BigDecimal, PositionState, BigDecimal, BigDecimal, BigDecimal,
+     * BigDecimal) 6-arg restore} does) fabricates net basis above the pooled net — the observed
+     * {@code net > tax} violations (BASE {@code 450450} USDC net $2,099.45 &gt; tax $2,027.07;
+     * OPTIMISM {@code 2984825}; BASE {@code 72791605}). The tax lane keeps the R-3* floor (its
+     * contamination guard is unaffected here since LP pool tax basis is authoritative and sits at
+     * or above peg on the anchors), while the net lane is carried exactly as pooled and clamped so
+     * {@code 0 ≤ net ≤ tax}. This keeps {@code Σ carried net ≤ pool net} (no fabrication) and the
+     * {@code net ≤ tax} invariant on every {@code LP_EXIT REALLOCATE_IN} leg.</p>
+     */
+    public void restoreLpReceiptPoolBasis(
+            BigDecimal quantity,
+            PositionState position,
+            BigDecimal cost,
+            BigDecimal netCost,
+            BigDecimal uncoveredQuantity,
+            BigDecimal avco
+    ) {
+        restoreLpReceiptPoolBasis(quantity, position, cost, netCost, uncoveredQuantity, avco, true);
+    }
+
+    /**
+     * D1/D3: LP-receipt pool basis restore. {@code applyTaxPegFloor=false} skips the R-3* below-peg
+     * floor on the <b>tax</b> lane too — used by the dual-token cross-asset residual carry, where the
+     * tax allocation is already authoritative (stable residuals are pre-capped at the $1 peg, volatile
+     * residuals absorb the exact remainder), so re-flooring would fabricate basis above the allocation.
+     */
+    public void restoreLpReceiptPoolBasis(
+            BigDecimal quantity,
+            PositionState position,
+            BigDecimal cost,
+            BigDecimal netCost,
+            BigDecimal uncoveredQuantity,
+            BigDecimal avco,
+            boolean applyTaxPegFloor
+    ) {
+        BigDecimal clampedUncov = uncoveredQuantity == null ? BigDecimal.ZERO : uncoveredQuantity;
+        if (clampedUncov.signum() < 0) {
+            clampedUncov = BigDecimal.ZERO;
+        }
+        if (clampedUncov.compareTo(quantity) > 0) {
+            clampedUncov = quantity;
+        }
+        BigDecimal coveredOfRestore = nonNegative(quantity.subtract(clampedUncov, MC));
+        // Tax lane keeps the R-3* below-peg floor (contamination guard) unless the caller supplies an
+        // authoritative allocation. Net lane is NEVER floored: the authoritative pooled net
+        // (reward-discounted) must not be inflated up to face value.
+        BigDecimal effectiveCost = applyTaxPegFloor
+                ? pegFlooredStablecoinCarryBasis(
+                        position == null ? null : position.assetKey(), coveredOfRestore, cost)
+                : (cost == null ? BigDecimal.ZERO : cost);
+        BigDecimal effectiveNetCost = netCost == null ? effectiveCost : netCost;
+        if (effectiveNetCost.signum() < 0) {
+            effectiveNetCost = BigDecimal.ZERO;
+        }
+        // net ≤ tax invariant.
+        if (effectiveNetCost.compareTo(effectiveCost) > 0) {
+            effectiveNetCost = effectiveCost;
+        }
+        position.setQuantity(position.quantity().add(quantity));
+        position.setUncoveredQuantity(position.uncoveredQuantity().add(clampedUncov));
+        position.setTotalCostBasisUsd(position.totalCostBasisUsd().add(effectiveCost));
+        position.setNetTotalCostBasisUsd(position.netTotalCostBasisUsd().add(effectiveNetCost));
+        recomputePerWalletAvco(position);
+        if (clampedUncov.signum() > 0 || avco == null) {
+            markUnresolved(position);
+        } else if (effectiveCost.signum() > 0) {
+            clearResolvedPositionFlags(position);
+        }
+    }
+
+    /**
      * R-3*: USD-stablecoin peg floor on carried / reallocated basis. (Symmetric peer:
      * {@link #pegCappedStablecoinCarryBasis} adds the U-3 above-peg cap for same-asset carries.)
      *
@@ -772,7 +868,12 @@ public class GenericFlowReplayEngine {
         if (coveredPromotion.signum() <= 0) {
             return;
         }
-        ResolvedSpotPrice resolved = resolveInboundSpotUnitPrice(transaction, flow);
+        // B2b: a sourceless external inbound must stay uncovered — never promoted at a fabricated
+        // market-at-arrival price. Forcing resolved=null routes it onto the same PENDING /
+        // incomplete-history path a canonical inbound takes when no quote resolves (RC-7 below).
+        ResolvedSpotPrice resolved = UncoveredExternalInboundSupport.isBasisUnknownInbound(transaction)
+                ? null
+                : resolveInboundSpotUnitPrice(transaction, flow);
         if (resolved == null) {
             // RC-7: a bridge / corridor CARRY_IN whose source carry is empty (no covering basis)
             // must never settle silently at avco $0. The covering carry already booked this leg as

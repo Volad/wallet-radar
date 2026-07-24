@@ -43,6 +43,7 @@ public class OnChainReclassificationService {
     private final RegistryBridgeInboundTypeCorrectionService registryBridgeInboundTypeCorrectionService;
     private final CounterpartyEnrichmentService counterpartyEnrichmentService;
     private final AccountingUniverseService accountingUniverseService;
+    private final com.walletradar.application.linking.pipeline.clarification.ExternalCustodyDestinationRegistry externalCustodyDestinationRegistry;
 
     public int processNextBatch() {
         return processNextBatch(null);
@@ -61,12 +62,14 @@ public class OnChainReclassificationService {
             return completed;
         } finally {
             accountingUniverseService.clearUniverseBinding();
+            externalCustodyDestinationRegistry.clearSessionBinding();
         }
     }
 
     private void bindUniverseIfPresent(String sessionId) {
         if (sessionId != null && !sessionId.isBlank()) {
             accountingUniverseService.bindUniverse(sessionId.trim());
+            externalCustodyDestinationRegistry.bindSession(sessionId.trim());
         }
     }
 

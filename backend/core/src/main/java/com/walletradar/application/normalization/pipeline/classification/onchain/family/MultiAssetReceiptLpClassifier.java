@@ -70,10 +70,19 @@ public class MultiAssetReceiptLpClassifier implements OnChainFamilyClassifier {
         // handler (e.g. LFJ_LB_ROUTER). The shape-based LP detection below would incorrectly match
         // addLiquidity calls where the "change" tokens returned from the pool look like a non-family
         // receipt, causing false LP_ENTRY classification without a correlationId.
+        //
+        // R6a (M1): also defer for registry-owned LP position-lifecycle contracts — DEX gauge/Aura
+        // STAKE_CONTRACTs and NFT/BPT POSITION_MANAGERs. This classifier runs at +110, BEFORE
+        // LpRegistryClassifier (+190); without this guard a gauge/Aura unstake (e.g. Aura
+        // withdrawAndUnwrap: 1 deposit-vault receipt burned + BPT and BAL/AURA/WAVAX rewards
+        // returned) matches the generic "1 receipt out + >=2 inbound families" EXIT shape and is
+        // stolen as a HEURISTIC LP_EXIT, so it never reaches the registry-driven
+        // LP_POSITION_UNSTAKE path (which canonicalizes the BPT to an LP-RECEIPT marker and keys the
+        // lp-position:<net>:<protocol>:<pool> correlation). Registry-driven, network-agnostic.
         Optional<ProtocolRegistryEntry> registryEntry = protocolRegistryService.lookup(
                 context.view().networkId(), context.view().toAddress()
         );
-        if (registryEntry.isPresent() && registryEntry.get().specialHandler() != null) {
+        if (registryEntry.isPresent() && ownedByLpRegistryLifecycle(registryEntry.get())) {
             return Optional.empty();
         }
         if (LpPositionLifecycleSupport.hasAnyErc721TransferToWallet(context.view())) {
@@ -200,6 +209,28 @@ public class MultiAssetReceiptLpClassifier implements OnChainFamilyClassifier {
         return entry != null
                 && entry.family() == ProtocolRegistryFamily.LP
                 && entry.role() == ProtocolRegistryRole.POOL;
+    }
+
+    /**
+     * R6a (M1): {@code true} when {@code entry} is an LP position-lifecycle contract owned by
+     * {@code LpRegistryClassifier} — a registered special handler, a DEX {@code STAKE_CONTRACT}
+     * (gauge / Aura BaseRewardPool wrapper), or a {@code POSITION_MANAGER} (NFT/BPT). These must be
+     * routed through the registry-driven stake/position classification (which resolves the
+     * {@code lp-position:*} correlation and canonicalizes receipts) rather than the generic
+     * multi-asset shape heuristic.
+     */
+    private static boolean ownedByLpRegistryLifecycle(ProtocolRegistryEntry entry) {
+        if (entry == null) {
+            return false;
+        }
+        if (entry.specialHandler() != null) {
+            return true;
+        }
+        if (entry.role() == ProtocolRegistryRole.POSITION_MANAGER) {
+            return true;
+        }
+        return entry.family() == ProtocolRegistryFamily.DEX
+                && entry.role() == ProtocolRegistryRole.STAKE_CONTRACT;
     }
 
     private static boolean hasPendleLpToken(List<RawLeg> legs) {

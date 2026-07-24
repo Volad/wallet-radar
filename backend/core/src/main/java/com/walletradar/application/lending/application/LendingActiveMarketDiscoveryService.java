@@ -21,6 +21,7 @@ public class LendingActiveMarketDiscoveryService {
     private final UserSessionRepository userSessionRepository;
     private final OnChainBalanceRepository onChainBalanceRepository;
     private final LendingReceiptIdentityService receiptIdentityService;
+    private final LendingReceiptLessActiveMarketSource receiptLessActiveMarketSource;
 
     public List<ActiveMarket> discover() {
         List<UserSession> sessions = userSessionRepository.findAll();
@@ -49,7 +50,29 @@ public class LendingActiveMarketDiscoveryService {
                 collectActiveMarket(markets, session.getId(), balance);
             }
         }
+
+        // Second source: receipt-less lending positions (Solana/TON) that never surface a receipt/debt
+        // token in on_chain_balances, keyed identically so they dedup against the receipt-token scan.
+        for (ActiveMarket market : receiptLessActiveMarketSource.discover(sessionIds)) {
+            markets.putIfAbsent(marketDedupKey(market), market);
+        }
         return markets.values().stream().toList();
+    }
+
+    private static String marketDedupKey(ActiveMarket market) {
+        return String.join(":",
+                nullToEmpty(market.sessionId()),
+                nullToEmpty(market.protocol()),
+                nullToEmpty(market.networkId()),
+                nullToEmpty(market.marketKey()),
+                nullToEmpty(market.underlyingSymbol()),
+                nullToEmpty(market.side()),
+                nullToEmpty(market.assetContract())
+        ).toLowerCase(Locale.ROOT);
+    }
+
+    private static String nullToEmpty(String value) {
+        return value == null ? "" : value;
     }
 
     private void collectActiveMarket(Map<String, ActiveMarket> markets, String sessionId, OnChainBalance balance) {

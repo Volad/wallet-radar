@@ -101,6 +101,13 @@ interface TokenFamilyRow {
   readonly realizedPnlUsd: number;
   // ADR-062 break-even (effective-cost) metric — family-level (identical across a family's positions).
   readonly breakEvenUsd: number | null;
+  // ADR-062 §5 "Average cost" — family-level weighted market cost basis / ETH-equivalent covered qty
+  // (parity with the move-basis header); identical across a family's positions. Null when unusable.
+  readonly averageCostUsd: number | null;
+  // ADR-062 deviation guard: coveredQuantity / quantity in [0,1]; null when quantity is zero.
+  readonly coveredRatio: number | null;
+  // ADR-062 deviation guard: true when a $0 break-even is a low-coverage artifact (suppress display).
+  readonly breakEvenSuppressed: boolean;
   readonly lockedSurplusUsd: number;
   readonly incomeReceivedUsd: number;
   readonly attributionTargetFamily: string | null;
@@ -520,7 +527,7 @@ export class DashboardComponent {
       return [];
     }
 
-    const networkIds = new Set<EvmNetworkId>();
+    const networkIds = new Set<string>();
     status.wallets.forEach((wallet) => {
       wallet.networks.forEach((network) => {
         networkIds.add(network.networkId);
@@ -528,7 +535,7 @@ export class DashboardComponent {
     });
 
     return [...networkIds].map((networkId) => {
-      const presentation = EVM_NETWORK_PRESENTATION_BY_ID.get(networkId);
+      const presentation = EVM_NETWORK_PRESENTATION_BY_ID.get(networkId as EvmNetworkId);
       if (presentation !== undefined) {
         return {
           id: networkId,
@@ -658,6 +665,8 @@ export class DashboardComponent {
       unrealizedPnlUsd: number;
       realizedPnlUsd: number;
       breakEvenUsd: number | null;
+      averageCostUsd: number | null;
+      breakEvenSuppressed: boolean;
       lockedSurplusUsd: number;
       incomeReceivedUsd: number;
       attributionTargetFamily: string | null;
@@ -692,6 +701,8 @@ export class DashboardComponent {
           unrealizedPnlUsd: position.unrealizedPnlUsd,
           realizedPnlUsd: position.realizedPnlUsd,
           breakEvenUsd: position.breakEvenUsd,
+          averageCostUsd: position.averageCostUsd,
+          breakEvenSuppressed: position.breakEvenSuppressed,
           lockedSurplusUsd: position.lockedSurplusUsd,
           incomeReceivedUsd: position.incomeReceivedUsd,
           attributionTargetFamily: position.attributionTargetFamily,
@@ -720,6 +731,8 @@ export class DashboardComponent {
       // ADR-062 metrics are family-level (identical across a family's positions); keep the first
       // non-null value so a wallet/network split does not drop the break-even attribution.
       existing.breakEvenUsd = existing.breakEvenUsd ?? position.breakEvenUsd;
+      existing.averageCostUsd = existing.averageCostUsd ?? position.averageCostUsd;
+      existing.breakEvenSuppressed = existing.breakEvenSuppressed || position.breakEvenSuppressed;
       existing.attributionTargetFamily = existing.attributionTargetFamily ?? position.attributionTargetFamily;
       existing.lockedSurplusUsd = existing.lockedSurplusUsd || position.lockedSurplusUsd;
       existing.incomeReceivedUsd = existing.incomeReceivedUsd || position.incomeReceivedUsd;
@@ -744,6 +757,7 @@ export class DashboardComponent {
         const avcoUsd = coveredQuantity === 0 ? 0 : group.totalCostBasisUsd / coveredQuantity;
         const netAvcoUsd = coveredQuantity === 0 ? 0 : group.totalNetCostBasisUsd / coveredQuantity;
         const unrealizedPnlPct = group.totalCostBasisUsd === 0 ? 0 : (group.unrealizedPnlUsd / group.totalCostBasisUsd) * 100;
+        const coveredRatio = quantity === 0 ? null : coveredQuantity / quantity;
         return {
           familyIdentity: group.familyIdentity,
           symbol: group.symbol,
@@ -762,6 +776,9 @@ export class DashboardComponent {
           unrealizedPnlUsd: group.unrealizedPnlUsd,
           realizedPnlUsd: group.realizedPnlUsd,
           breakEvenUsd: group.breakEvenUsd,
+          averageCostUsd: group.averageCostUsd,
+          coveredRatio,
+          breakEvenSuppressed: group.breakEvenSuppressed,
           lockedSurplusUsd: group.lockedSurplusUsd,
           incomeReceivedUsd: group.incomeReceivedUsd,
           attributionTargetFamily: group.attributionTargetFamily,
@@ -799,7 +816,7 @@ export class DashboardComponent {
             comparison = left.currentValueUsd - right.currentValueUsd;
             break;
           case 'avgCost':
-            comparison = left.netAvcoUsd - right.netAvcoUsd;
+            comparison = this.avgCostDisplay(left) - this.avgCostDisplay(right);
             break;
           case 'price':
             comparison = left.priceUsd - right.priceUsd;
@@ -1443,8 +1460,30 @@ export class DashboardComponent {
     return `Exact price: ${this.formatUsdFull(asset.priceUsd)}. Loaded: ${pricedAt}. Source: ${source}. ${freshness}, ${mode}.${issue}${model}${underlying}${unsupported}`;
   }
 
+  // ADR-062 §5 "Average cost": prefer the family-level parity metric (net-lane under offsetLane=NET,
+  // ADR-062 2026-07-24, so it stays on the SAME lane as the effective-cost break-even). When the
+  // backend value is unavailable, fall back to the net AVCO (NOT the market AVCO) so avg cost and
+  // break-even never silently split lanes.
+  avgCostDisplay(asset: TokenFamilyRow): number {
+    return asset.averageCostUsd ?? asset.netAvcoUsd;
+  }
+
+  hasAvgCost(asset: TokenFamilyRow): boolean {
+    return asset.averageCostUsd !== null || asset.netAvcoUsd !== null;
+  }
+
+  /** Effective cost above the current price → still under water (red). */
+  effectiveCostIsLoss(asset: TokenFamilyRow): boolean {
+    return asset.breakEvenUsd !== null && asset.breakEvenUsd > asset.priceUsd;
+  }
+
+  /** Effective cost at or below the current price → in profit / break-even reached (green). */
+  effectiveCostIsProfit(asset: TokenFamilyRow): boolean {
+    return asset.breakEvenUsd !== null && asset.breakEvenUsd <= asset.priceUsd;
+  }
+
   avcoTooltip(asset: TokenFamilyRow): string {
-    return `Net AVCO: ${this.formatUsdFull(asset.netAvcoUsd)}. Market AVCO: ${this.formatUsdFull(asset.avcoUsd)}.`;
+    return `Average cost: ${this.formatUsdFull(this.avgCostDisplay(asset))}. Net AVCO: ${this.formatUsdFull(asset.netAvcoUsd)}. Market AVCO: ${this.formatUsdFull(asset.avcoUsd)}.`;
   }
 
   // ADR-062: strip the `FAMILY:` prefix for display (e.g. `FAMILY:ETH` → `ETH`).

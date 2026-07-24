@@ -1223,7 +1223,15 @@
 }
 
 .effective-cost-cell {
+  color: var(--wr-text);
+}
+
+.effective-cost-profit {
   color: rgb(52, 211, 153);
+}
+
+.effective-cost-loss {
+  color: rgb(248, 113, 113);
 }
 
 .effective-cost-emdash {
@@ -1305,6 +1313,11 @@
 
   &.breakeven-credited {
     color: var(--wr-subtle);
+  }
+
+  &.breakeven-lowcov {
+    color: var(--wr-subtle);
+    font-style: italic;
   }
 }
 

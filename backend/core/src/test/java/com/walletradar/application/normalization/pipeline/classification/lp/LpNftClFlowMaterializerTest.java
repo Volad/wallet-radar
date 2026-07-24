@@ -7,17 +7,26 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.application.normalization.pipeline.classification.support.LpPositionCorrelationSupport;
 import com.walletradar.application.normalization.pipeline.classification.support.LpPrincipalCloseEvidence;
 import com.walletradar.application.normalization.pipeline.classification.support.RawLeg;
+import com.walletradar.application.normalization.pipeline.classification.support.NativeWrappedTokenSupport;
 import com.walletradar.application.normalization.pipeline.onchain.OnChainRawTransactionView;
 import com.walletradar.domain.transaction.raw.RawTransaction;
+import com.walletradar.testsupport.NetworkTestFixtures;
 import org.bson.Document;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 class LpNftClFlowMaterializerTest {
+
+    @BeforeAll
+    static void bindNetworkNativeAssets() {
+        NetworkTestFixtures.registry();
+    }
 
     private static final String UNISWAP_V4_MODIFY_EXIT_INPUT =
             "0xdd46508f0000000000000000000000000000000000000000000000000000000000000040"
@@ -104,6 +113,69 @@ class LpNftClFlowMaterializerTest {
 
         assertThat(LpPositionCorrelationSupport.hasDecreaseOrBurnActionInCalldata(view)).isTrue();
         assertThat(LpPrincipalCloseEvidence.hasPositionReductionEvidence(view)).isTrue();
+    }
+
+    // -------------------------------------------------------------------------
+    // R4: V4/Infinity external fee-fraction split (native ETH keyed by canonical WETH)
+    // -------------------------------------------------------------------------
+
+    private static final String USD_T0 = "0x9151434b16b9763660705744891fa906f660ecc5";
+
+    @Test
+    void v4ExternalFeeFractions_splitNativeEthAndErc20IntoPrincipalAndFeeIncome() {
+        // A V4 exit on an ETH/USD₮0 pool: native ETH leg carries no assetContract (V4 settles
+        // native ETH via currency0 = zero address), USD₮0 is a normal ERC-20 leg.
+        RawTransaction raw = baseRaw(NetworkId.ETHEREUM);
+        raw.getRawData().put("to", POSITION_MANAGER);
+        raw.getRawData().put("methodId", "0xdd46508f");
+        raw.getRawData().put("input", UNISWAP_V4_MODIFY_EXIT_INPUT);
+        OnChainRawTransactionView view = OnChainRawTransactionView.wrap(raw);
+        String correlationId = LpPositionCorrelationSupport.contractKeyedLifecycleCorrelationId(
+                view,
+                NormalizedTransactionType.LP_EXIT,
+                LpPositionCorrelationSupport.resolvePositionManagerContract(view)
+        );
+
+        NormalizedTransaction.Flow ethLeg = flow("ETH", "0.688511354278937274", NormalizedLegRole.TRANSFER);
+        NormalizedTransaction.Flow usdLeg = flowWithContract(USD_T0, "USD₮0", "924.079939", NormalizedLegRole.TRANSFER);
+        List<NormalizedTransaction.Flow> base = List.of(ethLeg, usdLeg);
+
+        Map<String, BigDecimal> feeFractions = Map.of(
+                NativeWrappedTokenSupport.canonicalWeth(NetworkId.ETHEREUM), new BigDecimal("0.01"),
+                USD_T0, new BigDecimal("0.02")
+        );
+
+        List<NormalizedTransaction.Flow> enriched = LpNftClFlowMaterializer.enrich(
+                view,
+                List.of(), // empty movement legs → split operates on the base flows
+                NormalizedTransactionType.LP_EXIT,
+                correlationId,
+                base,
+                feeFractions
+        );
+
+        // Native ETH split: principal TRANSFER + zero-cost LP_FEE_INCOME leg (looked up via WETH key).
+        assertThat(enriched)
+                .anySatisfy(f -> {
+                    assertThat(f.getAssetSymbol()).isEqualTo("ETH");
+                    assertThat(f.getRole()).isEqualTo(NormalizedLegRole.LP_FEE_INCOME);
+                    assertThat(f.getQuantityDelta()).isEqualByComparingTo("0.006885113542789373");
+                })
+                .anySatisfy(f -> {
+                    assertThat(f.getAssetSymbol()).isEqualTo("ETH");
+                    assertThat(f.getRole()).isEqualTo(NormalizedLegRole.TRANSFER);
+                    assertThat(f.getQuantityDelta()).isEqualByComparingTo("0.681626240736147901");
+                });
+        // ERC-20 USD₮0 split: LP_FEE_INCOME present.
+        assertThat(enriched)
+                .anySatisfy(f -> {
+                    assertThat(f.getAssetSymbol()).isEqualTo("USD₮0");
+                    assertThat(f.getRole()).isEqualTo(NormalizedLegRole.LP_FEE_INCOME);
+                    assertThat(f.getQuantityDelta()).isEqualByComparingTo("18.48159878");
+                });
+        // Outbound LP-RECEIPT burn still emitted.
+        assertThat(enriched).anySatisfy(f ->
+                assertThat(f.getAssetSymbol()).startsWith("LP-RECEIPT:ETHEREUM:"));
     }
 
     @Test
@@ -236,6 +308,73 @@ class LpNftClFlowMaterializerTest {
                 base
         );
         assertThat(enriched).isEqualTo(base);
+    }
+
+    // -------------------------------------------------------------------------
+    // R7: LFJ / Trader Joe Liquidity Book ERC-1155 LBToken receipt materialization
+    // (synthetic qty=+1 mint on entry, qty=-1 burn on exit; Option-B carry — no per-bin
+    // fee split; full receipts logs=0, so the ERC-1155 TransferBatch cannot be summed yet).
+    // Regression anchor: AVALANCHE AUSD/USDC pair 0x8573f98175d816d520248b5facf40d309b1c9cee.
+    // -------------------------------------------------------------------------
+
+    private static final String LFJ_PAIR = "0x8573f98175d816d520248b5facf40d309b1c9cee";
+    private static final String LFJ_RECEIPT = "LP-RECEIPT:AVALANCHE:LFJ:" + LFJ_PAIR;
+    private static final String LFJ_CORR = "lp-position:avalanche:lfj:" + LFJ_PAIR;
+
+    @Test
+    void lfjLbEntryMaterializesSyntheticInboundErc1155Receipt() {
+        // ERC-1155 LBToken has one id per bin (no single tokenId), and full receipts are absent
+        // (logs=0), so hasPositionNftMintLog is false. The LFJ branch emits a synthetic qty=+1
+        // LP-RECEIPT so entry/exit correlate into ONE pair-level basis pool.
+        List<NormalizedTransaction.Flow> base = List.of(
+                flow("AUSD", "-499.200024", NormalizedLegRole.TRANSFER),
+                flow("USDC", "-500.967914", NormalizedLegRole.TRANSFER)
+        );
+
+        List<NormalizedTransaction.Flow> enriched = LpNftClFlowMaterializer.enrich(
+                OnChainRawTransactionView.wrap(baseRaw(NetworkId.AVALANCHE)),
+                List.of(),
+                NormalizedTransactionType.LP_ENTRY,
+                LFJ_CORR,
+                base
+        );
+
+        assertThat(enriched)
+                .anySatisfy(f -> {
+                    assertThat(f.getAssetSymbol()).isEqualTo(LFJ_RECEIPT);
+                    assertThat(f.getQuantityDelta()).isEqualByComparingTo("1");
+                    assertThat(f.getRole()).isEqualTo(NormalizedLegRole.TRANSFER);
+                })
+                .anySatisfy(f -> assertThat(f.getAssetSymbol()).isEqualTo("AUSD"))
+                .anySatisfy(f -> assertThat(f.getAssetSymbol()).isEqualTo("USDC"));
+    }
+
+    @Test
+    void lfjLbExitMaterializesOutboundErc1155ReceiptBurn() {
+        List<NormalizedTransaction.Flow> base = List.of(
+                flow("AUSD", "103.522229", NormalizedLegRole.TRANSFER),
+                flow("USDC", "896.606205", NormalizedLegRole.TRANSFER)
+        );
+
+        List<NormalizedTransaction.Flow> enriched = LpNftClFlowMaterializer.enrich(
+                OnChainRawTransactionView.wrap(baseRaw(NetworkId.AVALANCHE)),
+                List.of(),
+                NormalizedTransactionType.LP_EXIT,
+                LFJ_CORR,
+                base
+        );
+
+        // Burn receipt (qty=-1) drains the pair-level basis pool on exit (Option-B carry). No
+        // LP_FEE_INCOME leg is fabricated: per-bin fee split is deferred, so principal=received.
+        assertThat(enriched)
+                .anySatisfy(f -> {
+                    assertThat(f.getAssetSymbol()).isEqualTo(LFJ_RECEIPT);
+                    assertThat(f.getQuantityDelta()).isEqualByComparingTo("-1");
+                    assertThat(f.getRole()).isEqualTo(NormalizedLegRole.TRANSFER);
+                })
+                .anySatisfy(f -> assertThat(f.getAssetSymbol()).isEqualTo("AUSD"))
+                .anySatisfy(f -> assertThat(f.getAssetSymbol()).isEqualTo("USDC"))
+                .noneMatch(f -> f.getRole() == NormalizedLegRole.LP_FEE_INCOME);
     }
 
     private static NormalizedTransaction.Flow flowWithContract(

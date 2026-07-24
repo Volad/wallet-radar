@@ -71,7 +71,11 @@ class BybitStakingConversionPairerTest {
 
         // Canonical = ETH-debit (negative-sign leg).
         assertThat(ethDebit.getType()).isEqualTo(NormalizedTransactionType.STAKING_DEPOSIT);
-        assertThat(ethDebit.getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        // D1 (ADR-054 §9): the fused ETH → mETH pair is cross-canonical (FAMILY:ETH → FAMILY:METH), so
+        // it routes to PENDING_PRICE (flag stamped) so both TRANSFER legs enter the pricing chain
+        // instead of confirming with an unpriced acquisition leg that strips the ETH family's basis.
+        assertThat(ethDebit.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(ethDebit.getCrossCanonicalStakingConversion()).isTrue();
         assertThat(ethDebit.getFlows()).hasSize(2);
         assertThat(ethDebit.getFlows())
                 .extracting(NormalizedTransaction.Flow::getAssetSymbol)

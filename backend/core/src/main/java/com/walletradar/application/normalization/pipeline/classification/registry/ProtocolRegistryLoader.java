@@ -60,7 +60,10 @@ public class ProtocolRegistryLoader {
                 }
 
                 String entryAddress = optionalText(entryNode, "address").orElse(field.getKey());
-                String normalizedAddress = OnChainRawTransactionView.normalizeAddress(entryAddress);
+                // ADR-066: read declared networks first so the address is keyed with the family-aware
+                // normalizer (EVM 0x-lowercase vs Solana case-sensitive base58); mixed families rejected.
+                Set<NetworkId> networks = readEntryNetworks(entryNode.path("networks"), entryAddress);
+                String normalizedAddress = AddressNormalizer.normalizeForEntry(networks, entryAddress);
                 if (normalizedAddress == null) {
                     throw new IllegalStateException("Invalid contract address in protocol registry: " + entryAddress);
                 }
@@ -78,7 +81,6 @@ public class ProtocolRegistryLoader {
                         .map(value -> parseEnum(ProtocolRegistrySpecialHandlerType.class, value))
                         .orElse(null);
                 boolean decomposeByLegs = entryNode.path("decomposeByLegs").asBoolean(false);
-                Set<NetworkId> networks = readEntryNetworks(entryNode.path("networks"), normalizedAddress);
                 coveredNetworks.addAll(networks);
 
                 // RC-5 (ADR-018): a staking/farming wrapper that custodies a position-manager NFT

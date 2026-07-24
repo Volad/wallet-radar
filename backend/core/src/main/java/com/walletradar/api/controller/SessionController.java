@@ -6,6 +6,7 @@ import com.walletradar.api.dto.DeleteIntegrationResponse;
 import com.walletradar.api.dto.PutSessionSettingsRequest;
 import com.walletradar.api.dto.RebuildSessionTransactionsResponse;
 import com.walletradar.api.dto.SessionBackfillStatusResponse;
+import com.walletradar.api.dto.SessionCustodyLedgerResponse;
 import com.walletradar.api.dto.SessionDashboardResponse;
 import com.walletradar.api.dto.SessionRefreshResponse;
 import com.walletradar.api.dto.SessionSettingsResponse;
@@ -27,6 +28,7 @@ import com.walletradar.application.session.application.SessionIntegrationCommand
 import com.walletradar.application.session.application.SessionRefreshCommandService;
 import com.walletradar.application.session.application.SessionSettingsCommandService;
 import com.walletradar.application.session.application.SessionSettingsQueryService;
+import com.walletradar.application.custody.application.CustodyLedgerQueryService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -63,6 +65,7 @@ public class SessionController {
     private final SessionIntegrationCommandService sessionIntegrationCommandService;
     private final SessionRefreshCommandService sessionRefreshCommandService;
     private final SessionPortfolioBffMapper sessionPortfolioBffMapper;
+    private final CustodyLedgerQueryService custodyLedgerQueryService;
 
     @PostMapping
     @ResponseStatus(HttpStatus.ACCEPTED)
@@ -238,6 +241,17 @@ public class SessionController {
         }
     }
 
+    /**
+     * WS-5 (ADR-072): informational per-venue tally of deposits/withdrawals to user-designated
+     * external custody destinations. Not part of portfolio totals, AVCO, or the accounting universe.
+     */
+    @GetMapping("/{sessionId}/custody-ledger")
+    public SessionCustodyLedgerResponse getCustodyLedger(@PathVariable String sessionId) {
+        return custodyLedgerQueryService.findSessionCustodyLedger(normalizedSessionIdOrThrow(sessionId))
+                .map(this::toCustodyLedgerResponse)
+                .orElseThrow(() -> new ApiNotFoundException("SESSION_NOT_FOUND", "Session not found"));
+    }
+
     @GetMapping("/{sessionId}/dashboard")
     public SessionDashboardResponse getDashboard(@PathVariable String sessionId) {
         return sessionDashboardReadPort.findSessionDashboard(normalizedSessionIdOrThrow(sessionId))
@@ -329,8 +343,47 @@ public class SessionController {
                                         venue.networks()
                                 ))
                                 .toList(),
+                view.externalCustodyDestinations() == null
+                        ? List.of()
+                        : view.externalCustodyDestinations().stream()
+                                .map(destination -> new SessionSettingsResponse.ExternalCustodyDestinationEntry(
+                                        destination.address(),
+                                        destination.provider(),
+                                        destination.label(),
+                                        destination.networks()
+                                ))
+                                .toList(),
                 view.hideSmallAssets(),
                 view.showReconciliationWarnings()
+        );
+    }
+
+    private SessionCustodyLedgerResponse toCustodyLedgerResponse(
+            CustodyLedgerQueryService.SessionCustodyLedgerView view
+    ) {
+        return new SessionCustodyLedgerResponse(
+                view.sessionId(),
+                view.venues() == null
+                        ? List.of()
+                        : view.venues().stream()
+                                .map(venue -> new SessionCustodyLedgerResponse.CustodyVenue(
+                                        venue.venueAddress(),
+                                        venue.label(),
+                                        venue.provider(),
+                                        venue.assets() == null
+                                                ? List.of()
+                                                : venue.assets().stream()
+                                                        .map(asset -> new SessionCustodyLedgerResponse.CustodyAsset(
+                                                                asset.asset(),
+                                                                asset.depositedQty(),
+                                                                asset.withdrawnQty(),
+                                                                asset.netQty(),
+                                                                asset.depositedUsd(),
+                                                                asset.withdrawnUsd()
+                                                        ))
+                                                        .toList()
+                                ))
+                                .toList()
         );
     }
 

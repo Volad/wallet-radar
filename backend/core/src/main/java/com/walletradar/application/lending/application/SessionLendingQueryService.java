@@ -2,6 +2,7 @@ package com.walletradar.application.lending.application;
 
 import com.walletradar.application.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.application.costbasis.domain.OnChainBalance;
+import com.walletradar.application.costbasis.support.WalletAddressReadScope;
 import com.walletradar.application.pricing.domain.CanonicalAssetCatalog;
 import com.walletradar.application.pricing.latest.CurrentPriceReadService;
 import com.walletradar.application.pricing.persistence.HistoricalPriceDocument;
@@ -339,7 +340,10 @@ public class SessionLendingQueryService {
     }
 
     private static String normalizeAddress(String address) {
-        return address == null ? "" : address.trim().toLowerCase(Locale.ROOT);
+        // Family-aware: EVM/CEX lowercased (legacy), Solana case-preserved, TON preferred member ref.
+        // Blind lowercasing corrupted base58 Solana/TON addresses so their lending history / balances
+        // never matched the session wallet, hiding Solana (Kamino / Jupiter) lending positions.
+        return WalletAddressReadScope.normalize(address);
     }
 
     private static List<NormalizedTransaction.Flow> safeFlows(NormalizedTransaction transaction) {

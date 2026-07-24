@@ -48,7 +48,9 @@ Forbidden: normalization/linking write jobs, replay handlers.
 ## Extension seams
 
 - `LendingAaveV3HealthCollector`, `LendingAaveV3MarketRateCollector` protocol collectors
-- `LendingFactualApyCalculator` factual APY from ledger evidence
+- `LendingJupiterLendMarketRateCollector` — Solana `LendingMarketRateReader` (Jupiter Lend Borrow API supply/borrow rates), so Net APY renders for receipt-less Jupiter Lend (see ADR-076)
+- `LendingActiveMarketDiscoveryService` has **two** discovery sources: the EVM receipt/debt-token scan over `on_chain_balances`, and `LendingReceiptLessActiveMarketSource` which emits a SUPPLY/BORROW `ActiveMarket` per leg of the freshest `lending_live_position_snapshots` row (so receipt-less positions — native SOL collateral + synthetic debt, invisible to `on_chain_balances` — are refreshed too; see ADR-076 §C). Markets are keyed `protocol:NETWORK:ACCOUNT-POOL` + `cycleStateAsset` underlying to match the built position lookup.
+- `LendingFactualApyCalculator` factual APY from ledger evidence. The APR **exposure denominator** is the **time-weighted average principal** over `[cycle start, cycle end]` (running principal integrated across deposit/withdraw and borrow/repay deltas, divided by duration) — NOT the first deposit, which overstates the rate for multi-deposit cycles. The income **cost-basis** stays the total principal deposited. Single-deposit cycles are unchanged (time-weighted principal of one deposit at cycle start equals that deposit).
 
 ## Worked example
 

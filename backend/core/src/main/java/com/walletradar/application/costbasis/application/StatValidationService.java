@@ -5,8 +5,10 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionCounte
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import com.walletradar.application.normalization.pipeline.ton.TonNormalizedTransactionBuilder;
 import com.walletradar.application.pricing.application.PriceableFlowPolicy;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -136,7 +138,10 @@ public class StatValidationService {
                 .filter(flow -> flow.getQuantityDelta() != null && flow.getQuantityDelta().compareTo(BigDecimal.ZERO) != 0)
                 .toList();
         if (nonFeeFlows.isEmpty()) {
-            return hasReplaySafeFeeOnlyFlows(nonZeroFlows)
+            // RC-T2 (ADR-066 amendment to ADR-014): a fee-only on-chain row whose real economic value
+            // was dropped (marked by the builder) is NOT replay-safe — keep it visible for review
+            // rather than silently confirming an empty/fee-only row.
+            return hasReplaySafeFeeOnlyFlows(nonZeroFlows) && !hasUnresolvedOnChainValue(transaction)
                     ? List.of()
                     : List.of(NO_NON_FEE_FLOW_REASON);
         }
@@ -174,14 +179,38 @@ public class StatValidationService {
             }
         }
 
-        if (transaction.getCounterpartyType() == null || transaction.getCounterpartyType().isBlank()) {
-            reasons.add(COUNTERPARTY_TYPE_MISSING_REASON);
-        }
-        if (NormalizedTransactionCounterpartySupport.flowsMissingCounterparty(transaction)) {
-            reasons.add(FLOW_COUNTERPARTY_MISSING_REASON);
+        // ADR-054 / D1: a cross-canonical staking conversion (e.g. Bybit ETH→mETH STAKING_DEPOSIT) is an
+        // internal identity change whose two principal legs are each other's counterparty — it has no
+        // external counterparty and is never transfer-matched. The counterparty presence checks below are
+        // designed for bridge/internal-transfer linking; applying them here would demote these rows to
+        // NEEDS_REVIEW purely because they lack a counterparty address, blocking replay. Before D1 these
+        // rows were CONFIRMED at build time and never reached STAT validation; now that they are routed
+        // to PENDING_PRICE (so the mETH leg gets a market price), they must remain exempt from the
+        // counterparty checks. Price/quantity/role validation above still applies.
+        if (!Boolean.TRUE.equals(transaction.getCrossCanonicalStakingConversion())) {
+            if (transaction.getCounterpartyType() == null || transaction.getCounterpartyType().isBlank()) {
+                reasons.add(COUNTERPARTY_TYPE_MISSING_REASON);
+            }
+            if (NormalizedTransactionCounterpartySupport.flowsMissingCounterparty(transaction)) {
+                reasons.add(FLOW_COUNTERPARTY_MISSING_REASON);
+            }
         }
 
         return new ArrayList<>(reasons);
+    }
+
+    /**
+     * RC-T2 (ADR-066 amendment to ADR-014): precisely scoped evidence condition — an ON_CHAIN row
+     * that the normalizer flagged as carrying real economic value it could not book (non-zero raw
+     * value that collapsed to a fee-only/empty flow set). EVM rows never carry this marker, so EVM
+     * replay-safe promotion is provably unchanged.
+     */
+    private boolean hasUnresolvedOnChainValue(NormalizedTransaction transaction) {
+        if (transaction == null || transaction.getSource() != NormalizedTransactionSource.ON_CHAIN) {
+            return false;
+        }
+        List<String> reasons = transaction.getMissingDataReasons();
+        return reasons != null && reasons.contains(TonNormalizedTransactionBuilder.ONCHAIN_UNRESOLVED_VALUE);
     }
 
     private boolean hasReplaySafeFeeOnlyFlows(List<NormalizedTransaction.Flow> nonZeroFlows) {
@@ -198,6 +227,10 @@ public class StatValidationService {
 
     private boolean isReplaySafeNeedsReview(NormalizedTransaction transaction) {
         if (transaction == null) {
+            return false;
+        }
+        // RC-T2: never treat an on-chain row that dropped real economic value as replay-safe.
+        if (hasUnresolvedOnChainValue(transaction)) {
             return false;
         }
         List<NormalizedTransaction.Flow> flows = transaction.getFlows();
@@ -254,6 +287,22 @@ public class StatValidationService {
         copy.setConfirmedAt(transaction.getConfirmedAt());
         copy.setClientId(transaction.getClientId());
         copy.setExternalCapitalBoundary(transaction.getExternalCapitalBoundary());
+        // WS-8 (ADR-074): preserve the network-neutral capability flags through the stat-validation
+        // copy-and-replace cycle (same contract as the pricing copy). Otherwise a stat rewrite after
+        // pricing would silently drop them again.
+        copy.setReceiptBearingCollateral(transaction.getReceiptBearingCollateral());
+        copy.setLpConcentrated(transaction.getLpConcentrated());
+        // ADR-072/ADR-079: the off-chain custody capability flag is a sibling of the flags above and
+        // must survive the stat-validation copy-and-replace cycle. Omitting it silently dropped
+        // custodialOffChain on every confirmed/demoted row (e.g. Telegram-Wallet EXTERNAL_CUSTODY
+        // TON inbounds), so the informational custody ledger read (which filters custodialOffChain=true)
+        // came back empty even though the resolver stamped it. Network-agnostic — covers the EVM
+        // per-session destinations and the global TON operator registry identically.
+        copy.setCustodialOffChain(transaction.getCustodialOffChain());
+        // D1 (ADR-054 §9): the cross-canonical staking flag is a sibling of the flags above and must
+        // survive the stat copy-and-replace cycle so requiresMarketPrice keeps flagging an unpriced
+        // acquired receipt leg (FLOW_PRICE_MISSING) instead of silently confirming a $0-basis lot.
+        copy.setCrossCanonicalStakingConversion(transaction.getCrossCanonicalStakingConversion());
         copy.setMissingDataReasons(new ArrayList<>(transaction.getMissingDataReasons() == null
                 ? List.of()
                 : transaction.getMissingDataReasons()));
@@ -278,6 +327,12 @@ public class StatValidationService {
             flowCopy.setCounterpartyType(flow.getCounterpartyType());
             flowCopy.setAccountRef(flow.getAccountRef());
             flowCopy.setAcquisitionFeeUsd(flow.getAcquisitionFeeUsd());
+            // ADR-081 (C1): the LP-receipt capability flag is a flow-level sibling of the flags above
+            // and must survive the stat-validation copy-and-replace cycle. Omitting it silently dropped
+            // lpReceipt on every CONFIRMED row, so LedgerPointCollector saw null and never stamped
+            // FAMILY:LP_RECEIPT for the confusable Meteora DAMM MLP receipt (same class of bug as
+            // custodialOffChain above, but at the Flow level).
+            flowCopy.setLpReceipt(flow.getLpReceipt());
             flows.add(flowCopy);
         }
         copy.setFlows(flows);

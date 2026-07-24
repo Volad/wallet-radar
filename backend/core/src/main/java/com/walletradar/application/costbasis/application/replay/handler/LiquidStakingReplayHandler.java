@@ -1,7 +1,6 @@
 package com.walletradar.application.costbasis.application.replay.handler;
 
 import com.walletradar.application.costbasis.support.AccountingAssetClassificationSupport;
-import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
 import com.walletradar.application.costbasis.application.replay.model.AssetKey;
 import com.walletradar.application.costbasis.application.replay.model.CarryTransfer;
 import com.walletradar.application.costbasis.application.replay.model.IndexedFlow;
@@ -18,21 +17,31 @@ import com.walletradar.application.costbasis.application.replay.support.ReplayTo
 import com.walletradar.application.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
-import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.wallet.WalletDomainKind;
 import com.walletradar.domain.wallet.WalletRef;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.math.MathContext;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Objects;
 
+/**
+ * ADR-083 cluster-carry engine (the {@code CLUSTER_CARRY} route). Carries basis on both lanes
+ * (Market and Net) with realized PnL = 0 for an <b>intra-cluster cross-canonical conversion</b> —
+ * any conversion whose every principal leg resolves to the same non-null staking cluster
+ * (ETH/SOL/AVAX). The old same-{@code FAMILY:*} staking carry (e.g. METH↔CMETH) is the degenerate
+ * single-cluster case; cross-family same-cluster conversions (ETH↔mETH, ETH↔wstETH, SOL↔mSOL,
+ * AVAX↔sAVAX) and intra-cluster {@code SWAP}/{@code VAULT_*} conversions now carry through the same
+ * REALLOCATE_OUT/IN both-lane proportional engine. Selection is gated by
+ * {@link AccountingAssetClassificationSupport#isIntraClusterConversion(NormalizedTransaction)};
+ * cluster↔non-cluster and cross-cluster moves fall through to the generic realize path.
+ */
 @Component
+@Slf4j
 public class LiquidStakingReplayHandler {
 
     private static final MathContext MC = MathContext.DECIMAL128;
@@ -52,57 +61,45 @@ public class LiquidStakingReplayHandler {
         this.settlementAllocator = settlementAllocator;
     }
 
+    /**
+     * ADR-083: select the principal legs of an intra-cluster cross-canonical conversion for
+     * both-lane carry. Selection is authoritatively gated by
+     * {@link AccountingAssetClassificationSupport#isIntraClusterConversion(NormalizedTransaction)} —
+     * type-gated (STAKING/VAULT/SWAP), every principal in the same non-null staking cluster, no
+     * non-cluster principal, and for SWAP genuinely cross-canonical. The old same-{@code FAMILY:*}
+     * carry (METH↔CMETH) is the degenerate single-cluster case; cross-family same-cluster
+     * conversions (ETH↔mETH, SOL↔mSOL, AVAX↔sAVAX) and multi-leg pooled conversions
+     * (wstETH+ETH→weETH) are handled by the same engine.
+     */
     public LiquidStakingFlowSelection selectPrincipalFlows(NormalizedTransaction transaction) {
-        if (transaction == null
-                || transaction.getFlows() == null
-                || transaction.getFlows().isEmpty()
-                || (transaction.getType() != NormalizedTransactionType.STAKING_DEPOSIT
-                && transaction.getType() != NormalizedTransactionType.STAKING_WITHDRAW)) {
+        if (!AccountingAssetClassificationSupport.isIntraClusterConversion(transaction)) {
             return LiquidStakingFlowSelection.empty();
         }
 
-        Map<String, List<IndexedFlow>> flowsByFamily = new LinkedHashMap<>();
+        List<IndexedFlow> outbound = new ArrayList<>();
+        List<IndexedFlow> inbound = new ArrayList<>();
         for (IndexedFlow indexedFlow : flowSupport.indexedFlows(transaction)) {
             NormalizedTransaction.Flow flow = indexedFlow.flow();
             if (!isPrincipalCandidate(flow)) {
                 continue;
             }
-            String continuityIdentity = AccountingAssetFamilySupport.continuityIdentity(flow);
-            if (continuityIdentity == null || !continuityIdentity.startsWith("FAMILY:")) {
+            // Fail-safe: the predicate already proved every principal shares one non-null cluster,
+            // but re-resolve per leg so a non-cluster leg can never be swept into a carry.
+            if (AccountingAssetClassificationSupport.stakingClusterForFlow(
+                    flow.getAssetSymbol(), flow.getAssetContract()) == null) {
                 continue;
             }
-            flowsByFamily.computeIfAbsent(continuityIdentity, ignored -> new ArrayList<>()).add(indexedFlow);
-        }
-
-        List<IndexedFlow> outbound = new ArrayList<>();
-        List<IndexedFlow> inbound = new ArrayList<>();
-        for (List<IndexedFlow> familyFlows : flowsByFamily.values()) {
-            boolean hasOutbound = familyFlows.stream().anyMatch(flow -> flow.flow().getQuantityDelta().signum() < 0);
-            boolean hasInbound = familyFlows.stream().anyMatch(flow -> flow.flow().getQuantityDelta().signum() > 0);
-            long distinctAssets = familyFlows.stream()
-                    .map(flow -> assetSupport.assetIdentity(transaction, flow.flow()))
-                    .filter(Objects::nonNull)
-                    .distinct()
-                    .count();
-            if (!hasOutbound || !hasInbound || distinctAssets < 2) {
-                continue;
-            }
-            if (!familyFlowsShareCanonicalTokenIdentity(familyFlows)) {
-                continue;
-            }
-            for (IndexedFlow familyFlow : familyFlows) {
-                if (familyFlow.flow().getQuantityDelta().signum() < 0) {
-                    outbound.add(familyFlow);
-                } else {
-                    inbound.add(familyFlow);
-                }
+            if (flow.getQuantityDelta().signum() < 0) {
+                outbound.add(indexedFlow);
+            } else {
+                inbound.add(indexedFlow);
             }
         }
         if (outbound.isEmpty() || inbound.isEmpty()) {
             return LiquidStakingFlowSelection.empty();
         }
-        outbound.sort(java.util.Comparator.comparingInt(IndexedFlow::index));
-        inbound.sort(java.util.Comparator.comparingInt(IndexedFlow::index));
+        outbound.sort(Comparator.comparingInt(IndexedFlow::index));
+        inbound.sort(Comparator.comparingInt(IndexedFlow::index));
         return new LiquidStakingFlowSelection(outbound, inbound);
     }
 
@@ -111,13 +108,35 @@ public class LiquidStakingReplayHandler {
             LiquidStakingFlowSelection selection,
             ReplayExecutionState replayState
     ) {
+        // ADR-083 §4.5: cluster-carry runs at route level and bypasses the generic continuity-transfer
+        // dedup. A Bybit mirror document (same correlationId re-emitting the same economic conversion)
+        // must not carry twice. Fingerprint on a namespace distinct from the continuity-transfer keys
+        // so the two dedup domains never collide; if this conversion was already carried, drop the
+        // mirror's principal legs entirely (they are in the selected set, so the generic path will not
+        // re-apply them either).
+        String dedupKey = clusterCarryDedupKey(transaction, selection);
+        if (dedupKey != null && !replayState.markContinuityFlowSeen(dedupKey)) {
+            log.warn("REPLAY_DEDUP_CLUSTER_CARRY_MIRROR_SKIPPED txId={} corrId={} wallet={} network={}",
+                    transaction.getId(),
+                    transaction.getCorrelationId(),
+                    transaction.getWalletAddress(),
+                    transaction.getNetworkId() == null ? "" : transaction.getNetworkId().name());
+            return;
+        }
+
         LiquidStakingCarry carry = new LiquidStakingCarry();
         for (IndexedFlow indexedFlow : selection.outbound()) {
             NormalizedTransaction.Flow flow = indexedFlow.flow();
             flow.setAvcoAtTimeOfSale(null);
             flow.setRealisedPnlUsd(null);
 
-            AssetKey assetKey = assetSupport.assetKey(transaction, flow);
+            // ADR-083 §4.3: a SWAP/VAULT SELL principal must drain the pool that actually holds the
+            // disposed inventory. resolveSellAssetKey applies the ADR-042 Bybit accountRef →
+            // coverage → max-quantity sub-wallet scan (a plain assetKey would strand fills on the
+            // umbrella). TRANSFER staking legs keep the plain umbrella key + :FUND/accountRef redirect.
+            AssetKey assetKey = flow.getRole() == NormalizedLegRole.SELL
+                    ? assetSupport.resolveSellAssetKey(transaction, flow, replayState.positions().asMap())
+                    : assetSupport.assetKey(transaction, flow);
             PositionState position = resolveOutboundDrainPosition(
                     transaction, flow, assetKey, replayState, flow.getQuantityDelta().abs());
             position.setLastEventTimestamp(flowSupport.laterOf(position.lastEventTimestamp(), transaction.getBlockTimestamp()));
@@ -288,24 +307,40 @@ public class LiquidStakingReplayHandler {
         return qty.compareTo(outboundQuantity.multiply(ReplayToleranceSupport.carrySourceCoverageRatio(), MC)) >= 0;
     }
 
-    private static boolean familyFlowsShareCanonicalTokenIdentity(List<IndexedFlow> familyFlows) {
-        String sharedIdentity = null;
-        for (IndexedFlow indexedFlow : familyFlows) {
-            NormalizedTransaction.Flow flow = indexedFlow.flow();
-            String identity = AccountingAssetClassificationSupport.canonicalTokenIdentity(
-                    flow.getAssetSymbol(),
-                    flow.getAssetContract()
-            );
-            if (identity == null || identity.isBlank()) {
-                return false;
-            }
-            if (sharedIdentity == null) {
-                sharedIdentity = identity;
-            } else if (!sharedIdentity.equals(identity)) {
-                return false;
-            }
+    /**
+     * ADR-083 §4.5 mirror-dedup fingerprint. Namespaced ({@code CC:}) distinctly from the
+     * continuity-transfer dedup keys so cluster-carry never shadows legs owned by the
+     * continuity/custody-round-trip path (and vice versa). Composed of correlationId + wallet +
+     * network + resolved cluster + the sorted outbound/inbound principal quantities so that two
+     * mirror emissions of the same conversion collide while distinct conversions do not.
+     */
+    private String clusterCarryDedupKey(NormalizedTransaction transaction, LiquidStakingFlowSelection selection) {
+        if (transaction == null || selection == null) {
+            return null;
         }
-        return sharedIdentity != null;
+        String corrId = transaction.getCorrelationId();
+        if (corrId == null || corrId.isBlank()) {
+            return null;
+        }
+        String cluster = null;
+        List<String> outQty = new ArrayList<>();
+        for (IndexedFlow indexedFlow : selection.outbound()) {
+            NormalizedTransaction.Flow flow = indexedFlow.flow();
+            if (cluster == null) {
+                cluster = AccountingAssetClassificationSupport.stakingClusterForFlow(
+                        flow.getAssetSymbol(), flow.getAssetContract());
+            }
+            outQty.add(flow.getQuantityDelta().abs().stripTrailingZeros().toPlainString());
+        }
+        List<String> inQty = new ArrayList<>();
+        for (IndexedFlow indexedFlow : selection.inbound()) {
+            inQty.add(indexedFlow.flow().getQuantityDelta().abs().stripTrailingZeros().toPlainString());
+        }
+        Collections.sort(outQty);
+        Collections.sort(inQty);
+        String wallet = transaction.getWalletAddress() == null ? "" : transaction.getWalletAddress();
+        String network = transaction.getNetworkId() == null ? "" : transaction.getNetworkId().name();
+        return "CC:" + corrId + "|" + wallet + "|" + network + "|" + cluster + "|OUT" + outQty + "|IN" + inQty;
     }
 
     private boolean isPrincipalCandidate(NormalizedTransaction.Flow flow) {

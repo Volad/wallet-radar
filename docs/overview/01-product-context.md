@@ -97,7 +97,8 @@ Manual compensating transactions may be **positive or negative** (reducing quant
 | Plasma | EVM | `PLASMA` | Etherscan-compatible API |
 | zkSync Era | EVM | `ZKSYNC` | Blockscout API |
 | Unichain | EVM | `UNICHAIN` | Etherscan V2 API (`chainid=130`) |
-| Solana | SVM | `SOLANA` | Out of scope for MVP v2 |
+| Solana | SVM | `SOLANA` | Helius Enhanced Transactions REST + JSON-RPC fallback |
+| TON | TVM | `TON` | TON Center v3 public API |
 
 Bybit scope:
 - `integration_raw_events` and `bybit_extracted_events` are the active v3 Bybit

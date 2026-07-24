@@ -1,7 +1,11 @@
 package com.walletradar.application.costbasis.application;
 
+import com.walletradar.application.costbasis.breakeven.BreakEvenAttributionService;
+import com.walletradar.application.costbasis.breakeven.BreakEvenLaneSelector;
+import com.walletradar.application.costbasis.breakeven.OffsetLane;
 import com.walletradar.application.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
+import com.walletradar.application.costbasis.support.WalletAddressReadScope;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import org.springframework.stereotype.Service;
 
@@ -31,11 +35,42 @@ class AssetLedgerChartService {
      * without adding basis, so the reported per-event AVCO is a spurious dust artifact.
      */
     private static final BigDecimal LP_EXIT_ZERO_BASIS_DUST_THRESHOLD_USD = new BigDecimal("1.00");
+    /**
+     * ADR-062 Wave 3 (AC-10 / D6): blended total-exposure AVCO dust guard. When the blended covered
+     * <b>basis</b> (avco × covered quantity) is below this USD threshold, the per-unit blended AVCO is
+     * a dust artifact (a phantom high per-unit from a sub-dollar basis on a sliver of covered quantity)
+     * and is reported as {@code null} (UNAVAILABLE), rendering "—" — parity with the Market/Balance
+     * AVCO $1 dust guard ({@link #LP_EXIT_ZERO_BASIS_DUST_THRESHOLD_USD}).
+     */
+    private static final BigDecimal BLENDED_AVCO_DUST_THRESHOLD_USD = new BigDecimal("1.00");
+    /**
+     * ADR-062 Wave 3 (T3, 2026-07-23 retune): <b>over-sliver artifact</b> sliver-denominator floor for
+     * the effective-cost SERIES point. A point is sliver-denominated when its blended covered
+     * ETH-equivalent quantity is below this fraction of the family's <b>global/terminal peak</b>
+     * blended ETH-equivalent exposure — the maximum observed across the ENTIRE materialized timeline,
+     * NOT the running (so-far) peak. This is the correction over the first cut: the family's liquid
+     * exposure ramps up over time (this dataset reaches ~4.03 ETH only in Sept 2025), so an artifact
+     * window in an early period (covered 0.04–0.16 ETH) reads as 5–17% of the small <em>running</em>
+     * peak (0.789 ETH) and slips through the AND-condition, yet is only 1.1–4.3% of the terminal peak.
+     * Anchoring on the global peak — a robust read-model proxy for the family's total ETH-equivalent
+     * capacity — makes the fraction position-independent: once the pool has ever held X ETH-equivalent,
+     * a collapse to a sliver of X means most exposure is parked out of the reconstructed covered
+     * denominator regardless of where in the timeline it occurs. 5% is defensible: the re-audited
+     * artifacts held 0.008–0.16 ETH of a ~4.03-ETH terminal peak (≈0.2–4.3%), all under 5%; genuine
+     * positions rarely hold under 5% of their lifetime peak while still carrying a large woven
+     * cumulative offset. Series-only; touches no ledger/replay/AVCO value.
+     */
+    private static final BigDecimal OVER_SLIVER_DENOMINATOR_FRACTION = new BigDecimal("0.05");
 
     private final BlendedExposureAvcoSeriesBuilder blendedExposureAvcoSeriesBuilder;
+    private final BreakEvenAttributionService breakEvenAttributionService;
 
-    AssetLedgerChartService(BlendedExposureAvcoSeriesBuilder blendedExposureAvcoSeriesBuilder) {
+    AssetLedgerChartService(
+            BlendedExposureAvcoSeriesBuilder blendedExposureAvcoSeriesBuilder,
+            BreakEvenAttributionService breakEvenAttributionService
+    ) {
         this.blendedExposureAvcoSeriesBuilder = blendedExposureAvcoSeriesBuilder;
+        this.breakEvenAttributionService = breakEvenAttributionService;
     }
 
     List<AssetLedgerQueryService.LedgerPointView> mapRawPoints(List<AssetLedgerPoint> points) {
@@ -59,9 +94,13 @@ class AssetLedgerChartService {
         Map<BucketKey, BucketAvcoState> liveAvcoBuckets = new LinkedHashMap<>();
         BigDecimal previousAvcoAfterUsd = null;
         BigDecimal previousNetAvcoAfterUsd = null;
-        // ADR-062 §3: effective-cost (break-even) series state. The offset woven per point is the
-        // viewed family's own cumulative Market-lane realized P&L plus its attributed cluster
-        // children's cumulative Market-lane realized P&L, merged chronologically by replay-ordering.
+        // ADR-062 §3 (2026-07-21 amendment): effective-cost (break-even) series state. The offset woven
+        // per point is the viewed family's own cumulative realized P&L plus its attributed cluster
+        // children's cumulative realized P&L, merged chronologically by replay-ordering. Under the NET
+        // lane the offset uses net realized P&L (trading profit + realized income); under MARKET it
+        // uses Market-lane realized P&L (trading profit only). Chosen once so the woven series terminal
+        // reconciles with the scalar header break-even under the SAME lane.
+        OffsetLane offsetLane = breakEvenAttributionService.offsetLane();
         List<AttributedRealizedPnlEvent> childPnlEvents = attributedChildPnlEvents == null
                 ? List.of()
                 : attributedChildPnlEvents.stream()
@@ -70,6 +109,8 @@ class AssetLedgerChartService {
         int childPnlCursor = 0;
         BigDecimal cumulativeSelfMarketPnl = BigDecimal.ZERO;
         BigDecimal cumulativeChildMarketPnl = BigDecimal.ZERO;
+        BigDecimal cumulativeSelfNetPnl = BigDecimal.ZERO;
+        BigDecimal cumulativeChildNetPnl = BigDecimal.ZERO;
         // RC-E3 / ADR-061: additive blended total-exposure series reconstructed from the family
         // superset. The spot Method-B lane above is untouched and stays byte-identical.
         BlendedExposureAvcoSeriesBuilder.BlendedSeriesSession blendedSession =
@@ -109,19 +150,39 @@ class AssetLedgerChartService {
                     series.netBasisTotal()
             );
 
-            // ADR-062 §3: weave the viewed family's own + attributed children's Market-lane realized
-            // P&L by replay-ordering key. At the terminal event drain any remaining child events so the
-            // series terminal offset equals the scalar header's attributed realized P&L exactly.
+            // ADR-062 §3: weave the viewed family's own + attributed children's realized P&L by
+            // replay-ordering key. Both the Market-lane and Net-lane cumulative deltas are advanced in
+            // lockstep as the cursor moves so either lane reconciles with the scalar header. At the
+            // terminal event drain any remaining child events so the series terminal offset equals the
+            // scalar header's attributed offset exactly.
             cumulativeSelfMarketPnl = cumulativeSelfMarketPnl.add(zeroIfNull(accumulator.realisedPnlDeltaUsd), MC);
+            cumulativeSelfNetPnl = cumulativeSelfNetPnl.add(zeroIfNull(accumulator.netRealisedPnlDeltaUsd), MC);
             BlendedExposureAvcoSeriesBuilder.OrderingKey eventKey = eventOrderingKey(accumulator);
             while (childPnlCursor < childPnlEvents.size()
                     && (eventIndex == lastEventIndex || childPnlEventAtOrBefore(childPnlEvents.get(childPnlCursor), eventKey))) {
+                AttributedRealizedPnlEvent childEvent = childPnlEvents.get(childPnlCursor);
                 cumulativeChildMarketPnl = cumulativeChildMarketPnl.add(
-                        zeroIfNull(childPnlEvents.get(childPnlCursor).marketRealisedPnlDeltaUsd()), MC);
+                        zeroIfNull(childEvent.marketRealisedPnlDeltaUsd()), MC);
+                cumulativeChildNetPnl = cumulativeChildNetPnl.add(
+                        zeroIfNull(childEvent.netRealisedPnlDeltaUsd()), MC);
                 childPnlCursor++;
             }
-            BigDecimal cumulativeAttributedMarketPnl = cumulativeSelfMarketPnl.add(cumulativeChildMarketPnl, MC);
-            BigDecimal effectiveCostAfterUsd = effectiveCostAfterUsd(blended, cumulativeAttributedMarketPnl);
+            // ADR-062 Wave 3 (AC-8) intra-cluster loss-floor carve-out: the attributed CHILD offset
+            // (intra-CLUSTER:*_STAKING staking conversions) is UNFLOORED so an intra-cluster loss
+            // raises effective cost; the viewed family's OWN (self/external) offset keeps the
+            // max(offset, 0) loss floor. This mirrors BreakEvenCalculator exactly so the series
+            // terminal reconciles with the scalar header break-even in either lane.
+            BigDecimal selfOffsetSigned = offsetLane == OffsetLane.NET ? cumulativeSelfNetPnl : cumulativeSelfMarketPnl;
+            BigDecimal childOffsetSigned = offsetLane == OffsetLane.NET ? cumulativeChildNetPnl : cumulativeChildMarketPnl;
+            BigDecimal cumulativeAttributedOffset = childOffsetSigned.add(selfOffsetSigned.max(BigDecimal.ZERO), MC);
+            // ADR-062 Wave 3 (T3): the raw per-point effective cost ($1 dust guard applied inline). The
+            // over-sliver artifact suppression is deferred to a second pass below because it must
+            // compare the point's covered quantity against the GLOBAL/terminal peak, which is only known
+            // after the full timeline is materialized.
+            BigDecimal effectiveCostAfterUsd = effectiveCostAfterUsd(blended, cumulativeAttributedOffset, offsetLane);
+            // AC-10 (D6): suppress the phantom blended AVCO on a dust residual basis.
+            BigDecimal blendedMarketAvco = dustGuardedBlendedAvco(blended.marketAvco(), blended.coveredQuantity());
+            BigDecimal blendedNetAvco = dustGuardedBlendedAvco(blended.netAvco(), blended.coveredQuantity());
 
             timeline.add(new AssetLedgerQueryService.TimelineEntryView(
                     accumulator.blockTimestamp,
@@ -151,18 +212,19 @@ class AssetLedgerChartService {
                     accumulator.toAddress,
                     List.copyOf(accumulator.memberNormalizedTransactionIds),
                     previousBlendedAvcoAfterUsd,
-                    blended.marketAvco(),
+                    blendedMarketAvco,
                     previousBlendedNetAvcoAfterUsd,
-                    blended.netAvco(),
+                    blendedNetAvco,
                     blended.coveredQuantity(),
                     state.quantity,
                     blended.avcoKind(),
-                    effectiveCostAfterUsd
+                    effectiveCostAfterUsd,
+                    subjectUnitPriceUsd(accumulator)
             ));
             previousAvcoAfterUsd = avcoAfterUsd;
             previousNetAvcoAfterUsd = netAvcoAfterUsd;
-            previousBlendedAvcoAfterUsd = blended.marketAvco();
-            previousBlendedNetAvcoAfterUsd = blended.netAvco();
+            previousBlendedAvcoAfterUsd = blendedMarketAvco;
+            previousBlendedNetAvcoAfterUsd = blendedNetAvco;
 
             overlays.add(new AssetLedgerQueryService.EventOverlayView(
                     accumulator.eventGroupId,
@@ -181,12 +243,78 @@ class AssetLedgerChartService {
             ));
         }
 
+        // ADR-062 Wave 3 (T3, 2026-07-23) + RM-3 (2026-07-24): second pass for the over-sliver artifact
+        // guard. The sliver-denominator test must anchor on the GLOBAL/terminal peak of blended covered
+        // ETH-equivalent (max across the WHOLE timeline), never the running peak — otherwise an early
+        // artifact window (before the family's exposure ramps up) is measured against a small running
+        // peak and slips through. The full timeline is now materialized, so compute the global peak and
+        // apply the suppression. RM-3: a sliver-denominated point is nulled in BOTH directions (spike
+        // AND floor-to-$0). Series-only: only the effective-cost field of an over-sliver point is nulled;
+        // every other point is byte-identical to pass 1.
+        BigDecimal globalPeakBlendedCoveredQuantity = BigDecimal.ZERO;
+        for (AssetLedgerQueryService.TimelineEntryView entry : timeline) {
+            globalPeakBlendedCoveredQuantity =
+                    globalPeakBlendedCoveredQuantity.max(zeroIfNull(entry.blendedCoveredQuantityAfter()));
+        }
+        List<AssetLedgerQueryService.TimelineEntryView> guardedTimeline = new ArrayList<>(timeline.size());
+        for (AssetLedgerQueryService.TimelineEntryView entry : timeline) {
+            guardedTimeline.add(suppressOverSliverArtifact(entry, globalPeakBlendedCoveredQuantity));
+        }
+
         return new ChartProjection(
-                List.copyOf(timeline),
+                List.copyOf(guardedTimeline),
                 List.copyOf(overlays),
                 state.totalRealisedPnlUsd,
                 state.totalNetRealisedPnlUsd,
                 state.totalGasPaidUsd
+        );
+    }
+
+    /**
+     * ADR-062 Wave 3 (T3) + RM-3 (2026-07-24): second-pass over-sliver artifact suppression on the
+     * effective-cost series point, using the GLOBAL/terminal peak of blended covered ETH-equivalent.
+     * Returns {@code entry} unchanged unless the point is sliver-denominated (see
+     * {@link #isOverSliverArtifact}), in which case a copy with a {@code null} effective cost ("—") is
+     * returned regardless of direction (both the offset-spike and the floor-to-$0 sides are blanked).
+     */
+    private static AssetLedgerQueryService.TimelineEntryView suppressOverSliverArtifact(
+            AssetLedgerQueryService.TimelineEntryView entry,
+            BigDecimal globalPeakBlendedCoveredQuantity
+    ) {
+        BigDecimal effectiveCost = entry.effectiveCostAfterUsd();
+        if (effectiveCost == null) {
+            return entry;
+        }
+        if (!isOverSliverArtifact(
+                effectiveCost,
+                zeroIfNull(entry.blendedCoveredQuantityAfter()),
+                globalPeakBlendedCoveredQuantity)) {
+            return entry;
+        }
+        return withSuppressedEffectiveCost(entry);
+    }
+
+    /**
+     * Returns a copy of {@code entry} with only the {@code effectiveCostAfterUsd} field set to
+     * {@code null} (rendered "—"). Every other field is copied verbatim so the rest of the read model
+     * stays byte-identical. Read-model only; no ledger/replay/AVCO/terminal value is touched.
+     */
+    private static AssetLedgerQueryService.TimelineEntryView withSuppressedEffectiveCost(
+            AssetLedgerQueryService.TimelineEntryView e
+    ) {
+        return new AssetLedgerQueryService.TimelineEntryView(
+                e.blockTimestamp(), e.txHash(), e.eventGroupId(), e.normalizedTransactionId(),
+                e.normalizedType(), e.protocolName(), e.lifecycleKind(), e.lifecycleStage(),
+                e.basisEffects(), e.quantityDelta(), e.costBasisDeltaUsd(), e.realisedPnlDeltaUsd(),
+                e.gasDeltaUsd(), e.quantityAfter(), e.coveredQuantityAfter(), e.uncoveredQuantityAfter(),
+                e.totalCostBasisAfterUsd(), e.avcoBeforeUsd(), e.avcoAfterUsd(),
+                e.netTotalCostBasisAfterUsd(), e.netAvcoBeforeUsd(), e.netAvcoAfterUsd(), e.avcoKind(),
+                e.fromAddress(), e.toAddress(), e.memberNormalizedTransactionIds(),
+                e.blendedAvcoBeforeUsd(), e.blendedAvcoAfterUsd(), e.blendedNetAvcoBeforeUsd(),
+                e.blendedNetAvcoAfterUsd(), e.blendedCoveredQuantityAfter(), e.liquidQuantityAfter(),
+                e.blendedAvcoKind(),
+                null,
+                e.subjectUnitPriceUsd()
         );
     }
 
@@ -200,14 +328,17 @@ class AssetLedgerChartService {
     }
 
     /**
-     * ADR-062 §3: a single attributed-child Market-lane realized-P&L delta, positioned by its
-     * replay-ordering key so it can be woven chronologically into the viewed family's timeline.
+     * ADR-062 §3: a single attributed-child realized-P&L delta, positioned by its replay-ordering key
+     * so it can be woven chronologically into the viewed family's timeline. Carries both the
+     * Market-lane delta (trading profit) and the Net-lane delta (trading profit + realized income) so
+     * either offset lane can be reconstructed.
      */
     record AttributedRealizedPnlEvent(
             Instant blockTimestamp,
             Integer transactionIndex,
             Long replaySequence,
-            BigDecimal marketRealisedPnlDeltaUsd
+            BigDecimal marketRealisedPnlDeltaUsd,
+            BigDecimal netRealisedPnlDeltaUsd
     ) {
         BlendedExposureAvcoSeriesBuilder.OrderingKey orderingKey() {
             return new BlendedExposureAvcoSeriesBuilder.OrderingKey(blockTimestamp, transactionIndex, replaySequence);
@@ -222,25 +353,121 @@ class AssetLedgerChartService {
     }
 
     /**
-     * ADR-062 §3 per-point effective cost over the blended total-exposure covered/basis:
-     * {@code max(marketBasis(t) − max(cumulativeAttributedMarketPnl(t), 0), 0) / coveredQty(t)}.
-     * Null (UNAVAILABLE) when the blended market series has no covered quantity.
+     * ADR-062 §3 per-point effective cost over the <b>blended total-exposure</b> covered/basis:
+     * {@code max(heldBasis(t) − cumulativeAttributedOffset(t), 0) / coveredQty(t)}, using the SAME
+     * blended ETH-equivalent covered denominator as the scalar header (the LP-parked / receipt-corridor
+     * ETH folded back in by {@link BlendedExposureAvcoSeriesBuilder}), so the series is bounded and its
+     * terminal reconciles with {@code BreakEvenCalculator.breakEvenUsd}. The numerator {@code heldBasis}
+     * follows the configured {@link OffsetLane} (ADR-062 2026-07-24): the Net-lane blended AVCO under
+     * NET so held zero-cost income is credited free, the Market-lane blended AVCO under MARKET. The
+     * cumulative offset is the lane-selected realized P&amp;L (NET: trading profit + income; MARKET:
+     * trading profit only).
+     *
+     * <p><b>Fail-closed dust guard (AC-7 / AC-10 parity, ADR-062 Wave 3).</b> Returns {@code null}
+     * (UNAVAILABLE) when the blended series has no covered quantity, and — mirroring the header's
+     * {@code denominatorFailClosed} + the {@link #dustGuardedBlendedAvco(BigDecimal, BigDecimal)} $1
+     * blended-AVCO guard — also when the blended covered ETH-equivalent basis is a dust residual. On
+     * an LP-deployment window the ETH-equivalent covered quantity can collapse to a sliver; dividing the
+     * (correct, deterministic) cumulative attributed offset by that sliver renders an economically
+     * meaningless per-unit spike ({@code offset ÷ dust-denominator}). Suppressing the point to "—" is
+     * exactly the header's protection and keeps the effective-cost lane consistent with the blended
+     * AVCO lane (both go UNAVAILABLE on the same dust point). A <b>healthy</b> denominator whose
+     * numerator floored to 0 (banked locked surplus, R2) still renders {@code $0} — only the
+     * dust-denominator explosions are killed, never the legitimate zero-floor lows.</p>
+     *
+     * <p><b>Over-sliver artifact guard (T3, ADR-062 Wave 3, 2026-07-23; RM-3, 2026-07-24).</b> The $1
+     * dust guard above only catches sub-dollar covered basis, so an LP/lending-parked window whose
+     * covered basis is a still-small-but-above-$1 sliver ($19–$300 observed) slips through and both
+     * {@code offset ÷ sliver} spikes and {@code max(marketBasis − offset, 0)} floors-to-$0 render
+     * spurious per-unit figures. That additive guard is NOT applied here: it must compare the point's
+     * covered quantity against the family's GLOBAL/terminal peak exposure, which is only known after the
+     * whole timeline is built, so it runs as a second pass suppressing both directions (see
+     * {@link #suppressOverSliverArtifact} / {@link #isOverSliverArtifact}). This method returns the raw
+     * per-point effective cost with the $1 dust guard applied.</p>
      */
-    private static BigDecimal effectiveCostAfterUsd(
+    static BigDecimal effectiveCostAfterUsd(
             BlendedExposureAvcoSeriesBuilder.BlendedPoint blended,
-            BigDecimal cumulativeAttributedMarketPnl
+            BigDecimal cumulativeAttributedOffset,
+            OffsetLane offsetLane
     ) {
-        if (blended == null || blended.marketAvco() == null) {
+        if (blended == null) {
+            return null;
+        }
+        // ADR-062 (2026-07-24): the SERIES numerator AVCO follows the same lane as the scalar header
+        // (BreakEvenCalculator) via the shared C0 helper — Net-lane blended AVCO under NET (held
+        // zero-cost income credited free, so the whole series re-bases like the header terminal),
+        // Market-lane blended AVCO under MARKET (byte-identical to the pre-amendment series). netAvco()
+        // is null exactly when marketAvco() is (both derive from the same blended covered basis), so
+        // repointing the guards below at the chosen lane preserves the fail-closed behaviour.
+        BigDecimal numeratorAvco =
+                BreakEvenLaneSelector.chooseLaneAvco(offsetLane, blended.marketAvco(), blended.netAvco());
+        if (numeratorAvco == null) {
             return null;
         }
         BigDecimal coveredQuantity = blended.coveredQuantity();
         if (coveredQuantity == null || coveredQuantity.signum() <= 0) {
             return null;
         }
-        BigDecimal marketBasis = blended.marketAvco().multiply(coveredQuantity, MC);
-        BigDecimal attributedOffset = zeroIfNull(cumulativeAttributedMarketPnl).max(BigDecimal.ZERO);
-        BigDecimal effectiveBasis = marketBasis.subtract(attributedOffset, MC).max(BigDecimal.ZERO);
+        // AC-7 / AC-10 fail-closed dust guard on the SERIES denominator: identical predicate to the
+        // blended-AVCO $1 dust guard, so effective cost is UNAVAILABLE precisely when the chosen-lane
+        // blended AVCO is. This is what kills the offset ÷ tiny-covered-ETH-equivalent explosions
+        // during LP-parked windows without touching any ledger/replay value or the header compute.
+        if (dustGuardedBlendedAvco(numeratorAvco, coveredQuantity) == null) {
+            return null;
+        }
+        BigDecimal heldBasis = numeratorAvco.multiply(coveredQuantity, MC);
+        // ADR-062 Wave 3 (AC-8): the offset is already carve-out-adjusted by the caller (child
+        // component unfloored, self component floored). Do NOT re-floor it here — a net intra-cluster
+        // loss legitimately raises effective cost above average cost (R2: no average-cost cap).
+        BigDecimal effectiveBasis = heldBasis.subtract(zeroIfNull(cumulativeAttributedOffset), MC).max(BigDecimal.ZERO);
         return effectiveBasis.divide(coveredQuantity, MC);
+    }
+
+    /**
+     * ADR-062 Wave 3 (T3, 2026-07-23) + RM-3 (2026-07-24): {@code true} when the effective-cost point is
+     * an over-sliver read-model artifact — i.e. it is <b>sliver-denominated</b> (blended covered
+     * ETH-equivalent below {@link #OVER_SLIVER_DENOMINATOR_FRACTION} of the family's GLOBAL/terminal peak
+     * blended ETH-equivalent exposure across the entire timeline).
+     *
+     * <p><b>RM-3 fail-closed both directions.</b> The prior guard additionally required the point to be
+     * over-blended-AVCO (a per-unit <em>spike</em>), which left the mirror-image failure untouched: when
+     * ETH is parked out via a CARRY corridor the cumulative attributed offset floors
+     * {@code max(marketBasis − offset, 0)} to $0 on the same sliver denominator. A floored $0 on a
+     * sliver denominator is exactly as misleading as the spike, so the AND-condition is dropped — any
+     * sliver-denominated point is suppressed to "—" (UNAVAILABLE), whether it spiked above or floored
+     * below blended AVCO. A <b>healthy</b> (non-sliver) denominator is never suppressed here, so a
+     * genuine $0 offset-recoup floor (banked locked surplus, R2/W7) stays visible as $0 and real
+     * large-buy/exit economics and healthy-denominator loss elevation are preserved. Anchoring the
+     * sliver fraction on the global (not running) peak makes the test position-independent, catching
+     * early-timeline artifact windows that a running peak misses.</p>
+     */
+    static boolean isOverSliverArtifact(
+            BigDecimal effectiveCost,
+            BigDecimal coveredQuantity,
+            BigDecimal globalPeakBlendedCoveredQuantity
+    ) {
+        if (effectiveCost == null) {
+            return false;
+        }
+        if (globalPeakBlendedCoveredQuantity == null || globalPeakBlendedCoveredQuantity.signum() <= 0) {
+            return false;
+        }
+        BigDecimal sliverFloor = globalPeakBlendedCoveredQuantity.multiply(OVER_SLIVER_DENOMINATOR_FRACTION, MC);
+        return coveredQuantity.compareTo(sliverFloor) < 0;
+    }
+
+    /**
+     * ADR-062 Wave 3 (AC-10 / D6): returns {@code null} when the blended covered basis
+     * ({@code avco × coveredQuantity}) is below the {@link #BLENDED_AVCO_DUST_THRESHOLD_USD} dust
+     * cutoff, so a phantom high per-unit AVCO on a dust residual renders "—" instead of a spurious
+     * figure (parity with the Market/Balance AVCO $1 dust guard). Non-dust AVCO is returned unchanged.
+     */
+    static BigDecimal dustGuardedBlendedAvco(BigDecimal avco, BigDecimal coveredQuantity) {
+        if (avco == null || coveredQuantity == null || coveredQuantity.signum() <= 0) {
+            return avco;
+        }
+        BigDecimal coveredBasis = avco.multiply(coveredQuantity, MC).abs();
+        return coveredBasis.compareTo(BLENDED_AVCO_DUST_THRESHOLD_USD) < 0 ? null : avco;
     }
 
     private AssetLedgerQueryService.LedgerPointView toRawPoint(AssetLedgerPoint point) {
@@ -322,7 +549,8 @@ class AssetLedgerChartService {
         memberPoints.stream()
                 .filter(point -> AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation(
                         familyIdentity,
-                        point.getAssetSymbol()
+                        point.getAssetSymbol(),
+                        point.getAccountingFamilyIdentity()
                 ))
                 .sorted(Comparator.comparing(
                         AssetLedgerPoint::getReplaySequence,
@@ -496,6 +724,51 @@ class AssetLedgerChartService {
         return point.getProtocolName();
     }
 
+    /**
+     * ADR-062 Wave 3 (AC-12 / D9): the SUBJECT (viewed-family) asset's own unit price for a move
+     * event. The subject asset is identified generically from the event's member ledger points
+     * (asset contract preferred, symbol fallback) and matched against the transaction flows, so the
+     * move-basis tooltip renders the subject price rather than a counterparty quote-leg (e.g. the
+     * USDT $1 quote on a cmETH→USDT swap). Never keyed to a specific symbol/tx. Returns {@code null}
+     * when no priced subject-asset flow is present.
+     */
+    private static BigDecimal subjectUnitPriceUsd(DisplayEventAccumulator accumulator) {
+        if (accumulator == null || accumulator.flows == null || accumulator.flows.isEmpty()
+                || accumulator.memberPoints == null || accumulator.memberPoints.isEmpty()) {
+            return null;
+        }
+        Set<String> subjectContracts = new LinkedHashSet<>();
+        Set<String> subjectSymbols = new LinkedHashSet<>();
+        for (AssetLedgerPoint point : accumulator.memberPoints) {
+            if (point.getAssetContract() != null && !point.getAssetContract().isBlank()) {
+                subjectContracts.add(point.getAssetContract().toLowerCase(java.util.Locale.ROOT));
+            }
+            if (point.getAssetSymbol() != null && !point.getAssetSymbol().isBlank()) {
+                subjectSymbols.add(point.getAssetSymbol().toUpperCase(java.util.Locale.ROOT));
+            }
+        }
+        BigDecimal best = null;
+        BigDecimal bestMagnitude = null;
+        for (AssetLedgerQueryService.EventFlowView flow : accumulator.flows) {
+            if (flow.unitPriceUsd() == null) {
+                continue;
+            }
+            boolean contractMatch = flow.assetContract() != null
+                    && subjectContracts.contains(flow.assetContract().toLowerCase(java.util.Locale.ROOT));
+            boolean symbolMatch = flow.assetSymbol() != null
+                    && subjectSymbols.contains(flow.assetSymbol().toUpperCase(java.util.Locale.ROOT));
+            if (!contractMatch && !symbolMatch) {
+                continue;
+            }
+            BigDecimal magnitude = flow.quantityDelta() == null ? BigDecimal.ZERO : flow.quantityDelta().abs();
+            if (best == null || magnitude.compareTo(bestMagnitude) > 0) {
+                best = flow.unitPriceUsd();
+                bestMagnitude = magnitude;
+            }
+        }
+        return best;
+    }
+
     private static List<AssetLedgerQueryService.EventFlowView> eventFlows(NormalizedTransaction transaction) {
         if (transaction == null || transaction.getFlows() == null || transaction.getFlows().isEmpty()) {
             return List.of();
@@ -627,7 +900,9 @@ class AssetLedgerChartService {
     }
 
     private static String normalizeAddress(String address) {
-        return address == null ? "" : address.trim().toLowerCase();
+        // Family-aware: keep base58 Solana/TON case intact so chart AVCO buckets align with the
+        // reconciliation header (which anchors on case-sensitive on_chain_balances).
+        return WalletAddressReadScope.normalize(address);
     }
 
     private static boolean blank(String value) {

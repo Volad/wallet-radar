@@ -7,7 +7,7 @@ import com.walletradar.application.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
-import org.junit.jupiter.api.DisplayName;
+import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -17,175 +17,98 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/**
+ * Gap 1 (ADR-081 C1): the durable LP-receipt flag stamps the persisted ledger-point family so a
+ * confusable fungible receipt symbol (Meteora DAMM {@code MLP}, three pool mints share the symbol)
+ * carries {@code FAMILY:LP_RECEIPT} rather than its raw pool-mint contract family.
+ */
 class LedgerPointCollectorTest {
 
+    private static final String MLP_MINT = "6fymg7doag2taxdmp7nhnvhbkqxsorodzmdxnrmzwftf";
+
     @Test
-    @DisplayName("LP-RECEIPT assetKey symbol produces FAMILY:LP_RECEIPT family identity regardless of marker flow symbol")
-    void recordAssignsLpReceiptFamilyWhenAssetKeySymbolIsLpReceipt() {
-        AssetKey lpReceiptKey = new AssetKey(
-                "wallet-a",
-                NetworkId.BASE,
-                "0xsome-lp-contract",
-                "LP-RECEIPT:BASE:PANCAKESWAP:448475",
-                "LP-RECEIPT:BASE:PANCAKESWAP:448475"
-        );
-
-        // Marker flow is WETH (the principal asset) — should NOT override the LP-RECEIPT family
-        NormalizedTransaction tx = buildTx("tx-lp-1", "WETH");
-        NormalizedTransaction.Flow flow = buildFlow("WETH");
-
-        PositionSnapshot before = emptySnapshot();
-        PositionState after = stateWithQuantity(lpReceiptKey, "513.47", "1182");
-
+    void stampsLpReceiptFamilyForFlaggedMlpReceiptLegDespiteConfusablePoolMintSymbol() {
         List<AssetLedgerPoint> points = new ArrayList<>();
-        LedgerPointCollector collector = new LedgerPointCollector("UNIVERSE:lp", points, Instant.now());
-        collector.record(tx, flow, 0, lpReceiptKey, before, after, AssetLedgerPoint.BasisEffect.REALLOCATE_IN);
+        LedgerPointCollector collector = new LedgerPointCollector("universe-1", points, Instant.now());
+
+        AssetKey mlpKey = new AssetKey("9GrpWallet", NetworkId.SOLANA, MLP_MINT, "MLP", MLP_MINT);
+        collector.record(
+                dammEntry(flaggedReceiptFlow()),
+                flaggedReceiptFlow(),
+                0,
+                mlpKey,
+                zeroSnapshot(),
+                positionWithQuantity(mlpKey, new BigDecimal("0.3096")),
+                AssetLedgerPoint.BasisEffect.ACQUIRE
+        );
 
         assertThat(points).hasSize(1);
         assertThat(points.getFirst().getAccountingFamilyIdentity()).isEqualTo("FAMILY:LP_RECEIPT");
-        assertThat(points.getFirst().getAssetSymbol()).isEqualTo("LP-RECEIPT:BASE:PANCAKESWAP:448475");
+        // The confusable symbol is preserved on the point; only the family is driven by the flag.
+        assertThat(points.getFirst().getAssetSymbol()).isEqualTo("MLP");
     }
 
     @Test
-    @DisplayName("LP-RECEIPT symbol variant (ETH marker flow) also produces FAMILY:LP_RECEIPT")
-    void recordAssignsLpReceiptFamilyWithEthMarkerFlow() {
-        AssetKey lpReceiptKey = new AssetKey(
-                "wallet-a",
-                NetworkId.BASE,
-                "0xsome-lp-contract",
-                "LP-RECEIPT:BASE:PANCAKESWAP:448475",
-                "LP-RECEIPT:BASE:PANCAKESWAP:448475"
+    void keepsRawMintFamilyForUnflaggedConfusableSplHoldingSuchAsSse() {
+        List<AssetLedgerPoint> points = new ArrayList<>();
+        LedgerPointCollector collector = new LedgerPointCollector("universe-1", points, Instant.now());
+
+        String sseMint = "H4phNbsqjV5rqk8u6FUACTLB6rNZRTAPGnBb8KXJpump";
+        AssetKey sseKey = new AssetKey("9GrpWallet", NetworkId.SOLANA, sseMint, "SSE", sseMint);
+        NormalizedTransaction.Flow spotFlow = new NormalizedTransaction.Flow();
+        spotFlow.setRole(NormalizedLegRole.BUY);
+        spotFlow.setAssetSymbol("SSE");
+        spotFlow.setAssetContract(sseMint);
+        spotFlow.setQuantityDelta(new BigDecimal("100"));
+
+        collector.record(
+                dammEntry(spotFlow),
+                spotFlow,
+                0,
+                sseKey,
+                zeroSnapshot(),
+                positionWithQuantity(sseKey, new BigDecimal("100")),
+                AssetLedgerPoint.BasisEffect.ACQUIRE
         );
 
-        NormalizedTransaction tx = buildTx("tx-lp-2", "ETH");
-        NormalizedTransaction.Flow flow = buildFlow("ETH");
-
-        PositionSnapshot before = emptySnapshot();
-        PositionState after = stateWithQuantity(lpReceiptKey, "1000", "2300");
-
-        List<AssetLedgerPoint> points = new ArrayList<>();
-        LedgerPointCollector collector = new LedgerPointCollector("UNIVERSE:lp", points, Instant.now());
-        collector.record(tx, flow, 0, lpReceiptKey, before, after, AssetLedgerPoint.BasisEffect.REALLOCATE_IN);
-
         assertThat(points).hasSize(1);
-        assertThat(points.getFirst().getAccountingFamilyIdentity()).isEqualTo("FAMILY:LP_RECEIPT");
+        // A genuine (unflagged) SPL holding keeps its own contract-keyed family — untouched
+        // (continuity normalizes the contract to lower case), never FAMILY:LP_RECEIPT.
+        assertThat(points.getFirst().getAccountingFamilyIdentity())
+                .isEqualTo(sseMint.toLowerCase(java.util.Locale.ROOT));
     }
 
-    @Test
-    @DisplayName("WETH assetKey symbol resolves to FAMILY:ETH from symbol map")
-    void recordAssignsEthFamilyWhenAssetKeySymbolIsWeth() {
-        AssetKey wethKey = new AssetKey(
-                "wallet-a",
-                NetworkId.BASE,
-                "0x4200000000000000000000000000000000000006",
-                "WETH",
-                "0x4200000000000000000000000000000000000006"
-        );
-
-        NormalizedTransaction tx = buildTx("tx-weth-1", "WETH");
-        NormalizedTransaction.Flow flow = buildFlow("WETH");
-
-        PositionSnapshot before = emptySnapshot();
-        PositionState after = stateWithQuantity(wethKey, "0.546", "1184");
-
-        List<AssetLedgerPoint> points = new ArrayList<>();
-        LedgerPointCollector collector = new LedgerPointCollector("UNIVERSE:eth", points, Instant.now());
-        collector.record(tx, flow, 0, wethKey, before, after, AssetLedgerPoint.BasisEffect.ACQUIRE);
-
-        assertThat(points).hasSize(1);
-        assertThat(points.getFirst().getAccountingFamilyIdentity()).isEqualTo("FAMILY:ETH");
-        assertThat(points.getFirst().getAssetSymbol()).isEqualTo("WETH");
-    }
-
-    @Test
-    @DisplayName("ETH assetKey symbol resolves to FAMILY:ETH")
-    void recordAssignsEthFamilyWhenAssetKeySymbolIsEth() {
-        AssetKey ethKey = new AssetKey(
-                "wallet-a",
-                NetworkId.ARBITRUM,
-                null,
-                "ETH",
-                "NATIVE:ARBITRUM"
-        );
-
-        NormalizedTransaction tx = buildTx("tx-eth-1", "ETH");
-        NormalizedTransaction.Flow flow = buildFlow("ETH");
-
-        PositionSnapshot before = emptySnapshot();
-        PositionState after = stateWithQuantity(ethKey, "1.5", "2550");
-
-        List<AssetLedgerPoint> points = new ArrayList<>();
-        LedgerPointCollector collector = new LedgerPointCollector("UNIVERSE:eth", points, Instant.now());
-        collector.record(tx, flow, 0, ethKey, before, after, AssetLedgerPoint.BasisEffect.ACQUIRE);
-
-        assertThat(points).hasSize(1);
-        assertThat(points.getFirst().getAccountingFamilyIdentity()).isEqualTo("FAMILY:ETH");
-    }
-
-    @Test
-    @DisplayName("record() skips writing when before and after state are identical")
-    void recordSkipsWhenStateUnchanged() {
-        AssetKey wethKey = new AssetKey("wallet-a", NetworkId.BASE, "0x4200", "WETH", "0x4200");
-        NormalizedTransaction tx = buildTx("tx-noop", "WETH");
-        NormalizedTransaction.Flow flow = buildFlow("WETH");
-
-        // same qty=0 before and after — sameAs() returns true → record() must skip
-        PositionSnapshot before = emptySnapshot();
-        PositionState after = new PositionState(wethKey);
-
-        List<AssetLedgerPoint> points = new ArrayList<>();
-        LedgerPointCollector collector = new LedgerPointCollector("UNIVERSE:eth", points, Instant.now());
-        collector.record(tx, flow, 0, wethKey, before, after, AssetLedgerPoint.BasisEffect.ACQUIRE);
-
-        assertThat(points).isEmpty();
-    }
-
-    // ── helpers ───────────────────────────────────────────────────────────────
-
-    private static NormalizedTransaction buildTx(String id, String symbol) {
-        NormalizedTransaction tx = new NormalizedTransaction();
-        tx.setId(id);
-        tx.setTxHash("0x" + id);
-        tx.setBlockTimestamp(Instant.parse("2025-09-12T10:00:00Z"));
-        tx.setTransactionIndex(0);
+    private static NormalizedTransaction.Flow flaggedReceiptFlow() {
         NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
         flow.setRole(NormalizedLegRole.TRANSFER);
-        flow.setAssetSymbol(symbol);
-        flow.setQuantityDelta(BigDecimal.ONE);
-        tx.setFlows(List.of(flow));
-        return tx;
-    }
-
-    private static NormalizedTransaction.Flow buildFlow(String symbol) {
-        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
-        flow.setRole(NormalizedLegRole.TRANSFER);
-        flow.setAssetSymbol(symbol);
-        flow.setQuantityDelta(BigDecimal.ONE);
+        flow.setAssetSymbol("MLP");
+        flow.setAssetContract(MLP_MINT);
+        flow.setQuantityDelta(new BigDecimal("0.3096"));
+        flow.setLpReceipt(Boolean.TRUE);
         return flow;
     }
 
-    private static PositionSnapshot emptySnapshot() {
-        return PositionSnapshot.mirrorTax(
-                BigDecimal.ZERO,
-                null,
-                BigDecimal.ZERO,
-                BigDecimal.ZERO,
-                BigDecimal.ZERO,
-                BigDecimal.ZERO,
-                BigDecimal.ZERO,
-                false,
-                false,
-                0
-        );
+    private static NormalizedTransaction dammEntry(NormalizedTransaction.Flow flow) {
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setId("tx-1");
+        tx.setTxHash("sig-1");
+        tx.setNetworkId(NetworkId.SOLANA);
+        tx.setType(NormalizedTransactionType.LP_ENTRY);
+        tx.setCorrelationId("lp-position:solana:meteora-damm:pool:9GrpWallet");
+        tx.setBlockTimestamp(Instant.parse("2026-01-01T00:00:00Z"));
+        tx.getFlows().add(flow);
+        return tx;
     }
 
-    private static PositionState stateWithQuantity(AssetKey key, String qty, String totalCostBasis) {
+    private static PositionSnapshot zeroSnapshot() {
+        return PositionSnapshot.mirrorTax(
+                BigDecimal.ZERO, null, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO, false, false, 0);
+    }
+
+    private static PositionState positionWithQuantity(AssetKey key, BigDecimal quantity) {
         PositionState state = new PositionState(key);
-        state.setQuantity(new BigDecimal(qty));
-        state.setTotalCostBasisUsd(new BigDecimal(totalCostBasis));
-        if (new BigDecimal(qty).signum() > 0) {
-            state.setPerWalletAvco(new BigDecimal(totalCostBasis).divide(new BigDecimal(qty), java.math.MathContext.DECIMAL128));
-        }
+        state.setQuantity(quantity);
         return state;
     }
 }

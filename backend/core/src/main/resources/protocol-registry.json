@@ -15,7 +15,9 @@
     "MANTLE",
     "UNICHAIN",
     "KATANA",
-    "PLASMA"
+    "PLASMA",
+    "SOLANA",
+    "TON"
   ],
   "families": [
     "DEX",
@@ -49,6 +51,280 @@
     "LENDING_LOOP_REBALANCE"
   ],
   "contracts": {
+    "\u2500\u2500 SOLANA program IDs (ADR-063 / ADR-066) \u2500\u2500": {},
+    "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4": {
+      "name": "Jupiter",
+      "protocol": "Jupiter",
+      "version": "v6",
+      "family": "AGGREGATOR",
+      "role": "ROUTER",
+      "confidence": "HIGH",
+      "event_type": "SWAP",
+      "networks": [
+        "SOLANA"
+      ],
+      "classifier_key": "jupiter"
+    },
+    "JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB": {
+      "name": "Jupiter",
+      "protocol": "Jupiter",
+      "version": "v4",
+      "family": "AGGREGATOR",
+      "role": "ROUTER",
+      "confidence": "HIGH",
+      "event_type": "SWAP",
+      "networks": [
+        "SOLANA"
+      ],
+      "classifier_key": "jupiter"
+    },
+    "jupr81YtYssSyPt8jbnGuiWon5f6x9TcDEFxYe3Bdzi": {
+      "name": "Jupiter Lend",
+      "protocol": "JupiterLend",
+      "version": "v1-borrow",
+      "family": "LENDING",
+      "role": "POOL",
+      "confidence": "HIGH",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": [
+        "SOLANA"
+      ],
+      "classifier_key": "jupiter-lend"
+    },
+    "jupeiUmn818Jg1ekPURTpr4mFo29p46vygyykFJ3wZC": {
+      "name": "Jupiter Lend",
+      "protocol": "JupiterLend",
+      "version": "v1-earn",
+      "family": "LENDING",
+      "role": "POOL",
+      "confidence": "HIGH",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": [
+        "SOLANA"
+      ],
+      "classifier_key": "jupiter-lend"
+    },
+    "jupnw4B6Eqs7ft6rxpzYLJZYSnrpRgPcr589n5Kv4oc": {
+      "name": "Jupiter Lend",
+      "protocol": "JupiterLend",
+      "version": "v1-liquidity",
+      "family": "LENDING",
+      "role": "POOL",
+      "confidence": "HIGH",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": [
+        "SOLANA"
+      ],
+      "classifier_key": "jupiter-lend"
+    },
+    "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo": {
+      "name": "Meteora DLMM",
+      "protocol": "Meteora",
+      "version": "DLMM",
+      "family": "LP",
+      "role": "POSITION_MANAGER",
+      "confidence": "HIGH",
+      "event_type": "LP_MINT",
+      "networks": [
+        "SOLANA"
+      ],
+      "classifier_key": "meteora-dlmm"
+    },
+    "61DFfeTKM7trxYcPQCM78bJ794ddZprZpAwAnLiwTpYH": {
+      "name": "Jupiter RFQ",
+      "protocol": "Jupiter",
+      "version": "OrderEngine",
+      "family": "AGGREGATOR",
+      "role": "ROUTER",
+      "confidence": "HIGH",
+      "event_type": "SWAP",
+      "networks": [
+        "SOLANA"
+      ],
+      "classifier_key": "jupiter-rfq"
+    },
+    "24Uqj9JCLxUeoC3hGfh5W3s9FM9uCHDS2SG3LYwBpyTi": {
+      "name": "Meteora Vault",
+      "protocol": "Meteora",
+      "version": "DynamicVault",
+      "family": "YIELD",
+      "role": "VAULT",
+      "confidence": "HIGH",
+      "event_type": "VAULT_DEPOSIT",
+      "networks": [
+        "SOLANA"
+      ],
+      "classifier_key": "meteora-vault"
+    },
+    "Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB": {
+      "name": "Meteora Dynamic AMM",
+      "protocol": "Meteora",
+      "version": "DAMMv1",
+      "family": "LP",
+      "role": "POOL",
+      "confidence": "HIGH",
+      "event_type": "SWAP",
+      "networks": [
+        "SOLANA"
+      ],
+      "classifier_key": "meteora-damm"
+    },
+    "cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG": {
+      "name": "Meteora Dynamic AMM",
+      "protocol": "Meteora",
+      "version": "DAMMv2",
+      "family": "LP",
+      "role": "POOL",
+      "confidence": "HIGH",
+      "event_type": "SWAP",
+      "networks": [
+        "SOLANA"
+      ],
+      "classifier_key": "meteora-damm"
+    },
+    "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8": {
+      "name": "Raydium AMM v4",
+      "protocol": "Raydium",
+      "version": "v4",
+      "family": "DEX",
+      "role": "POOL",
+      "confidence": "HIGH",
+      "event_type": "SWAP",
+      "networks": [
+        "SOLANA"
+      ],
+      "classifier_key": "raydium-amm"
+    },
+    "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK": {
+      "name": "Raydium CLMM",
+      "protocol": "Raydium",
+      "version": "CLMM",
+      "family": "LP",
+      "role": "POOL",
+      "confidence": "HIGH",
+      "event_type": "LP_MINT",
+      "networks": [
+        "SOLANA"
+      ],
+      "classifier_key": "raydium-clmm"
+    },
+    "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C": {
+      "name": "Raydium CPMM",
+      "protocol": "Raydium",
+      "version": "CPMM",
+      "family": "DEX",
+      "role": "POOL",
+      "confidence": "HIGH",
+      "event_type": "SWAP",
+      "networks": [
+        "SOLANA"
+      ],
+      "classifier_key": "raydium-cpmm"
+    },
+    "FqGg2Y1FNxMiGd51Q6UETixQWkF5fB92MysbYogRJb3P": {
+      "name": "Meteora DLMM (via Hawksight)",
+      "protocol": "Hawksight",
+      "version": "v1",
+      "family": "LP",
+      "role": "POSITION_MANAGER",
+      "confidence": "HIGH",
+      "event_type": "LP_MINT",
+      "networks": [
+        "SOLANA"
+      ],
+      "classifier_key": "meteora-dlmm"
+    },
+    "KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD": {
+      "name": "Kamino Lend",
+      "protocol": "Kamino",
+      "version": "v1",
+      "family": "LENDING",
+      "role": "POOL",
+      "confidence": "HIGH",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": [
+        "SOLANA"
+      ],
+      "classifier_key": "kamino-lend"
+    },
+    "kvauTFR8qm1dhniz6pYuBZkuene38GjkNbFxHWe4s1o": {
+      "name": "Kamino Vault",
+      "protocol": "Kamino",
+      "version": "Vault",
+      "family": "YIELD",
+      "role": "VAULT",
+      "confidence": "HIGH",
+      "event_type": "VAULT_DEPOSIT",
+      "networks": [
+        "SOLANA"
+      ],
+      "classifier_key": "kamino-vault"
+    },
+    "MarBmsSgKXdrN1egZf5sqe1TMai9K1rChYNDJgjq7aD": {
+      "name": "Marinade",
+      "protocol": "Marinade",
+      "version": "v1",
+      "family": "STAKING",
+      "role": "STAKE_CONTRACT",
+      "confidence": "HIGH",
+      "event_type": "STAKING_DEPOSIT",
+      "networks": [
+        "SOLANA"
+      ],
+      "classifier_key": "marinade"
+    },
+    "Jito4APyf642JPZPx3hGc6WWJ8zPKtRbRs4P815Awbb": {
+      "name": "Jito",
+      "protocol": "Jito",
+      "version": "v1",
+      "family": "STAKING",
+      "role": "STAKE_CONTRACT",
+      "confidence": "HIGH",
+      "event_type": "STAKING_DEPOSIT",
+      "networks": [
+        "SOLANA"
+      ],
+      "classifier_key": "jito"
+    },
+    "FarmuwXPWXvefWUeqFAa5w6rifLkq5X6E8bimYvrhCB1": {
+      "name": "Meteora Farm",
+      "protocol": "Meteora",
+      "version": "Farm",
+      "family": "STAKING",
+      "role": "STAKE_CONTRACT",
+      "confidence": "HIGH",
+      "event_type": "REWARD_CLAIM",
+      "networks": [
+        "SOLANA"
+      ],
+      "classifier_key": "meteora-farm"
+    },
+    "DF1ow4tspfHX9JwWJsAb9epbkA8hmpSEAtxXy1V27QBH": {
+      "name": "DFlow",
+      "protocol": "DFlow",
+      "version": "v1",
+      "family": "AGGREGATOR",
+      "role": "ROUTER",
+      "confidence": "HIGH",
+      "event_type": "SWAP",
+      "networks": [
+        "SOLANA"
+      ],
+      "classifier_key": "dflow"
+    },
+    "routeUGWgWzqBWFcrCfv8tritsqukccJPu3q5GPP3xS": {
+      "name": "OKX",
+      "protocol": "OKX",
+      "version": "v1",
+      "family": "AGGREGATOR",
+      "role": "ROUTER",
+      "confidence": "HIGH",
+      "event_type": "SWAP",
+      "networks": [
+        "SOLANA"
+      ],
+      "classifier_key": "okx"
+    },
     "\u2500\u2500 DEX: Uniswap \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500": {},
     "0xe592427a0aece92de3edee1f18e0157c05861564": {
       "name": "Uniswap V3 SwapRouter",
@@ -261,7 +537,7 @@
         "KATANA"
       ],
       "confidence": "HIGH",
-      "notes": "SushiSwap V3 NonfungiblePositionManager on Katana (chainId 747474). collect(0xfc6f7865) → LP_FEE_CLAIM via LpPositionLifecycleSupport.resolvePositionManagerType. LpRegistryClassifier (order 420) intercepts before RegistryDirectTypeClassifier (order 470) so the pool LP_BURN signal no longer overrides fee-claim calls. Confirmed by 3 on-chain collect txs (Sep–Nov 2025, $18 total) that were previously misclassified as LP_EXIT."
+      "notes": "SushiSwap V3 NonfungiblePositionManager on Katana (chainId 747474). collect(0xfc6f7865) \u2192 LP_FEE_CLAIM via LpPositionLifecycleSupport.resolvePositionManagerType. LpRegistryClassifier (order 420) intercepts before RegistryDirectTypeClassifier (order 470) so the pool LP_BURN signal no longer overrides fee-claim calls. Confirmed by 3 on-chain collect txs (Sep\u2013Nov 2025, $18 total) that were previously misclassified as LP_EXIT."
     },
     "0x2a2c512beaa8eb15495726c235472d82effb7a6b": {
       "name": "Katana vbETH-vbUSDC LP Pool",
@@ -275,7 +551,7 @@
       ],
       "confidence": "HIGH",
       "underlyingPositionManager": "0x3067bdba0e6628497d527bef511c22da8b32ca3f",
-      "notes": "Katana vbETH/vbUSDC LP pool — LP_FEE_CLAIM and LP exit receipts from this address are LP_EXIT, not BRIDGE_IN. Nov-10 2025 vbETH 0.4732 receipt was misclassified as BRIDGE_IN causing $1,706 NEC overcount (NEC RC3b fix). underlyingPositionManager links POOL exits to the vault POSITION_MANAGER so vault-style correlationId is set correctly."
+      "notes": "Katana vbETH/vbUSDC LP pool \u2014 LP_FEE_CLAIM and LP exit receipts from this address are LP_EXIT, not BRIDGE_IN. Nov-10 2025 vbETH 0.4732 receipt was misclassified as BRIDGE_IN causing $1,706 NEC overcount (NEC RC3b fix). underlyingPositionManager links POOL exits to the vault POSITION_MANAGER so vault-style correlationId is set correctly."
     },
     "\u2500\u2500 DEX: LFJ / Trader Joe \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500": {},
     "lfj-aggregator-arbitrum-avalanche": {
@@ -306,7 +582,7 @@
         "AVALANCHE"
       ],
       "confidence": "HIGH",
-      "notes": "C1 (R7): LFJ Liquidity Book router — addLiquidity (0xa3c7271a) and removeLiquidity (0xc22159b6) selectors are decoded to resolve tokenX/tokenY/binStep → pair address via lfjPairIndex built at startup. All other selectors fall through to HEURISTIC."
+      "notes": "C1 (R7): LFJ Liquidity Book router \u2014 addLiquidity (0xa3c7271a) and removeLiquidity (0xc22159b6) selectors are decoded to resolve tokenX/tokenY/binStep \u2192 pair address via lfjPairIndex built at startup. All other selectors fall through to HEURISTIC."
     },
     "0x8573f98175d816d520248b5facf40d309b1c9cee": {
       "name": "LFJ Liquidity Book AUSD/USDC (Avalanche)",
@@ -1002,7 +1278,7 @@
       "decomposeByLegs": true,
       "specialHandler": "BALANCER_V3_VAULT",
       "confidence": "HIGH",
-      "notes": "R6b: Balancer V3 CompositeLiquidityRouter — entry point for ERC4626 pool operations (addLiquidityUnbalancedToERC4626Pool, removeLiquidityProportionalFromERC4626Pool). Internally calls the Vault. Same BALANCER_V3_VAULT handler: BPT presence in movement legs determines ENTRY vs EXIT. Method 0x19c6989f observed on Avalanche."
+      "notes": "R6b: Balancer V3 CompositeLiquidityRouter \u2014 entry point for ERC4626 pool operations (addLiquidityUnbalancedToERC4626Pool, removeLiquidityProportionalFromERC4626Pool). Internally calls the Vault. Same BALANCER_V3_VAULT handler: BPT presence in movement legs determines ENTRY vs EXIT. Method 0x19c6989f observed on Avalanche."
     },
     "0xa084c11cb55e67c9becf9607f1dbb20ec4d5e7b2": {
       "name": "Balancer Relayer (Avalanche)",
@@ -1017,7 +1293,7 @@
       "decomposeByLegs": true,
       "specialHandler": "BALANCER_V3_VAULT",
       "confidence": "HIGH",
-      "notes": "R6b: Balancer multicall Relayer on Avalanche — used for gauge deposit/withdraw batched calls (LP_POSITION_STAKE/UNSTAKE). BALANCER_V3_VAULT handler detects gauge + BPT movement legs to determine STAKE vs UNSTAKE direction."
+      "notes": "R6b: Balancer multicall Relayer on Avalanche \u2014 used for gauge deposit/withdraw batched calls (LP_POSITION_STAKE/UNSTAKE). BALANCER_V3_VAULT handler detects gauge + BPT movement legs to determine STAKE vs UNSTAKE direction."
     },
     "0xfcec3c8d86329defb548202fe1b86ff2188603a8": {
       "name": "Balancer V3 GHO/USDT/USDC boosted stable pool (BPT)",
@@ -1044,7 +1320,7 @@
         "AVALANCHE"
       ],
       "confidence": "HIGH",
-      "notes": "R6a: Balancer V3 gauge for GHO/USDT/USDC pool. deposit()/withdraw() → LP_POSITION_STAKE/UNSTAKE. underlyingPositionManager = BPT pool address. Previously mis-labelled as Curve gauge / LENDING_DEPOSIT."
+      "notes": "R6a: Balancer V3 gauge for GHO/USDT/USDC pool. deposit()/withdraw() \u2192 LP_POSITION_STAKE/UNSTAKE. underlyingPositionManager = BPT pool address. Previously mis-labelled as Curve gauge / LENDING_DEPOSIT."
     },
     "0x98ef32edd24e2c92525e59afc4475c1242a30184": {
       "name": "Aura BoosterLite",
@@ -1052,11 +1328,12 @@
       "version": "Sidechain",
       "family": "YIELD",
       "role": "REWARD_ROUTER",
+      "specialHandler": "AURA_BOOSTER",
       "networks": [
         "AVALANCHE"
       ],
       "confidence": "HIGH",
-      "notes": "Aura Finance BoosterLite on Avalanche. Orchestrates staking/unstaking to reward pools. Not the direct LP staking target."
+      "notes": "R6a: Aura Finance BoosterLite on Avalanche. deposit(pid,amount,stake) stakes a Balancer BPT and mints the Aura deposit-vault receipt token. AURA_BOOSTER special handler classifies the BPT<->deposit-vault movement as LP_POSITION_STAKE/UNSTAKE (basis-neutral), keying the pool via the deposit-vault entry's underlyingPositionManager. Retains REWARD_ROUTER role for pure getReward claims (no BPT movement)."
     },
     "0x7037358a6f2c1d9e5cc9b4a29e7415a7060dadcc": {
       "name": "auraAave GHO/USDT/USDC-vault (Aura BaseRewardPool)",
@@ -1070,7 +1347,7 @@
         "AVALANCHE"
       ],
       "confidence": "HIGH",
-      "notes": "R6a: Aura BaseRewardPool for Balancer V3 GHO/USDT/USDC BPT on Avalanche. deposit() → LP_POSITION_STAKE; withdrawAndUnwrap() → LP_POSITION_UNSTAKE (BPT basis-neutral; BAL/AURA/WAVAX rewards zero-cost). underlyingPositionManager = BPT pool. Previously mis-labelled YIELD/VAULT → REWARD_CLAIM."
+      "notes": "R6a: Aura BaseRewardPool for Balancer V3 GHO/USDT/USDC BPT on Avalanche. deposit() \u2192 LP_POSITION_STAKE; withdrawAndUnwrap() \u2192 LP_POSITION_UNSTAKE (BPT basis-neutral; BAL/AURA/WAVAX rewards zero-cost). underlyingPositionManager = BPT pool. Previously mis-labelled YIELD/VAULT \u2192 REWARD_CLAIM."
     },
     "\u2500\u2500 LENDING: Aave V2 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500": {},
     "0x7d2768de32b0b80b7a3454c06bdac94a69ddc7a9": {
@@ -1884,7 +2161,7 @@
         "KATANA"
       ],
       "confidence": "HIGH",
-      "notes": "Relay Protocol solver payout — delivers destination-chain funds; receipts classify as BRIDGE_IN"
+      "notes": "Relay Protocol solver payout \u2014 delivers destination-chain funds; receipts classify as BRIDGE_IN"
     },
     "0x7ff8bbf9c8ab106db589e7863fb100525f61cce5": {
       "name": "Relay Solver Payout",
@@ -1904,7 +2181,7 @@
         "KATANA"
       ],
       "confidence": "HIGH",
-      "notes": "Relay Protocol solver payout — Jan 2026 USDC/USDT delivery on Arbitrum (NEC RC3a fix)"
+      "notes": "Relay Protocol solver payout \u2014 Jan 2026 USDC/USDT delivery on Arbitrum (NEC RC3a fix)"
     },
     "0x2ec2c4c3dc212c990d1bc2b48b0392a3951d926e": {
       "name": "Relay Source Contract",
@@ -1920,7 +2197,7 @@
         "OPTIMISM"
       ],
       "confidence": "HIGH",
-      "notes": "Relay Protocol source-side depositor — EXT_OUT to this address should be BRIDGE_OUT (NEC RC3a)"
+      "notes": "Relay Protocol source-side depositor \u2014 EXT_OUT to this address should be BRIDGE_OUT (NEC RC3a)"
     },
     "0x8c826f795466e39acbff1bb4eeeb759609377ba1": {
       "name": "LiFi Relayer Agent",
@@ -1939,7 +2216,7 @@
         "UNICHAIN"
       ],
       "confidence": "HIGH",
-      "notes": "LiFi destination-chain relayer / agent — inbound receipts from this address are BRIDGE_IN (Sep 2025 ETH NEC RC2a)"
+      "notes": "LiFi destination-chain relayer / agent \u2014 inbound receipts from this address are BRIDGE_IN (Sep 2025 ETH NEC RC2a)"
     },
     "0x6f26bf09b1c792e3228e5467807a900a503c0281": {
       "name": "Across SpokePool",
@@ -2496,17 +2773,16 @@
       "notes": "Claim distributor. claim(address recipient_,...) must remain REWARD_CLAIM when raw legs show inbound reward movement."
     },
     "0x70f61901658aafb7ae57da0c30695ce4417e72b9": {
-      "name": "Pendle Rewards Distributor",
-      "protocol": "Pendle",
+      "name": "Equilibria Booster (Mantle)",
+      "protocol": "Equilibria",
       "version": "V1",
       "family": "YIELD",
       "role": "REWARD_ROUTER",
-      "event_type": "REWARD_CLAIM",
       "networks": [
         "MANTLE"
       ],
       "confidence": "HIGH",
-      "notes": "claimRewards(uint256[] _pids) reward-distribution path. Must not fall back to plain inbound."
+      "notes": "Equilibria Booster on Mantle. zapOutV3SingleToken combines LP exit + PENDLE reward claim in a single call."
     },
     "0x0045601c3c4c561012c108ea84a81e36eac24296": {
       "name": "Mantle Merkle Distributor",
@@ -3177,9 +3453,9 @@
         "UNICHAIN"
       ],
       "confidence": "HIGH",
-      "notes": "PancakeSwap V4 NonfungiblePositionManager on Unichain. Mints ERC721 LP-RECEIPT NFTs (e.g. tokenId 824 in LP_ENTRY 0x29fd1b50, Feb 2025). Previously wrongly labelled as LI.FI Multicall — corrected after observing NFT minting behaviour incompatible with bridge contracts."
+      "notes": "PancakeSwap V4 NonfungiblePositionManager on Unichain. Mints ERC721 LP-RECEIPT NFTs (e.g. tokenId 824 in LP_ENTRY 0x29fd1b50, Feb 2025). Previously wrongly labelled as LI.FI Multicall \u2014 corrected after observing NFT minting behaviour incompatible with bridge contracts."
     },
-    "── LENDING: INIT Capital (Mantle) ──────────────────────────────────────────": {},
+    "\u2500\u2500 LENDING: INIT Capital (Mantle) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500": {},
     "0xf82cbcab75c1138a8f1f20179613e7c0c8337346": {
       "name": "INIT Capital PositionManager",
       "protocol": "INIT Capital",
@@ -3216,7 +3492,7 @@
       "confidence": "HIGH",
       "notes": "INIT Capital lending pool issuing USDC debt."
     },
-    "── YIELD: Equilibria (Mantle) ──────────────────────────────────────────────": {},
+    "\u2500\u2500 YIELD: Equilibria (Mantle) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500": {},
     "0x920873e5b302a619c54c908adfb77a1c4256a3b8": {
       "name": "Equilibria Depositor (Mantle)",
       "protocol": "Equilibria",
@@ -3230,18 +3506,6 @@
       "confidence": "HIGH",
       "notes": "Equilibria Depositor on Mantle. deposit(uint256 _pid, uint256 _amount, bool _stake) deposits PENDLE-LPT into Equilibria staking. methodId=0x43a0d066."
     },
-    "0x70f61901658aafb7ae57da0c30695ce4417e72b9": {
-      "name": "Equilibria Booster (Mantle)",
-      "protocol": "Equilibria",
-      "version": "V1",
-      "family": "YIELD",
-      "role": "REWARD_ROUTER",
-      "networks": [
-        "MANTLE"
-      ],
-      "confidence": "HIGH",
-      "notes": "Equilibria Booster on Mantle. zapOutV3SingleToken combines LP exit + PENDLE reward claim in a single call."
-    },
     "0x2fa11dbcbf955467e6b6f81816b21250f8f3ac30": {
       "name": "Equilibria BaseRewardPool (Mantle)",
       "protocol": "Equilibria",
@@ -3252,7 +3516,16 @@
         "MANTLE"
       ],
       "confidence": "HIGH",
-      "notes": "Equilibria BaseRewardPool on Mantle — distributes PENDLE and EQB rewards."
+      "notes": "Equilibria BaseRewardPool on Mantle \u2014 distributes PENDLE and EQB rewards."
+    },
+    "BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY": {
+      "name": "Solana NFT",
+      "protocol": "Metaplex",
+      "version": "Bubblegum",
+      "classifier_key": "solana-nft",
+      "networks": [
+        "SOLANA"
+      ]
     }
   },
   "event_topics": {

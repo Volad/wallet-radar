@@ -10,7 +10,7 @@ import {
 import { ViewEncapsulation } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule } from '@angular/forms';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { finalize, switchMap, tap } from 'rxjs';
+import { catchError, finalize, of, switchMap, tap } from 'rxjs';
 
 import { COLORS, EVM_NETWORKS_PRESENTATION } from '../../core/data/dashboard.constants';
 import {
@@ -21,6 +21,12 @@ import {
   SessionIntegrationResponse,
   SessionSettingsResponse,
 } from '../../core/models/wallet-api.models';
+import {
+  detectWalletDomain,
+  isValidWalletAddress,
+  normalizeWalletAddress,
+  WalletAddressDomain,
+} from '../../core/utils/wallet-address.util';
 import { SessionStorageService } from '../../core/services/session-storage.service';
 import { WalletApiService } from '../../core/services/wallet-api.service';
 import { formatDateTimeWithSeconds } from '../../core/utils/date-time.util';
@@ -39,11 +45,15 @@ const INTEGRATION_COLOR_PALETTE = [
   '#a78bfa', '#f472b6', '#fb923c', '#e2e8f0',
 ];
 
+function pickUnusedColor(palette: ReadonlyArray<string>, usedColors: ReadonlyArray<string | null>): string {
+  const used = new Set(usedColors.filter(Boolean).map((c) => c!.toLowerCase()));
+  const available = palette.filter((c) => !used.has(c.toLowerCase()));
+  const pool = available.length > 0 ? available : palette;
+  return pool[Math.floor(Math.random() * pool.length)]!;
+}
+
 function pickUnusedIntegrationColor(usedColors: ReadonlyArray<string | null>): string {
-  const used = new Set(usedColors.filter(Boolean));
-  const available = INTEGRATION_COLOR_PALETTE.filter((c) => !used.has(c));
-  const pool = available.length > 0 ? available : INTEGRATION_COLOR_PALETTE;
-  return pool[Math.floor(Math.random() * pool.length)];
+  return pickUnusedColor(INTEGRATION_COLOR_PALETTE, usedColors);
 }
 type StatusTone = 'ready' | 'busy' | 'error' | 'idle';
 
@@ -66,8 +76,9 @@ interface SettingsWalletDraft {
   readonly address: string;
   readonly label: string;
   readonly color: string;
-  readonly networks: ReadonlyArray<EvmNetworkId>;
+  readonly networks: ReadonlyArray<OnChainWalletNetworkId>;
   readonly networksOpen: boolean;
+  readonly domain: WalletAddressDomain;
 }
 
 const SETTINGS_SECTIONS: ReadonlyArray<SettingsSectionMeta> = [
@@ -85,7 +96,6 @@ const WALLET_COLOR_PALETTE: ReadonlyArray<string> = [
   '#34d399',
 ];
 
-const EVM_ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/u;
 
 @Component({
   selector: 'wr-settings-page',
@@ -330,14 +340,18 @@ export class SettingsPageComponent {
 
   updatePendingWalletField(walletId: string, field: 'address' | 'label', value: string): void {
     this.pendingWallets.update((wallets) =>
-      wallets.map((wallet) =>
-        wallet.id === walletId
-          ? {
-              ...wallet,
-              [field]: value,
-            }
-          : wallet
-      )
+      wallets.map((wallet) => {
+        if (wallet.id !== walletId) return wallet;
+        if (field === 'address') {
+          const domain = detectWalletDomain(value.trim());
+          const networks: ReadonlyArray<OnChainWalletNetworkId> =
+            domain === 'SOLANA' ? ['SOLANA'] :
+            domain === 'TON' ? ['TON'] :
+            this.allNetworkIds;
+          return { ...wallet, address: value, domain, networks };
+        }
+        return { ...wallet, [field]: value };
+      })
     );
   }
 
@@ -392,12 +406,12 @@ export class SettingsPageComponent {
     if (rawAddress.length === 0) {
       return 'Wallet address is required';
     }
-    if (!EVM_ADDRESS_PATTERN.test(rawAddress)) {
-      return 'Invalid EVM address';
+    if (!isValidWalletAddress(rawAddress)) {
+      return 'Invalid wallet address (EVM, Solana, or TON)';
     }
-    const normalizedAddress = rawAddress.toLowerCase();
+    const normalizedAddress = normalizeWalletAddress(rawAddress);
     const duplicate = [...this.walletsDraft(), ...this.pendingWallets()].some(
-      (candidate) => candidate.id !== walletId && candidate.address.trim().toLowerCase() === normalizedAddress
+      (candidate) => candidate.id !== walletId && normalizeWalletAddress(candidate.address.trim()) === normalizedAddress
     );
     if (duplicate) {
       return 'Wallet already exists in this session';
@@ -485,10 +499,10 @@ export class SettingsPageComponent {
     const walletPayload = [...this.walletsDraft(), ...this.pendingWallets()];
     const payload: PutSessionSettingsRequest = {
       wallets: walletPayload.map((wallet, index) => ({
-        address: wallet.address.trim().toLowerCase(),
+        address: normalizeWalletAddress(wallet.address),
         label: wallet.label.trim() || this.defaultWalletLabel(index),
         color: wallet.color,
-        networks: this.onChainNetworkIds,
+        networks: this.resolveNetworksForWallet(wallet),
       })),
       integrations: integrationPayload,
       externalVenues: this.externalVenues(),
@@ -518,7 +532,7 @@ export class SettingsPageComponent {
     this.showIntegrationSecret.update((visible) => !visible);
   }
 
-  networkIcon(networkId: EvmNetworkId): string {
+  networkIcon(networkId: string): string {
     return this.networksPresentation.find((network) => network.id === networkId)?.icon ?? '•';
   }
 
@@ -573,7 +587,12 @@ export class SettingsPageComponent {
     this.walletApiService
       .putSessionSettings(sessionId, payload)
       .pipe(
-        switchMap(() => this.walletApiService.refreshSession(sessionId)),
+        switchMap(() =>
+          this.walletApiService.refreshSession(sessionId).pipe(
+            // 409 = refresh blocked while backfill is in progress — settings are saved, skip restart
+            catchError((err) => (err?.status === 409 ? of(null) : ((() => { throw err; })()))),
+          )
+        ),
         switchMap(() => this.walletApiService.getSessionSettings(sessionId)),
         tap((settings) => this.applySettings(settings)),
         finalize(() => this.dataSourcesSaving.set(false))
@@ -581,7 +600,7 @@ export class SettingsPageComponent {
       .subscribe({
         next: () => {
           this.dataSourcesReviewOpen.set(false);
-          this.saveMessage.set('Changes saved. Pipeline restart triggered.');
+          this.saveMessage.set('Changes saved.');
         },
         error: (errorResponse) => {
           this.error.set(errorResponse?.error?.message ?? 'Unable to save changes.');
@@ -639,10 +658,10 @@ export class SettingsPageComponent {
     const walletPayload = [...this.walletsDraft(), ...this.pendingWallets()];
     return {
       wallets: walletPayload.map((wallet, index) => ({
-        address: wallet.address.trim().toLowerCase(),
+        address: normalizeWalletAddress(wallet.address),
         label: wallet.label.trim() || this.defaultWalletLabel(index),
         color: wallet.color,
-        networks: this.onChainNetworkIds,
+        networks: this.resolveNetworksForWallet(wallet),
       })),
       integrations: includeIntegrations ? this.buildIntegrationsPayload() : this.buildPreservedIntegrationsPayload(),
       externalVenues: this.externalVenues(),
@@ -668,8 +687,11 @@ export class SettingsPageComponent {
 
     for (const integration of existing) {
       const provider = integration.provider ?? 'BYBIT';
+      const isFirstOfActiveProvider = provider === activeProvider && !seenProviders.has(activeProvider);
       seenProviders.add(provider);
-      if (provider === activeProvider) {
+
+      if (isFirstOfActiveProvider) {
+        // Only apply form data to the first account of the active provider.
         const entry = this.buildIntegrationEntry(provider);
         if (entry !== null) {
           payload.push(entry);
@@ -682,6 +704,7 @@ export class SettingsPageComponent {
           });
         }
       } else {
+        // Preserve original data for all other accounts (same or different provider).
         payload.push({
           provider,
           displayName: integration.displayName ?? '',
@@ -806,14 +829,23 @@ export class SettingsPageComponent {
   private applySettings(response: SessionSettingsResponse): void {
     this.settings.set(response);
     this.walletsDraft.set(
-      response.wallets.map((wallet, index) => ({
-        id: this.createWalletDraftId(),
-        address: wallet.address.toLowerCase(),
-        label: wallet.label,
-        color: wallet.color.toLowerCase(),
-        networks: [...this.allNetworkIds],
-        networksOpen: false,
-      }))
+      response.wallets.map((wallet) => {
+        const domain = detectWalletDomain(wallet.address);
+        const networks: ReadonlyArray<OnChainWalletNetworkId> =
+          domain === 'EVM' ? [...this.allNetworkIds] :
+          wallet.networks.length > 0 ? [...wallet.networks] :
+          [...this.allNetworkIds];
+        const colorIndex = response.wallets.indexOf(wallet);
+        return {
+          id: this.createWalletDraftId(),
+          address: normalizeWalletAddress(wallet.address),
+          label: wallet.label ?? '',
+          color: (wallet.color ?? WALLET_COLOR_PALETTE[colorIndex % WALLET_COLOR_PALETTE.length] ?? WALLET_COLOR_PALETTE[0]!).toLowerCase(),
+          networks,
+          networksOpen: false,
+          domain,
+        };
+      })
     );
     this.pendingWallets.set([]);
     this.walletListDirty.set(false);
@@ -832,14 +864,23 @@ export class SettingsPageComponent {
   }
 
   private createWalletDraft(index: number, networksOpen = false): SettingsWalletDraft {
+    const usedColors = [...this.walletsDraft(), ...this.pendingWallets()].map((w) => w.color);
+    const color = pickUnusedColor(WALLET_COLOR_PALETTE, usedColors);
     return {
       id: this.createWalletDraftId(),
       address: '',
       label: this.defaultWalletLabel(index),
-      color: WALLET_COLOR_PALETTE[index % WALLET_COLOR_PALETTE.length]!,
+      color,
       networks: [...this.allNetworkIds],
       networksOpen,
+      domain: 'UNKNOWN',
     };
+  }
+
+  private resolveNetworksForWallet(wallet: SettingsWalletDraft): ReadonlyArray<OnChainWalletNetworkId> {
+    if (wallet.domain === 'SOLANA') return ['SOLANA'];
+    if (wallet.domain === 'TON') return ['TON'];
+    return this.onChainNetworkIds;
   }
 
   private defaultWalletLabel(index: number): string {

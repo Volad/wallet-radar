@@ -58,12 +58,28 @@ public class IdempotentNormalizedTransactionStore {
             // normalization and must be refreshed even on already-CONFIRMED transactions so that
             // replay picks up the correct acquisitionFeeUsd after a rebuild. The field is additive
             // and does not affect pricing, stat-validation, or clarification counters.
-            propagateAcquisitionFeeUsd(existing, candidate);
+            propagateFlowCapabilities(existing, candidate);
             // Propagate boundary-contract marker so that re-normalization refreshes the stamped field
             // on existing CONFIRMED rows without triggering a full re-process cycle.
             if (candidate.getExternalCapitalBoundary() != null) {
                 existing.setExternalCapitalBoundary(candidate.getExternalCapitalBoundary());
             }
+            // WS-8 (ADR-074): the network-neutral capability flags are additive and re-derived
+            // deterministically from networkId/correlationId at normalization; refresh them on
+            // already-CONFIRMED rows so a re-normalization sweep cannot drop them (they drive the
+            // receipt-less lending and concentrated-LP read paths). Mirrors the propagation above.
+            existing.setReceiptBearingCollateral(candidate.getReceiptBearingCollateral());
+            existing.setLpConcentrated(candidate.getLpConcentrated());
+            // ADR-072/ADR-079: the off-chain custody flag is re-derived deterministically by the
+            // counterparty resolver at normalization (global TON operator registry + per-session EVM
+            // destinations); refresh it on already-CONFIRMED rows so a re-normalization sweep restores
+            // it if a prior copy-and-replace cycle dropped it, and never leaves the custody ledger empty.
+            existing.setCustodialOffChain(candidate.getCustodialOffChain());
+            // D1 (ADR-054 §9): the cross-canonical staking flag is re-derived deterministically at
+            // normalization from the ADR-054 identity registry; refresh it on already-CONFIRMED rows
+            // so a re-normalization sweep never drops the signal that forces pricing on the acquired
+            // receipt leg.
+            existing.setCrossCanonicalStakingConversion(candidate.getCrossCanonicalStakingConversion());
             return existing;
         }
         candidate.setId(existing.getId());
@@ -78,11 +94,18 @@ public class IdempotentNormalizedTransactionStore {
     }
 
     /**
-     * ADR-051: merges {@code acquisitionFeeUsd} from candidate flows into existing flows by
-     * matching on {@code role} + {@code assetSymbol}. Leaves existing flows unmodified when the
-     * candidate does not supply a fee value for that leg.
+     * Merges additive, deterministically re-derived per-flow capability signals from candidate flows
+     * into existing CONFIRMED flows by matching on {@code role} + {@code assetSymbol}:
+     * <ul>
+     *   <li>ADR-051: {@code acquisitionFeeUsd} (buy-side fee) so replay picks it up after a rebuild;</li>
+     *   <li>ADR-081 (C1): {@code lpReceipt} (LP-receipt flag) so a re-normalization sweep restores the
+     *       FAMILY:LP_RECEIPT stamp for the confusable Meteora DAMM MLP receipt if a prior
+     *       copy-and-replace cycle dropped it — the same restore contract as {@code custodialOffChain}.</li>
+     * </ul>
+     * Both are additive (propagated only when the candidate supplies a value), so an existing flow is
+     * never wiped when the candidate does not carry the signal for that leg.
      */
-    private void propagateAcquisitionFeeUsd(
+    private void propagateFlowCapabilities(
             NormalizedTransaction existing,
             NormalizedTransaction candidate
     ) {
@@ -90,7 +113,12 @@ public class IdempotentNormalizedTransactionStore {
             return;
         }
         for (NormalizedTransaction.Flow candidateFlow : candidate.getFlows()) {
-            if (candidateFlow == null || candidateFlow.getAcquisitionFeeUsd() == null) {
+            if (candidateFlow == null) {
+                continue;
+            }
+            boolean hasFee = candidateFlow.getAcquisitionFeeUsd() != null;
+            boolean hasLpReceipt = Boolean.TRUE.equals(candidateFlow.getLpReceipt());
+            if (!hasFee && !hasLpReceipt) {
                 continue;
             }
             for (NormalizedTransaction.Flow existingFlow : existing.getFlows()) {
@@ -99,7 +127,12 @@ public class IdempotentNormalizedTransactionStore {
                 }
                 if (existingFlow.getRole() == candidateFlow.getRole()
                         && java.util.Objects.equals(existingFlow.getAssetSymbol(), candidateFlow.getAssetSymbol())) {
-                    existingFlow.setAcquisitionFeeUsd(candidateFlow.getAcquisitionFeeUsd());
+                    if (hasFee) {
+                        existingFlow.setAcquisitionFeeUsd(candidateFlow.getAcquisitionFeeUsd());
+                    }
+                    if (hasLpReceipt) {
+                        existingFlow.setLpReceipt(Boolean.TRUE);
+                    }
                     break;
                 }
             }

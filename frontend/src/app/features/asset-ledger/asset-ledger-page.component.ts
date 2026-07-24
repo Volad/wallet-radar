@@ -64,13 +64,29 @@ interface AssetCurrentView {
   readonly realisedPnlUsd: number;
   readonly netRealisedPnlUsd: number | null;
   readonly gasPaidUsd: number;
-  // ADR-062 break-even (effective-cost) metric.
+  // ADR-062 headline "Break-even price" per unit; null when the ETH-equivalent denominator is unusable.
   readonly breakEvenUsd: number | null;
+  // ADR-062 Wave 3 headline "Average cost" = market held basis ÷ ETH-equivalent covered qty; null when unusable.
+  readonly averageCostUsd: number | null;
+  // ADR-062 deviation guard: coveredQuantity / quantity in [0,1]; null when quantity is zero.
+  readonly coveredRatio: number | null;
+  // ADR-062 deviation guard: true when a $0 break-even is a low-coverage artifact (suppress display).
+  readonly breakEvenSuppressed: boolean;
   readonly lockedSurplusUsd: number;
   readonly incomeReceivedUsd: number;
   readonly attributionTargetFamily: string | null;
   // ADR-062 — real member asset symbols of the viewed family present in the ledger.
   readonly familyMemberSymbols: ReadonlyArray<string>;
+  // ADR-062 Wave 3 (§5) — demoted diagnostic lanes (Balance AVCO + dust-guarded Blended AVCO); null when absent.
+  readonly details: DiagnosticLanesView | null;
+}
+
+// ADR-062 Wave 3 (§5) demoted diagnostic lanes for the collapsible "Details" panel.
+interface DiagnosticLanesView {
+  readonly balanceAvcoUsd: number | null;
+  readonly balanceNetAvcoUsd: number | null;
+  readonly blendedAvcoUsd: number | null;
+  readonly blendedNetAvcoUsd: number | null;
 }
 
 interface LegendItemView {
@@ -88,7 +104,10 @@ interface BasisFilterView {
 }
 
 // Move-basis header AVCO metric hints (presentation-only). Click-to-toggle popover copy.
-type AvcoHintKey = 'market' | 'balance' | 'blended' | 'breakeven';
+// Per product decision the page shows exactly two metrics: `breakeven` (labelled "Effective cost",
+// ADR-062 Effective Cost = break-even) and `balance` (Balance AVCO). Market / Blended AVCO are no
+// longer displayed.
+type AvcoHintKey = 'balance' | 'breakeven';
 
 interface AvcoHintContent {
   readonly title: string;
@@ -160,6 +179,10 @@ interface MarkerView {
   readonly blendedAvcoKind: string | null;
   // ADR-062 — effective-cost (break-even) time series for the viewed family; null → line breaks.
   readonly effectiveCostAfterUsd: number | null;
+  // ADR-062 Wave 3 (AC-12 / D9) — the subject asset's own unit price for this move event; null when absent.
+  readonly subjectUnitPriceUsd: number | null;
+  // Unit price to render in the point tooltip: subject price when known, else the resolved quote-leg price.
+  readonly displayUnitPriceUsd: number | null;
   readonly realisedPnlDeltaUsd: number | null;
   readonly gasDeltaUsd: number | null;
   readonly basisEffects: ReadonlyArray<string>;
@@ -235,11 +258,6 @@ const USDC_FAMILY_SYMBOLS = new Set(['USDC', 'VBUSDC']);
 const STABLECOIN_SYMBOLS = new Set(['USDT', 'USDC', 'USDE', 'USDS', 'USDD', 'DAI', 'FDUSD', 'PYUSD', 'TUSD', 'USD1']);
 const DEFAULT_RANGE_DAYS = 21;
 const DEFAULT_RANGE_MIN_POINTS = 16;
-/**
- * Pool≈0 threshold (ETH) for the RC-E3 / ADR-061 blended overlay: below this the liquid ETH pool /
- * total ETH-origin covered quantity is treated as drained. Drives blended-line breaks and pool≈0 markers.
- */
-const POOL_EPSILON_ETH = 1e-6;
 const CHART_MARKER_EDGE_MARGIN = 20;
 const DEFAULT_DISABLED_TYPE_KEYS = new Set(['WRAP', 'UNWRAP', 'GAS_ONLY']);
 const DEFAULT_HIDDEN_BASIS_EFFECTS = new Set(['GAS_ONLY']);
@@ -933,10 +951,10 @@ export class AssetLedgerPageComponent {
 
   // AVCO chart-line visibility toggles (all ON by default). Presentation-only: they gate what is
   // DRAWN on the main canvas; tooltip rows and header cards always show every value.
+  // Per product decision the move-basis page shows only two metrics — Balance AVCO and Effective
+  // cost — so only these two lines are toggleable (Market / Blended AVCO are no longer displayed).
   readonly showBalanceAvco = signal(true);
-  readonly showBlendedAvco = signal(true);
-  readonly showMarketAvco = signal(true);
-  // ADR-062 — effective-cost (break-even) line; ON by default like the AVCO lines.
+  // ADR-062 — effective-cost (break-even) line; ON by default like the Balance AVCO line.
   readonly showEffectiveCost = signal(true);
 
   // Move-basis AVCO metric hint popover. Click-to-toggle, one open at a time; closes on outside
@@ -1092,25 +1110,6 @@ export class AssetLedgerPageComponent {
     const start = Math.max(0, Math.min(this.rangeStartIndex(), data.markers.length - 1));
     const end = Math.max(start, Math.min(this.rangeEndIndex(), data.markers.length - 1));
     return data.markers.slice(start, end + 1);
-  });
-
-  /**
-   * Terminal blended (total-exposure) net AVCO for the header card (ADR-061). There is no
-   * `data.current` field for it, so we take the last defined `blendedNetAvcoAfterUsd` across the full
-   * markers series (or `null` when the total-exposure basis is undefined everywhere).
-   */
-  readonly blendedNetAvcoCurrent = computed<number | null>(() => {
-    const data = this.assetData();
-    if (data === null) {
-      return null;
-    }
-    for (let index = data.markers.length - 1; index >= 0; index -= 1) {
-      const value = data.markers[index].blendedNetAvcoAfterUsd;
-      if (value !== null && !Number.isNaN(value)) {
-        return value;
-      }
-    }
-    return null;
   });
 
   readonly visibleMarkers = computed(() => {
@@ -1463,16 +1462,10 @@ export class AssetLedgerPageComponent {
   }
 
   /** Flip an AVCO chart-line visibility toggle and re-render the main canvas (presentation-only). */
-  toggleAvcoLine(line: 'balance' | 'blended' | 'market' | 'effective'): void {
+  toggleAvcoLine(line: 'balance' | 'effective'): void {
     switch (line) {
       case 'balance':
         this.showBalanceAvco.update((value) => !value);
-        break;
-      case 'blended':
-        this.showBlendedAvco.update((value) => !value);
-        break;
-      case 'market':
-        this.showMarketAvco.update((value) => !value);
         break;
       case 'effective':
         this.showEffectiveCost.update((value) => !value);
@@ -1718,13 +1711,6 @@ export class AssetLedgerPageComponent {
   ): AvcoHintContent {
     const asset = symbol.trim().length > 0 ? symbol.trim() : 'the asset';
     switch (key) {
-      case 'market':
-        return {
-          title: 'Market AVCO',
-          body: `Average cost per ${asset} for tax/market accounting. Purchases count at the price you paid; non-purchase inflows (rewards, LP fees, cross-asset conversions) count at their market value on arrival.`,
-          footnote:
-            'Example: buy 1 ETH @ $2,000, then receive a 0.1 ETH reward when ETH = $3,000 → ($2,000 + $300) / 1.1 = $2,090/ETH.',
-        };
       case 'balance':
         return {
           title: 'Balance AVCO',
@@ -1732,22 +1718,15 @@ export class AssetLedgerPageComponent {
           footnote:
             'Note: when the liquid pool is nearly empty, a fresh buy snaps this line to the spot price — expected.',
         };
-      case 'blended':
-        return {
-          title: 'Blended AVCO',
-          body: `Net average cost across your TOTAL ${asset} exposure — liquid balance PLUS ${asset} parked in positions (LP / lending / loops), valued at its entry cost until you withdraw. This matches the dashboard token card.`,
-          footnote:
-            'Example: hold 4 ETH @ $2,500 and deposit 3 into an LP → Balance counts only the 1 liquid ETH, while Blended still counts all 4 @ $2,500.',
-        };
       case 'breakeven': {
         const uniqueMembers = [
           ...new Set(familyMemberSymbols.map((member) => member.trim()).filter((member) => member.length > 0)),
         ];
         return {
           title: 'Effective cost',
-          body: `Effective cost per ${asset} after crediting the realized TRADING PROFIT you already took on ${asset} (and on economically-related assets). It never exceeds Market AVCO — only realized profit lowers it; realized losses never raise it. Uses the Market lane, so zero-basis income (rewards, yield, funding) is excluded. Floored at $0 — profit beyond the remaining basis is reported separately as surplus.`,
+          body: `The price you could sell ${asset} at today to recover the real cash you still have tied up, after crediting every fee, reward, interest and LP income already earned across the whole ${asset} family. It starts from the net (real-cash) basis — rewards, airdrops and yield you received and still hold are already credited as free — then banks the realized profit and income you've taken against it (self + economically-related staking-cluster members). Earning yield or banking profit lowers it; a realized loss inside the same cluster can raise it. Floored at $0 — profit beyond the remaining basis is reported separately as surplus.`,
           footnote:
-            'Example: ETH AVCO $3,029, but +$2,540 realized cmETH profit was rotated in → effective cost ≈ $2,364/ETH.',
+            'Example: 2.42 sAVAX with $1.28 of real cash cost (the rest arrived as free staking rewards) → effective cost ≈ $0.53/sAVAX, far below the $11.96 market average cost.',
           members: uniqueMembers.length > 0 ? `Includes: ${uniqueMembers.join(', ')}` : undefined,
         };
       }
@@ -1923,7 +1902,7 @@ export class AssetLedgerPageComponent {
         (wallet) =>
           [
             wallet.address.trim().toLowerCase(),
-            { label: wallet.label, color: wallet.color } satisfies WalletVisualMeta,
+            { label: wallet.label ?? '', color: wallet.color ?? '#808080' } satisfies WalletVisualMeta,
           ] as const
       )
     );
@@ -1961,10 +1940,22 @@ export class AssetLedgerPageComponent {
         netRealisedPnlUsd: ledger.current.netRealisedPnlUsd,
         gasPaidUsd: ledger.current.gasPaidUsd ?? 0,
         breakEvenUsd: ledger.current.breakEvenUsd ?? null,
+        averageCostUsd: ledger.current.averageCostUsd ?? null,
+        coveredRatio: ledger.current.coveredRatio ?? null,
+        breakEvenSuppressed: ledger.current.breakEvenSuppressed ?? false,
         lockedSurplusUsd: ledger.current.lockedSurplusUsd ?? 0,
         incomeReceivedUsd: ledger.current.incomeReceivedUsd ?? 0,
         attributionTargetFamily: ledger.current.attributionTargetFamily ?? null,
         familyMemberSymbols: ledger.current.familyMemberSymbols ?? [],
+        details:
+          ledger.current.details == null
+            ? null
+            : {
+                balanceAvcoUsd: ledger.current.details.balanceAvcoUsd ?? null,
+                balanceNetAvcoUsd: ledger.current.details.balanceNetAvcoUsd ?? null,
+                blendedAvcoUsd: ledger.current.details.blendedAvcoUsd ?? null,
+                blendedNetAvcoUsd: ledger.current.details.blendedNetAvcoUsd ?? null,
+              },
       },
       legendItems,
       markers,
@@ -2050,6 +2041,10 @@ export class AssetLedgerPageComponent {
         liquidQuantityAfter: entry.liquidQuantityAfter ?? entry.quantityAfter ?? null,
         blendedAvcoKind: entry.blendedAvcoKind ?? null,
         effectiveCostAfterUsd: entry.effectiveCostAfterUsd ?? null,
+        subjectUnitPriceUsd: entry.subjectUnitPriceUsd ?? null,
+        // ADR-062 Wave 3 (AC-12 / D9): prefer the subject asset's own price for the point tooltip,
+        // falling back to the resolved quote-leg price when the backend did not supply one.
+        displayUnitPriceUsd: entry.subjectUnitPriceUsd ?? displayQuote.unitPriceUsd,
         realisedPnlDeltaUsd: entry.realisedPnlDeltaUsd,
         gasDeltaUsd: entry.gasDeltaUsd,
         basisEffects: entry.basisEffects,
@@ -2273,6 +2268,8 @@ export class AssetLedgerPageComponent {
       amountUsd: displayLeg.amountUsd,
       priceUsd: displayLeg.priceUsd,
       priceSource: displayLeg.priceSource,
+      subjectUnitPriceUsd: displayLeg.subjectUnitPriceUsd,
+      displayUnitPriceUsd: displayLeg.displayUnitPriceUsd,
       avcoAfterUsd: last.avcoAfterUsd,
       avcoBeforeUsd: first.avcoBeforeUsd,
       netAvcoAfterUsd: last.netAvcoAfterUsd,
@@ -2433,25 +2430,6 @@ export class AssetLedgerPageComponent {
     ctx.lineCap = 'butt';
     return segments;
   }
-
-  /**
-   * pool≈0 "drained-but-parked" predicate (RC-E3 / ADR-061): the liquid pool is empty
-   * (`liquidQuantityAfter < ε`) yet ETH-origin basis remains parked in receipt corridors
-   * (`blendedCoveredQuantityAfter >= ε`). This is the expected state where a fresh buy snaps the
-   * liquid line to spot; it drives the chart pool≈0 marker and the marker tooltip note.
-   */
-  isPoolNearZeroDrainedButParked(marker: MarkerView): boolean {
-    return (
-      marker.liquidQuantityAfter !== null &&
-      marker.liquidQuantityAfter < POOL_EPSILON_ETH &&
-      marker.blendedCoveredQuantityAfter !== null &&
-      marker.blendedCoveredQuantityAfter >= POOL_EPSILON_ETH
-    );
-  }
-
-  /** Marker tooltip copy shown at pool≈0 drained-but-parked events (RC-E3 / ADR-061). */
-  readonly poolNearZeroNote =
-    'Balance ETH ≈ 0 — basis parked in LP/lending; a fresh buy snaps the balance line to spot — expected.';
 
   private strokeAvcoSegments(
     ctx: CanvasRenderingContext2D,
@@ -3432,10 +3410,7 @@ export class AssetLedgerPageComponent {
     const innerHeight = cssHeight - pad.top - pad.bottom;
     const values = [
       ...windowMarkers.map((marker) => marker.priceUsd).filter((value): value is number => value !== null),
-      ...windowMarkers.map((marker) => marker.avcoAfterUsd).filter((value): value is number => value !== null),
       ...windowMarkers.map((marker) => marker.netAvcoAfterUsd).filter((value): value is number => value !== null),
-      ...windowMarkers.map((marker) => marker.blendedNetAvcoAfterUsd).filter((value): value is number => value !== null),
-      ...windowMarkers.map((marker) => marker.blendedAvcoAfterUsd).filter((value): value is number => value !== null),
       ...windowMarkers.map((marker) => marker.effectiveCostAfterUsd).filter((value): value is number => value !== null),
     ];
     const minValue = values.length === 0 ? 0 : Math.min(...values) * 0.85;
@@ -3470,32 +3445,15 @@ export class AssetLedgerPageComponent {
       ctx.fillText(`$${Math.round(value)}`, pad.left - 6, y + 3);
     }
 
-    // ADR-045 / ADR-061: three AVCO series through one shared helper. Each line has a distinct dash
-    // pattern (a11y — distinguishable without hue) and its own per-line break semantics:
-    //  - Market/Tax (dashed white) and Liquid-pool (solid cyan) break where the value is null
-    //    (family drained, ADR-031) — never a point at $0, never connected across the gap.
-    //  - Blended total-exposure (dotted amber) breaks only where the total ETH-origin covered
-    //    quantity drains to ~0 (blendedCoveredQuantityAfter <= POOL_EPSILON_ETH), per ADR-061.
-    // Draw order keeps the existing two lines pixel-identical: the NEW blended line is stroked FIRST
-    // (bottom), then Market/Tax, then the solid cyan Liquid-pool line last — so both existing lines
-    // sit on top of the blended line and their pixels are unchanged.
+    // Per product decision the move-basis chart shows exactly two AVCO series through the shared
+    // helper — Effective cost and Balance AVCO. Each line has a distinct dash pattern (a11y —
+    // distinguishable without hue) and breaks where its value is null (family drained, ADR-031) —
+    // never a point at $0, never connected across the gap. Effective cost is stroked first so the
+    // solid cyan Balance line sits on top.
 
-    // Blended (total-exposure) AVCO — NEW: amber, dotted round pattern; breaks only at pool≈0.
-    if (this.showBlendedAvco()) {
-      this.renderAvcoSeries(ctx, windowMarkers, projectX, projectY, {
-        selector: (marker) => marker.blendedNetAvcoAfterUsd,
-        stroke: 'rgba(245,158,11,.9)',
-        lineWidth: 1.75,
-        dash: [1, 5],
-        lineCap: 'round',
-        breakSelector: (marker) =>
-          marker.blendedCoveredQuantityAfter === null || marker.blendedCoveredQuantityAfter <= POOL_EPSILON_ETH,
-      });
-    }
-
-    // Effective cost (break-even) — ADR-062: emerald green, dash-dot pattern (distinct from
-    // Market/Balance/Blended without relying on hue). Breaks where the value is null (covered qty
-    // drained), like the Market/Balance lines. Drawn before Market/Balance so those stay on top.
+    // Effective cost (break-even) — ADR-062: emerald green, dash-dot pattern (distinct from Balance
+    // without relying on hue). Breaks where the value is null (covered qty drained). Drawn before
+    // Balance so that line stays on top.
     if (this.showEffectiveCost()) {
       this.renderAvcoSeries(ctx, windowMarkers, projectX, projectY, {
         selector: (marker) => marker.effectiveCostAfterUsd,
@@ -3503,16 +3461,6 @@ export class AssetLedgerPageComponent {
         lineWidth: 1.6,
         dash: [6, 3, 1, 3],
         lineCap: 'round',
-      });
-    }
-
-    // Market / Tax AVCO — existing dashed white, unchanged.
-    if (this.showMarketAvco()) {
-      this.renderAvcoSeries(ctx, windowMarkers, projectX, projectY, {
-        selector: (marker) => marker.avcoAfterUsd,
-        stroke: 'rgba(255,255,255,.28)',
-        lineWidth: 1.25,
-        dash: [5, 4],
       });
     }
 
@@ -3551,32 +3499,6 @@ export class AssetLedgerPageComponent {
         ctx.fill();
       });
     }
-
-    // pool≈0 markers (RC-E3 / ADR-061): the liquid ETH pool is drained (liquidQuantityAfter < ε) but
-    // ETH-origin basis is still parked in LP/lending (blendedCoveredQuantityAfter >= ε). A small hollow
-    // ring on the blended line + a baseline tick flag the "drained-but-parked" event where the liquid
-    // line breaks yet the blended line stays defined. Accessible via the marker tooltip copy.
-    windowMarkers.forEach((marker, index) => {
-      if (!this.isPoolNearZeroDrainedButParked(marker)) {
-        return;
-      }
-      const x = projectX(index);
-      const ringY =
-        marker.blendedNetAvcoAfterUsd !== null ? projectY(marker.blendedNetAvcoAfterUsd) : baselineY - 6;
-      ctx.save();
-      ctx.strokeStyle = 'rgba(245,158,11,.9)';
-      ctx.fillStyle = 'transparent';
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([]);
-      ctx.beginPath();
-      ctx.arc(x, ringY, 3.5, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(x, baselineY - 4);
-      ctx.lineTo(x, baselineY + 4);
-      ctx.stroke();
-      ctx.restore();
-    });
 
     const primaryAvcoAfter = (marker: MarkerView): number | null => marker.netAvcoAfterUsd ?? marker.avcoAfterUsd;
     const layoutById = new Map(

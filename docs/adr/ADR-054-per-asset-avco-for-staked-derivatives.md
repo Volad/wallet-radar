@@ -2,9 +2,10 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Accepted |
+| **Status** | Accepted (amended 2026-07-24 — **§2 realize-at-market superseded for intra-cluster conversions by ADR-083 cluster-carry**; §2 still governs cluster↔non-cluster and cross-cluster moves) |
 | **Date** | 2026-07-13 |
 | **Theme** | Cost basis / asset identity / replay / pricing / read model |
+| **Amended by** | ADR-082 (§2 NET-lane re-base for realizing distinct-canonical swaps), ADR-083 (§2 intra-cluster conversions now carry basis both lanes with PnL=0 via the `CLUSTER_CARRY` route — realize kept only for cluster↔non-cluster / cross-cluster) |
 | **Supersedes** | ADR-017 staked-ETH inclusion clause (value-accruing LST/LRT no longer share the ETH spot-family series) |
 | **Amends** | ADR-040 (Tax→Market lane naming), ADR-045 (family membership — C2 excluded), ADR-031 (replay-time fail-closed) |
 | **Clarifies** | ADR-019 / ADR-029 / ADR-043 (corridor carry gated on canonical-token identity) |
@@ -75,6 +76,14 @@ value-accruing yield-vault share of ETH.
 
 ### 2. Conversion accounting — realize P&L at market (no new replay handler)
 
+> **Amended by ADR-083 (2026-07-24, cluster-carry).** The realize-at-market rule below is **superseded
+> for intra-cluster cross-canonical conversions** — a move where *both* legs belong to the same staking
+> cluster (`CLUSTER:ETH_STAKING` ETH/mETH/cmETH/wstETH/weETH/PT-*, `CLUSTER:AVAX_STAKING` AVAX/sAVAX,
+> `CLUSTER:SOL_STAKING` SOL/mSOL/bbSOL, yvVBETH↔vBETH) now routes to the `CLUSTER_CARRY` path and
+> **carries basis on both lanes with realized PnL = 0**, superseding both this §2 realize rule and the
+> ADR-082/FB-01 net-lane re-base for that case. The realize-at-market rule below **still governs**
+> cluster↔non-cluster exits (to USDT/USDC/DAI/BTC/fiat) and cross-cluster moves. See ADR-083.
+
 A move is **basis-carry** (REALLOCATE, no P&L) **iff both legs share the same canonical-token identity**
 (C1↔C1 in the same family, or the **same token** moved across chains / custody locations incl. corridors
 and bridges). **Otherwise it is a disposal + acquisition at each leg's pre-resolved market price**
@@ -95,6 +104,17 @@ released by the C1 disposal, using the same `swapNetRef` carry mechanism as SWAP
 (ADR-040 Bug B). The inherited net basis is capped at the C2 market basis
 (`min(inherited, market)`) to preserve the global `Net AVCO ≤ Market AVCO` invariant. Only the
 Market lane receives fresh market price.
+
+> **Amended by ADR-082 (2026-07-24, FB-01).** The unconditional `min(inherited, market)` net-basis
+> carry above recycles the pre-loop net basis onto a freshly-priced acquisition whenever the disposal
+> **realized-and-kept** its NET P&L on a lot with **no reward discount** (net ≈ market). This
+> double-counts the same appreciation across a same-asset round-trip through a distinct instrument
+> (cmETH↔PT-cmETH). ADR-082 narrows this clause: for a **realizing** distinct-canonical conversion
+> whose NET realized was kept and whose disposed lot carried no reward discount, the C2 acquisition
+> **re-bases the Net lane to the market acquisition cost** (`net = market`) — the discount is realized
+> once at the conversion, never recycled. The `min(inherited, market)` carry is preserved for genuine
+> reward discounts (`net ≪ market`), unpriced disposals, and deferred/pool carries (`net-realized
+> undone`). See ADR-082.
 
 ### 3. Same-token custody carry (both classes)
 
@@ -144,6 +164,14 @@ to a base-asset market symbol / `isPeggedNative`, plus a positive test that a `W
 wstETH's own market (≠ ETH where they diverge). Fail-closed (§9) remains the guard for genuinely unlisted
 future tokens.
 
+> **Note (2026-07-23, ADR-062 Wave 3):** The **acquisition-leg** market price of a C2 stake (e.g. the
+> `ETH→mETH`/`cmETH` acquisition price under §2) is **load-bearing beyond replay**: it seeds the C2's
+> Market-lane basis, which ADR-062's break-even metric folds/attributes back into `FAMILY:ETH` effective
+> cost, and its live staking rate drives ADR-062's **ETH-equivalent (rate-adjusted) denominator (AC-7)**.
+> A missing acquisition-leg price or staking rate must **fail closed** (§9 / ADR-062 AC-7 — `null` metric),
+> never a silent 1:1 carry, or the ETH break-even/average-cost silently drifts. This note documents a
+> downstream dependency only; the §2 conversion-accounting boundary is **unchanged**.
+
 ### 7. Lane naming — Tax → Market
 
 The ADR-040 dual lane is retained; the gross/tax lane is renamed **Market** everywhere (labels, enums,
@@ -163,6 +191,11 @@ A C2 conversion with no obtainable market price → explicit `AVCO undefined` (A
 replay-time) + flag; **never** a silent 1:1 carry. A fail-closed disposal must **flag + defer**, never
 silently strand basis; the conservation gate accounts for fail-closed events so a deferred/unpriced C2 leg
 surfaces as a flagged imbalance rather than a masked loss/gain.
+
+> **Note (2026-07-23, ADR-062 Wave 3):** the fail-closed contract extends to the **read-model break-even
+> denominator**. ADR-062 AC-7 divides staked-derivative held units by their live staking rate; if that rate
+> is unavailable the break-even/average-cost is emitted as `null` (metric fails closed) rather than counting
+> the derivative 1:1 against ETH. This mirrors §9's "never a silent 1:1 carry" at presentation time.
 
 ## Consequences
 

@@ -11,6 +11,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionReposi
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionSource;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -25,11 +26,27 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class AvcoReplayServiceTest {
+
+    @BeforeAll
+    static void bindNetworkNativeAssets() {
+        // Deterministically bind the NetworkNativeAssets / NetworkStablecoinContracts static bridges
+        // from the authoritative network-descriptors.yml (same convention as
+        // AccountingAssetIdentitySupportTest). In production NetworkRegistry binds these at startup,
+        // so a native asset with no ERC-20 contract (e.g. GMX's native-ETH execution-fee reserve)
+        // resolves to its NATIVE:<network> identity. Without this bind the static bridge returns
+        // empty defaults, a bare "ETH" leg collapses to SYMBOL:ETH, and the GMX execution-fee-reserve
+        // detection (which keys on the NATIVE: identity) silently fails — routing the request through
+        // the generic async lifecycle path instead, where the uncovered reserve residual lands in the
+        // principal bucket and blocks share-settlement principal allocation. Binding here removes that
+        // flaky cross-test static-state dependency and mirrors the production wiring.
+        com.walletradar.testsupport.NetworkTestFixtures.registry();
+    }
 
     @Mock
     private NormalizedTransactionRepository normalizedTransactionRepository;
@@ -1209,6 +1226,183 @@ class AvcoReplayServiceTest {
         assertThat(eth.getTotalCostBasisAfterUsd()).isZero();
         assertThat(eth.getUncoveredQuantityAfter()).isEqualByComparingTo("0.0000528338469792");
         assertThat(eth.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.REALLOCATE_IN);
+    }
+
+    @Test
+    void gmxGlvEntrySettlementMintsReceiptCarryingContributedNetBasisNotTax() {
+        // M2 (ADR-040 net-carry conservation): a GMX GLV mint must mint the GLV receipt carrying the
+        // SUM of the contributed assets' Net (reward-discounted) basis — NOT re-seed net = tax.
+        //
+        // Regression anchor (evidence only, never a runtime key): correlation
+        // gmx-lp:arbitrum:glv-weth-usdc, where reward-discounted ETH was contributed at net ≪ tax
+        // yet the GLV receipt was minted at net = tax = $47.23, fabricating +$21.51 of net basis.
+        //
+        // Synthetic reproduction: a reward-discounted principal token (ZRO: avco $2 / netAvco $1) is
+        // contributed alongside a native-ETH execution-fee reserve (net = tax), then a GLV receipt is
+        // minted. Pre-fix the receipt netTotalCostBasis == tax ($22); post-fix it equals Σ contributed
+        // net ($12), preserving the reward discount with net ≤ tax and zero net fabrication.
+
+        // 10 ZRO bought at $2 (tax = net = $20).
+        NormalizedTransaction zroBuy = tx("1", "0xzro-buy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flowWithContract(NormalizedLegRole.BUY, "ZRO", "0xzro", "10", "2", PriceSource.BINANCE));
+        zroBuy.setWalletAddress("wallet-a");
+        zroBuy.setNetworkId(NetworkId.ARBITRUM);
+
+        // 10 ZRO claimed as a reward at $2 FMV (tax $20, net $0). Blended position: 20 ZRO,
+        // tax $40 (avco $2), net $20 (netAvco $1) — a genuine reward discount.
+        NormalizedTransaction zroReward = tx("2", "0xzro-reward", 1, NormalizedTransactionType.REWARD_CLAIM,
+                flowWithContract(NormalizedLegRole.BUY, "ZRO", "0xzro", "10", "2", PriceSource.BINANCE));
+        zroReward.setWalletAddress("wallet-a");
+        zroReward.setNetworkId(NetworkId.ARBITRUM);
+
+        // Native ETH for the execution-fee reserve (tax = net = $2; no reward discount).
+        NormalizedTransaction ethBuy = tx("3", "0xeth-buy", 2, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "ETH", "0.001", "2000", PriceSource.BINANCE));
+        ethBuy.setWalletAddress("wallet-a");
+        ethBuy.setNetworkId(NetworkId.ARBITRUM);
+
+        // GLV deposit request: contribute 10 ZRO principal (reward-discounted) + 0.001 native ETH as
+        // the execution-fee reserve, correlated to the async GLV lifecycle bucket.
+        NormalizedTransaction request = tx("4", "0xglv-request", 3, NormalizedTransactionType.LP_ENTRY_REQUEST,
+                flowWithContract(NormalizedLegRole.TRANSFER, "ZRO", "0xzro", "-10", null, null),
+                flow(NormalizedLegRole.TRANSFER, "ETH", "-0.001", null, null));
+        request.setWalletAddress("wallet-a");
+        request.setNetworkId(NetworkId.ARBITRUM);
+        request.setProtocolName("GMX");
+        request.setCorrelationId("gmx-lp:arbitrum:glv-weth-usdc");
+
+        // GLV deposit settlement: keeper mints the GLV receipt token to the wallet.
+        NormalizedTransaction settlement = tx("5", "0xglv-settlement", 4, NormalizedTransactionType.LP_ENTRY_SETTLEMENT,
+                flowWithContract(
+                        NormalizedLegRole.TRANSFER,
+                        "GLV [WETH-USDC]",
+                        "0xglv",
+                        "40",
+                        null,
+                        null
+                ));
+        settlement.setWalletAddress("wallet-a");
+        settlement.setNetworkId(NetworkId.ARBITRUM);
+        settlement.setProtocolName("GMX");
+        settlement.setCorrelationId("gmx-lp:arbitrum:glv-weth-usdc");
+
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(zroBuy, zroReward, ethBuy, request, settlement));
+
+        service().replayConfirmed();
+
+        List<AssetLedgerPoint> points = capturedLedgerPoints();
+        AssetLedgerPoint glv = latestPoint(points, "wallet-a", NetworkId.ARBITRUM, "GLV [WETH-USDC]", "0xglv");
+
+        // Tax lane conserved: Σ contributed tax = ZRO $20 + ETH-reserve $2 = $22.
+        assertThat(glv.getQuantityAfter()).isEqualByComparingTo("40");
+        assertThat(glv.getTotalCostBasisAfterUsd()).isEqualByComparingTo("22");
+        assertThat(glv.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.REALLOCATE_IN);
+
+        // Net lane conserved (the fix): Σ contributed net = ZRO $10 + ETH-reserve $2 = $12,
+        // NOT re-seeded to the $22 tax basis. This eliminates the +$10 net fabrication.
+        assertThat(glv.getNetTotalCostBasisAfterUsd()).isEqualByComparingTo("12");
+        // ADR-040 global gate: net ≤ tax on the minted receipt.
+        assertThat(glv.getNetTotalCostBasisAfterUsd())
+                .isLessThanOrEqualTo(glv.getTotalCostBasisAfterUsd());
+    }
+
+    @Test
+    void asyncLpExitSettlementCarriesReceiptNetBasisBackToCrossAssetReturns() {
+        // M2 follow-up (ADR-040 net-carry conservation, EXIT side): an async GLV/GM redeem that
+        // returns CROSS-asset legs (GLV -> ETH + USDC) must carry the receipt's Σ net
+        // (reward-discounted) basis back onto the returned assets, split by the same value weights as
+        // the tax lane — NEVER re-seed net = tax. This is the exit-side peer of the GLV/GM mint fix.
+        //
+        // Pre-fix: the returned ETH+USDC were restored via the tax-only path (net = tax), fabricating
+        // net basis on redeem (mirror of the mint-side +$21.51). Post-fix: Σ returned net == receipt
+        // net (conserved), each leg has net ≤ tax, and the USD-stablecoin (USDC) leg is NOT re-inflated
+        // back to peg on the net lane.
+
+        // --- Build a reward-discounted GLV receipt end-to-end (same shape as the mint test). ---
+        NormalizedTransaction zroBuy = tx("1", "0xzro-buy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flowWithContract(NormalizedLegRole.BUY, "ZRO", "0xzro", "10", "2", PriceSource.BINANCE));
+        zroBuy.setWalletAddress("wallet-a");
+        zroBuy.setNetworkId(NetworkId.ARBITRUM);
+
+        NormalizedTransaction zroReward = tx("2", "0xzro-reward", 1, NormalizedTransactionType.REWARD_CLAIM,
+                flowWithContract(NormalizedLegRole.BUY, "ZRO", "0xzro", "10", "2", PriceSource.BINANCE));
+        zroReward.setWalletAddress("wallet-a");
+        zroReward.setNetworkId(NetworkId.ARBITRUM);
+
+        NormalizedTransaction ethBuy = tx("3", "0xeth-buy", 2, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "ETH", "0.001", "2000", PriceSource.BINANCE));
+        ethBuy.setWalletAddress("wallet-a");
+        ethBuy.setNetworkId(NetworkId.ARBITRUM);
+
+        NormalizedTransaction entryRequest = tx("4", "0xglv-request", 3, NormalizedTransactionType.LP_ENTRY_REQUEST,
+                flowWithContract(NormalizedLegRole.TRANSFER, "ZRO", "0xzro", "-10", null, null),
+                flow(NormalizedLegRole.TRANSFER, "ETH", "-0.001", null, null));
+        entryRequest.setWalletAddress("wallet-a");
+        entryRequest.setNetworkId(NetworkId.ARBITRUM);
+        entryRequest.setProtocolName("GMX");
+        entryRequest.setCorrelationId("gmx-lp:arbitrum:glv-weth-usdc");
+
+        NormalizedTransaction entrySettlement = tx("5", "0xglv-settlement", 4, NormalizedTransactionType.LP_ENTRY_SETTLEMENT,
+                flowWithContract(NormalizedLegRole.TRANSFER, "GLV [WETH-USDC]", "0xglv", "40", null, null));
+        entrySettlement.setWalletAddress("wallet-a");
+        entrySettlement.setNetworkId(NetworkId.ARBITRUM);
+        entrySettlement.setProtocolName("GMX");
+        entrySettlement.setCorrelationId("gmx-lp:arbitrum:glv-weth-usdc");
+        // Receipt now carries tax $22 / net $12 (reward discount preserved by the mint fix).
+
+        // --- Redeem: send the GLV receipt, receive ETH + USDC (cross-asset). ---
+        NormalizedTransaction exitRequest = tx("6", "0xglv-exit-request", 5, NormalizedTransactionType.LP_EXIT_REQUEST,
+                flowWithContract(NormalizedLegRole.TRANSFER, "GLV [WETH-USDC]", "0xglv", "-40", null, null));
+        exitRequest.setWalletAddress("wallet-a");
+        exitRequest.setNetworkId(NetworkId.ARBITRUM);
+        exitRequest.setProtocolName("GMX");
+        exitRequest.setCorrelationId("gmx-lp:arbitrum:glv-weth-usdc-exit");
+
+        // Keeper returns 0.0055 ETH (value $11) + 11 USDC (value $11). Cross-asset known-value split
+        // is 50/50: tax $11 each; net $6 each (Σ net = $12 = receipt net).
+        NormalizedTransaction exitSettlement = tx("7", "0xglv-exit-settlement", 6, NormalizedTransactionType.LP_EXIT_SETTLEMENT,
+                flow(NormalizedLegRole.TRANSFER, "ETH", "0.0055", "2000", PriceSource.BINANCE),
+                flowWithContract(NormalizedLegRole.TRANSFER, "USDC", "0xusdc", "11", "1", PriceSource.BINANCE));
+        exitSettlement.setWalletAddress("wallet-a");
+        exitSettlement.setNetworkId(NetworkId.ARBITRUM);
+        exitSettlement.setProtocolName("GMX");
+        exitSettlement.setCorrelationId("gmx-lp:arbitrum:glv-weth-usdc-exit");
+
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(zroBuy, zroReward, ethBuy, entryRequest, entrySettlement, exitRequest, exitSettlement));
+
+        service().replayConfirmed();
+
+        List<AssetLedgerPoint> points = capturedLedgerPoints();
+        AssetLedgerPoint eth = latestPoint(points, "wallet-a", NetworkId.ARBITRUM, "ETH", null);
+        AssetLedgerPoint usdc = latestPoint(points, "wallet-a", NetworkId.ARBITRUM, "USDC", "0xusdc");
+
+        // Tax lane conserved on redeem: $22 receipt tax split 50/50 by value.
+        assertThat(eth.getQuantityAfter()).isEqualByComparingTo("0.0055");
+        assertThat(eth.getTotalCostBasisAfterUsd()).isEqualByComparingTo("11");
+        assertThat(eth.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.REALLOCATE_IN);
+        assertThat(usdc.getQuantityAfter()).isEqualByComparingTo("11");
+        assertThat(usdc.getTotalCostBasisAfterUsd()).isEqualByComparingTo("11");
+        assertThat(usdc.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.REALLOCATE_IN);
+
+        // Net lane carried back (the fix): each leg gets its net share ($6), NOT re-seeded to tax ($11).
+        assertThat(eth.getNetTotalCostBasisAfterUsd()).isEqualByComparingTo("6");
+        assertThat(usdc.getNetTotalCostBasisAfterUsd()).isEqualByComparingTo("6");
+
+        // ADR-040 global gate: net ≤ tax per returned leg.
+        assertThat(eth.getNetTotalCostBasisAfterUsd()).isLessThanOrEqualTo(eth.getTotalCostBasisAfterUsd());
+        assertThat(usdc.getNetTotalCostBasisAfterUsd()).isLessThanOrEqualTo(usdc.getTotalCostBasisAfterUsd());
+
+        // USD-stablecoin net NOT floored back to peg (D3 discipline): $6 net on 11 USDC is $0.545/unit,
+        // materially below $1 — a peg-floored net lane would have re-fabricated it up to $11.
+        assertThat(usdc.getNetTotalCostBasisAfterUsd()).isLessThan(usdc.getTotalCostBasisAfterUsd());
+
+        // Conservation: Σ returned net == receipt net ($12), no fabrication / destruction on redeem.
+        assertThat(eth.getNetTotalCostBasisAfterUsd().add(usdc.getNetTotalCostBasisAfterUsd()))
+                .isEqualByComparingTo("12");
     }
 
     @Test
@@ -2610,7 +2804,10 @@ class AvcoReplayServiceTest {
     }
 
     @Test
-    void c1ToC2StakingDepositRealizesPnlAtMarketInsteadOfOneToOneCarry() {
+    void c1ToC2StakingDepositCarriesBasisWithZeroRealizedPnl() {
+        // ADR-083: ETH → mETH is an intra-cluster (CLUSTER:ETH_STAKING) conversion — it carries basis
+        // (REALLOCATE_OUT/IN, PnL=0), superseding the former realize-at-market behavior. mETH inherits
+        // the disposed ETH basis ($1000), NOT a fresh market basis.
         NormalizedTransaction buy = tx("1", "0xbuy", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
                 flow(NormalizedLegRole.BUY, "ETH", "1", "1000", PriceSource.BINANCE));
         buy.setWalletAddress("wallet-a");
@@ -2635,10 +2832,10 @@ class AvcoReplayServiceTest {
         AssetLedgerPoint eth = latestPoint(points, "wallet-a", NetworkId.BASE, "ETH", null);
         AssetLedgerPoint meth = latestPoint(points, "wallet-a", NetworkId.BASE, "METH", null);
         assertThat(eth.getQuantityAfter()).isZero();
-        assertThat(eth.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.DISPOSE);
+        assertThat(eth.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.REALLOCATE_OUT);
         assertThat(meth.getQuantityAfter()).isEqualByComparingTo("0.95");
-        assertThat(meth.getTotalCostBasisAfterUsd()).isEqualByComparingTo("2945");
-        assertThat(meth.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.ACQUIRE);
+        assertThat(meth.getTotalCostBasisAfterUsd()).isEqualByComparingTo("1000");
+        assertThat(meth.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.REALLOCATE_IN);
 
         ArgumentCaptor<List<NormalizedTransaction>> txCaptor = ArgumentCaptor.forClass(List.class);
         verify(normalizedTransactionRepository).saveAll(txCaptor.capture());
@@ -2646,11 +2843,14 @@ class AvcoReplayServiceTest {
                 .filter(tx -> "2".equals(tx.getId()))
                 .findFirst()
                 .orElseThrow();
-        assertThat(replayedStake.getFlows().getFirst().getRealisedPnlUsd()).isEqualByComparingTo("2000");
+        // PnL=0 → carried legs carry no realized PnL.
+        assertThat(replayedStake.getFlows().getFirst().getRealisedPnlUsd()).isNull();
     }
 
     @Test
-    void avaxToSavaxStakingDepositRealizesPnlAgainstSourceAvco() {
+    void avaxToSavaxStakingDepositCarriesSourceBasis() {
+        // ADR-083: AVAX → sAVAX is intra-cluster (CLUSTER:AVAX_STAKING) — sAVAX inherits the disposed
+        // AVAX basis ($5 = 0.5 @ $10), NOT a fresh market basis.
         NormalizedTransaction coveredBuy = tx("1", "0xavax-covered", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
                 flow(NormalizedLegRole.BUY, "AVAX", "0.5", "10", PriceSource.BINANCE));
         coveredBuy.setWalletAddress("wallet-a");
@@ -2676,12 +2876,14 @@ class AvcoReplayServiceTest {
         List<AssetLedgerPoint> points = capturedLedgerPoints();
         AssetLedgerPoint derivative = latestPoint(points, "wallet-a", NetworkId.AVALANCHE, "sAVAX", null);
         assertThat(derivative.getQuantityAfter()).isEqualByComparingTo("0.4");
-        assertThat(derivative.getTotalCostBasisAfterUsd()).isEqualByComparingTo("6");
-        assertThat(derivative.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.ACQUIRE);
+        assertThat(derivative.getTotalCostBasisAfterUsd()).isEqualByComparingTo("5");
+        assertThat(derivative.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.REALLOCATE_IN);
     }
 
     @Test
-    void c2ToC1VaultWithdrawRealizesPnlInsteadOfFamilyEquivalentCarry() {
+    void c2ToC1VaultWithdrawCarriesBasisWithZeroRealizedPnl() {
+        // ADR-083: yvVBETH (FAMILY:YVVBETH) → vBETH (FAMILY:ETH) are both in CLUSTER:ETH_STAKING, so
+        // the vault withdraw carries basis (REALLOCATE_OUT/IN, PnL=0) instead of realizing.
         NormalizedTransaction buy = tx("1", "0xbuy-yvvbeth", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
                 flow(NormalizedLegRole.BUY, "YVVBETH", "0.435428171459772105", "2809.177530660769159772942625393432", PriceSource.BINANCE));
         buy.setWalletAddress("wallet-a");
@@ -2708,11 +2910,60 @@ class AvcoReplayServiceTest {
         AssetLedgerPoint yvvbeth = latestPoint(points, "wallet-a", NetworkId.KATANA, "YVVBETH", null);
         AssetLedgerPoint vbeth = latestPoint(points, "wallet-a", NetworkId.KATANA, "VBETH", null);
         assertThat(yvvbeth.getQuantityAfter()).isZero();
-        assertThat(yvvbeth.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.DISPOSE);
+        assertThat(yvvbeth.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.REALLOCATE_OUT);
         assertThat(vbeth.getQuantityAfter()).isEqualByComparingTo("0.438269104813635143");
-        assertThat(vbeth.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.ACQUIRE);
+        assertThat(vbeth.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.REALLOCATE_IN);
+        // Basis conservation: the full disposed yvVBETH basis carries onto vBETH (PnL=0).
         assertThat(vbeth.getTotalCostBasisAfterUsd())
-                .isEqualByComparingTo(vbeth.getQuantityAfter().multiply(new BigDecimal("2790")));
+                .isCloseTo(yvvbeth.getTotalCostBasisBeforeUsd(), within(new BigDecimal("0.0001")));
+    }
+
+    @Test
+    void c2ToC1VaultWithdrawCarriesBasisIgnoringStaleAndLiveInboundPrices() {
+        // ADR-083 supersedes the ADR-054 realize-from-inbound-FMV addendum for intra-cluster
+        // conversions: yvVBETH → vBETH now CARRIES basis regardless of the outbound stale price or the
+        // inbound live FMV. Realized PnL = 0; the disposed yvVBETH basis carries onto vBETH.
+        NormalizedTransaction buy = tx("1", "0xbuy-yvvbeth-fmv", 0, NormalizedTransactionType.EXTERNAL_TRANSFER_IN,
+                flow(NormalizedLegRole.BUY, "YVVBETH", "0.435428171459772105",
+                        "2808.74153341957057890670143788192629663021964911744193352366", PriceSource.BINANCE));
+        buy.setWalletAddress("wallet-a");
+        buy.setNetworkId(NetworkId.KATANA);
+
+        NormalizedTransaction unwrap = tx(
+                "2",
+                "0xvault-withdraw-fmv",
+                1,
+                NormalizedTransactionType.VAULT_WITHDRAW,
+                flow(NormalizedLegRole.TRANSFER, "YVVBETH", "-0.435428171459772105", "2798", PriceSource.BINANCE),
+                flow(NormalizedLegRole.TRANSFER, "VBETH", "0.438269104813635143",
+                        "2449.07000792679781024096266236578583862108865626575312583188", PriceSource.BINANCE)
+        );
+        unwrap.setWalletAddress("wallet-a");
+        unwrap.setNetworkId(NetworkId.KATANA);
+
+        when(normalizedTransactionRepository.findAllActiveAccountingByStatusOrderByBlockTimestampAscTransactionIndexAscIdAsc(
+                NormalizedTransactionStatus.CONFIRMED
+        )).thenReturn(List.of(buy, unwrap));
+
+        service().replayConfirmed();
+
+        List<AssetLedgerPoint> points = capturedLedgerPoints();
+        AssetLedgerPoint yvvbeth = latestPoint(points, "wallet-a", NetworkId.KATANA, "YVVBETH", null);
+        AssetLedgerPoint vbeth = latestPoint(points, "wallet-a", NetworkId.KATANA, "VBETH", null);
+
+        BigDecimal tolerance = new BigDecimal("0.0001");
+
+        // Carried, not realized: PnL = 0 both lanes.
+        assertThat(yvvbeth.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.REALLOCATE_OUT);
+        assertThat(yvvbeth.getQuantityAfter()).isZero();
+        assertThat(yvvbeth.getRealisedPnlDeltaUsd()).isCloseTo(BigDecimal.ZERO, within(tolerance));
+        assertThat(yvvbeth.getNetRealisedPnlDeltaUsd()).isCloseTo(BigDecimal.ZERO, within(tolerance));
+
+        // vBETH inherits the disposed yvVBETH basis (conservation), independent of inbound FMV.
+        assertThat(vbeth.getBasisEffect()).isEqualTo(AssetLedgerPoint.BasisEffect.REALLOCATE_IN);
+        assertThat(vbeth.getQuantityAfter()).isEqualByComparingTo("0.438269104813635143");
+        assertThat(vbeth.getTotalCostBasisAfterUsd())
+                .isCloseTo(yvvbeth.getTotalCostBasisBeforeUsd(), within(tolerance));
     }
 
     // ── B-VAULT-WITHDRAW Bug A: wrapper bucket denomination mismatch ──────────────────────────
@@ -3606,8 +3857,7 @@ class AvcoReplayServiceTest {
         com.walletradar.application.costbasis.application.replay.handler.GmxLpEntryReplayHandler gmxLpEntryReplayHandler =
                 new com.walletradar.application.costbasis.application.replay.handler.GmxLpEntryReplayHandler(
                         assetSupport,
-                        replayFlowSupport,
-                        settlementAllocator
+                        replayFlowSupport
                 );
         com.walletradar.application.costbasis.domain.LpReceiptBasisPoolRepository lpReceiptBasisPoolRepository =
                 org.mockito.Mockito.mock(com.walletradar.application.costbasis.domain.LpReceiptBasisPoolRepository.class);

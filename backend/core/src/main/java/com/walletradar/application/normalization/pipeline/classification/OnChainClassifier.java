@@ -26,12 +26,14 @@ import com.walletradar.application.normalization.pipeline.classification.onchain
 import com.walletradar.application.normalization.pipeline.classification.onchain.family.LpClassifier;
 import com.walletradar.application.normalization.pipeline.classification.onchain.family.LpSemanticClassifier;
 import com.walletradar.application.normalization.pipeline.classification.onchain.family.MethodIdClassifier;
+import com.walletradar.application.normalization.pipeline.classification.onchain.family.MultiAssetReceiptLpClassifier;
 import com.walletradar.application.normalization.pipeline.classification.onchain.family.NonEconomicClassifier;
 import com.walletradar.application.normalization.pipeline.classification.onchain.family.OnChainClassificationInsertionPoint;
 import com.walletradar.application.normalization.pipeline.classification.onchain.family.OnChainFamilyClassifier;
 import com.walletradar.application.normalization.pipeline.classification.onchain.family.PreSpamAdminConfigClassifier;
 import com.walletradar.application.normalization.pipeline.classification.onchain.family.PreSpamUnknownClassifier;
 import com.walletradar.application.normalization.pipeline.classification.onchain.family.RewardRouteClassifier;
+import com.walletradar.application.normalization.pipeline.classification.onchain.family.RoutedAaveReceiptLendingClassifier;
 import com.walletradar.application.normalization.pipeline.classification.onchain.family.ResolvedWarningAdminConfigClassifier;
 import com.walletradar.application.normalization.pipeline.classification.onchain.family.RoutedAggregatorSendClassifier;
 import com.walletradar.application.normalization.pipeline.classification.onchain.family.SpamClassifier;
@@ -164,8 +166,10 @@ public class OnChainClassifier {
                 new SpamClassifier(protocolRegistryService),
                 new NonEconomicClassifier(),
                 new ZkSyncAcrossRoutedBridgeClassifier(),
+                new MultiAssetReceiptLpClassifier(protocolRegistryService),
                 new AaveReceiptShapeClassifier(protocolRegistryService),
                 new ZkSyncAaveGatewayClassifier(),
+                new RoutedAaveReceiptLendingClassifier(protocolRegistryService, trackedWalletLookupService),
                 new SwapSemanticClassifier(),
                 new LpSemanticClassifier(nativeAssetSymbolResolver),
                 new LendingSemanticClassifier(),
@@ -173,7 +177,7 @@ public class OnChainClassifier {
                 new CompoundCometClassifier(protocolRegistryService),
                 new FluidVaultClassifier(protocolRegistryService),
                 new SwapRegistryClassifier(protocolRegistryService, nativeAssetSymbolResolver),
-                new LpRegistryClassifier(protocolRegistryService, nativeAssetSymbolResolver, lpStakingWrapperResolver, null),
+                new LpRegistryClassifier(protocolRegistryService, nativeAssetSymbolResolver, lpStakingWrapperResolver, null, null),
                 new LendingRegistryClassifier(protocolRegistryService, protocolResourceLoader),
                 new VaultClassifier(protocolRegistryService),
                 new SpecialHandlerRegistryReviewClassifier(),

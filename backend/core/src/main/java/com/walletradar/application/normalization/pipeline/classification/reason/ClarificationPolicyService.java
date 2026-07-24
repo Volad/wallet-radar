@@ -1,5 +1,7 @@
 package com.walletradar.application.normalization.pipeline.classification.reason;
 
+import com.walletradar.domain.common.NetworkAddressFormat;
+import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
@@ -73,6 +75,15 @@ public class ClarificationPolicyService {
             NormalizedTransaction normalizedTransaction,
             OnChainRawTransactionView view
     ) {
+        // Defense in depth (with the EVM-family selection filter in
+        // PendingReceiptClarificationQueryService): full-receipt clarification decodes EVM receipts,
+        // so a non-EVM (Solana/TON) row must never be treated as eligible even if it reaches this
+        // gate. NetworkAddressFormat.isEvm is the config-driven reusable predicate (bound to
+        // NetworkRegistry at startup), not a hardcoded enum list.
+        NetworkId networkId = normalizedTransaction == null ? null : normalizedTransaction.getNetworkId();
+        if (networkId != null && !NetworkAddressFormat.isEvm(networkId)) {
+            return false;
+        }
         return ReceiptClarificationEligibilitySupport.isEligible(normalizedTransaction, view);
     }
 

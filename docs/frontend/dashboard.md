@@ -57,7 +57,14 @@ sequenceDiagram
 - **Backfill polling:** 3s until terminal; refresh dashboard + transactions
 - **Reconciliation warnings:** when `showReconciliationWarnings` enabled
 
+## Non-EVM on-chain balances (ADR-067)
+
+- **Balance source:** `OnChainBalanceRefreshService` refreshes `on_chain_balances` for EVM via the candidate-driven Ankr → Etherscan → BlockScout → JSON-RPC path, and for **Solana / TON** via per-family `OnChainBalanceProvider` beans (native SOL/TON + SPL/jetton balances enumerated from RPC, bounded to accounting-universe identities plus the always-included native asset).
+- **Address casing:** the read path canonicalizes wallet addresses family-aware via `WalletAddressReadScope` — EVM/CEX lowercased, Solana base58 case-preserved, TON collapsed to its preferred member ref. Base58 Solana/TON positions now match their balance rows and render as token positions.
+- **Conservation scope:** SOL/TON positions are **displayed** (in Portfolio and Unrealised), but remain out-of-scope for the conservation gate (no NEC boundary support for non-EVM external capital). The gate is fed in-scope-only MtM/realised/unrealised, so surfacing SOL/TON does not skew the conservation delta.
+
 ## Related
 
 - [Portfolio snapshot read model](../pipeline/portfolio-snapshot/02-dashboard-read-model.md)
 - [Move basis](move-basis.md)
+- [ADR-067 — Non-EVM on-chain balances and conservation scope](../adr/ADR-067-non-evm-onchain-balances-and-conservation-scope.md)

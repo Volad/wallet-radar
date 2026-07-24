@@ -6,6 +6,7 @@ import com.walletradar.domain.sync.BackfillSegment;
 import com.walletradar.domain.sync.BackfillSegmentRepository;
 import com.walletradar.domain.sync.SyncStatus;
 import com.walletradar.domain.sync.SyncStatusRepository;
+import com.walletradar.domain.wallet.OnChainAddressClassifier;
 import com.walletradar.platform.networks.BlockHeightResolver;
 import com.walletradar.application.backfill.config.BackfillProperties;
 import com.walletradar.platform.networks.config.IngestionNetworkProperties;
@@ -608,8 +609,14 @@ public class SourceSyncPlanner {
         return (observedAt == null ? Instant.now() : observedAt).truncatedTo(ChronoUnit.SECONDS);
     }
 
+    /**
+     * Normalises a wallet address for use as a sync_status / backfill key.
+     * EVM addresses are lowercased; Solana (base-58) and TON (base64url) addresses
+     * are case-sensitive and must preserve their original case.
+     */
     private String normalizedAddress(String address) {
-        return address == null ? null : address.trim().toLowerCase(Locale.ROOT);
+        if (address == null) return null;
+        return OnChainAddressClassifier.normalize(address.trim());
     }
 
     private UserSession.IntegrationSyncState zeroSyncState() {

@@ -311,6 +311,16 @@ public final class OnChainClassificationSupport {
                 && isLiquidStakingContinuityLeg(leg, liquidStakingFamilies)) {
             return NormalizedLegRole.TRANSFER;
         }
+        // RC-6 (ADR-047 addendum): staking an LP receipt into an Equilibria/Penpie booster (and the
+        // symmetric unstake/zap-out unwrap) is a non-realizing wrap, NOT a sale. Any LP-receipt leg on
+        // a STAKING_DEPOSIT / STAKING_WITHDRAW must be a TRANSFER so it is not disposed (no phantom
+        // realized P&L) and is excluded from market pricing (PriceableFlowPolicy prices FEE/BUY/SELL
+        // only). A genuine LP-receipt sale into a DEX router is classified SWAP, never STAKING_*, and
+        // the plain PENDLE reward token is not an `-LPT` receipt, so both negative cases are excluded.
+        if ((type == NormalizedTransactionType.STAKING_DEPOSIT || type == NormalizedTransactionType.STAKING_WITHDRAW)
+                && AccountingAssetFamilySupport.isLpReceiptSymbol(leg.assetSymbol())) {
+            return NormalizedLegRole.TRANSFER;
+        }
         return switch (type) {
             case SWAP -> leg.quantityDelta().signum() > 0 ? NormalizedLegRole.BUY : NormalizedLegRole.SELL;
             case BORROW -> resolveBorrowRole(leg);

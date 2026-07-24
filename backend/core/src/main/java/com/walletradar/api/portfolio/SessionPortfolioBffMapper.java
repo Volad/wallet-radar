@@ -126,7 +126,10 @@ public class SessionPortfolioBffMapper {
                                 position.breakEvenUsd(),
                                 position.lockedSurplusUsd(),
                                 position.incomeReceivedUsd(),
-                                position.attributionTargetFamily()
+                                position.attributionTargetFamily(),
+                                position.coveredRatio(),
+                                position.breakEvenSuppressed(),
+                                position.averageCostUsd()
                         ))
                         .toList()
         );

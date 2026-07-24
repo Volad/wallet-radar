@@ -176,10 +176,6 @@ public class BybitStakingConversionPairer {
         // Canonical = debit-leg doc.
         NormalizedTransaction canonical = debit.tx;
         canonical.setType(NormalizedTransactionType.STAKING_DEPOSIT);
-        canonical.setStatus(NormalizedTransactionStatus.CONFIRMED);
-        if (canonical.getConfirmedAt() == null) {
-            canonical.setConfirmedAt(now);
-        }
         canonical.setMissingDataReasons(new ArrayList<>());
         canonical.setExcludedFromAccounting(false);
         canonical.setAccountingExclusionReason(null);
@@ -189,6 +185,21 @@ public class BybitStakingConversionPairer {
         flows.add(transferFlow(debit.principal));
         flows.add(transferFlow(credit.principal));
         canonical.setFlows(flows);
+
+        // D1 (ADR-054 §9): when the fused legs are a cross-canonical staking identity change (e.g.
+        // ETH → mETH), both TRANSFER legs must be priced before replay, so route to PENDING_PRICE and
+        // stamp the venue-neutral flag instead of confirming with an unpriced acquisition leg. A
+        // same-family fusion (e.g. mETH → cmETH) still confirms directly and carries basis.
+        if (AccountingAssetClassificationSupport.isCrossCanonicalStakingVaultConversion(canonical)) {
+            canonical.setCrossCanonicalStakingConversion(Boolean.TRUE);
+            canonical.setStatus(NormalizedTransactionStatus.PENDING_PRICE);
+            canonical.setConfirmedAt(null);
+        } else {
+            canonical.setStatus(NormalizedTransactionStatus.CONFIRMED);
+            if (canonical.getConfirmedAt() == null) {
+                canonical.setConfirmedAt(now);
+            }
+        }
 
         String corrId = CORR_PREFIX + sha256Hex(canonical.getId() + "|" + credit.tx.getId());
         canonical.setCorrelationId(corrId);

@@ -8,7 +8,6 @@ import com.walletradar.application.costbasis.application.replay.model.PositionSt
 import com.walletradar.application.costbasis.application.replay.state.ReplayExecutionState;
 import com.walletradar.application.costbasis.application.replay.support.ReplayAssetSupport;
 import com.walletradar.application.costbasis.application.replay.support.ReplayFlowSupport;
-import com.walletradar.application.costbasis.application.replay.support.ReplaySettlementAllocator;
 import com.walletradar.application.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
@@ -28,16 +27,13 @@ public class GmxLpEntryReplayHandler {
 
     private final ReplayAssetSupport assetSupport;
     private final ReplayFlowSupport flowSupport;
-    private final ReplaySettlementAllocator settlementAllocator;
 
     public GmxLpEntryReplayHandler(
             ReplayAssetSupport assetSupport,
-            ReplayFlowSupport flowSupport,
-            ReplaySettlementAllocator settlementAllocator
+            ReplayFlowSupport flowSupport
     ) {
         this.assetSupport = assetSupport;
         this.flowSupport = flowSupport;
-        this.settlementAllocator = settlementAllocator;
     }
 
     public boolean isGmxLpEntryRequest(NormalizedTransaction transaction) {
@@ -249,30 +245,38 @@ public class GmxLpEntryReplayHandler {
             BigDecimal remainingPrincipalCostBasis = bucket.remainingCostBasisUsd();
             BigDecimal remainingExecutionFeeCostBasis = bucket.remainingExecutionFeeReserveCostBasisUsd();
             BigDecimal totalAllocatedCostBasis = remainingPrincipalCostBasis.add(remainingExecutionFeeCostBasis, MC);
+            // ADR-040 net-carry conservation: the GLV/GM receipt must be minted carrying the SUM of the
+            // contributed assets' Net (reward-discounted) basis — never re-seeded to the tax lane. The
+            // Net remainder is transported from the same bucket carries that supply the tax remainder,
+            // preserving each contributed asset's reward discount on the receipt (net ≤ tax).
+            BigDecimal remainingPrincipalNetCostBasis = bucket.remainingNetCostBasisUsd();
+            BigDecimal remainingExecutionFeeNetCostBasis = bucket.remainingExecutionFeeReserveNetCostBasisUsd();
+            BigDecimal totalAllocatedNetCostBasis =
+                    remainingPrincipalNetCostBasis.add(remainingExecutionFeeNetCostBasis, MC);
             if (remainingPrincipalCostBasis.signum() > 0 && bucket.remainingUncoveredQuantity().signum() <= 0) {
                 if (shareInflows.size() == 1) {
-                    settlementAllocator.restoreSettlementPosition(
+                    restoreShareSettlementWithNet(
                             transaction,
                             shareInflows.getFirst(),
-                            replayState.positions(),
+                            replayState,
                             totalAllocatedCostBasis,
-                            replayState.ledgerPointCollector()
+                            totalAllocatedNetCostBasis
                     );
                 } else if (assetSupport.allHaveKnownPrices(shareInflows.stream().map(IndexedFlow::flow).toList())) {
-                    settlementAllocator.allocateIndexedSettlementByKnownValue(
+                    allocateShareSettlementByKnownValueWithNet(
                             transaction,
                             shareInflows,
-                            replayState.positions(),
+                            replayState,
                             totalAllocatedCostBasis,
-                            replayState.ledgerPointCollector()
+                            totalAllocatedNetCostBasis
                     );
                 } else if (assetSupport.allSameAsset(shareInflows.stream().map(IndexedFlow::flow).toList(), transaction)) {
-                    settlementAllocator.allocateIndexedSettlementByQuantity(
+                    allocateShareSettlementByQuantityWithNet(
                             transaction,
                             shareInflows,
-                            replayState.positions(),
+                            replayState,
                             totalAllocatedCostBasis,
-                            replayState.ledgerPointCollector()
+                            totalAllocatedNetCostBasis
                     );
                 } else {
                     applyUnknownGmxShareInflows(transaction, shareInflows, replayState);
@@ -308,6 +312,121 @@ public class GmxLpEntryReplayHandler {
                     AssetLedgerPoint.BasisEffect.UNKNOWN
             );
         }
+    }
+
+    /**
+     * ADR-040 net-carry conservation: restores a single settlement-share (GLV/GM receipt) inflow
+     * carrying BOTH lanes independently — tax = {@code allocatedCost}, net = {@code allocatedNetCost}
+     * (Σ contributed net basis). This replaces the tax-only {@code ReplaySettlementAllocator} restore
+     * that re-seeded net = tax and erased the reward discount on the minted receipt.
+     */
+    private void restoreShareSettlementWithNet(
+            NormalizedTransaction transaction,
+            IndexedFlow indexedFlow,
+            ReplayExecutionState replayState,
+            BigDecimal allocatedCost,
+            BigDecimal allocatedNetCost
+    ) {
+        NormalizedTransaction.Flow flow = indexedFlow.flow();
+        AssetKey assetKey = assetSupport.assetKey(transaction, flow);
+        PositionState position = replayState.position(assetKey);
+        PositionSnapshot before = flowSupport.snapshot(position);
+        BigDecimal quantity = flow.getQuantityDelta().abs();
+        BigDecimal avco = safeDivide(allocatedCost, quantity);
+        BigDecimal netCost = clampNetToTax(allocatedNetCost, allocatedCost);
+        flowSupport.restoreToPosition(quantity, position, allocatedCost, netCost, BigDecimal.ZERO, avco);
+        replayState.ledgerPointCollector().record(
+                transaction,
+                flow,
+                indexedFlow.index(),
+                position.assetKey(),
+                before,
+                position,
+                AssetLedgerPoint.BasisEffect.REALLOCATE_IN
+        );
+    }
+
+    /**
+     * ADR-040: net-aware peer of {@code allocateIndexedSettlementByKnownValue}. Splits BOTH the tax
+     * and net totals across the share inflows by the SAME market-value weights, so per-leg
+     * {@code net ≤ tax} is preserved and no net basis is fabricated.
+     */
+    private void allocateShareSettlementByKnownValueWithNet(
+            NormalizedTransaction transaction,
+            List<IndexedFlow> flows,
+            ReplayExecutionState replayState,
+            BigDecimal totalCost,
+            BigDecimal totalNetCost
+    ) {
+        BigDecimal totalValue = BigDecimal.ZERO;
+        for (IndexedFlow indexedFlow : flows) {
+            totalValue = totalValue.add(
+                    indexedFlow.flow().getQuantityDelta().abs().multiply(indexedFlow.flow().getUnitPriceUsd(), MC),
+                    MC
+            );
+        }
+        BigDecimal remainingCost = totalCost;
+        BigDecimal remainingNetCost = totalNetCost;
+        for (int index = 0; index < flows.size(); index++) {
+            IndexedFlow indexedFlow = flows.get(index);
+            boolean last = index == flows.size() - 1;
+            BigDecimal value = indexedFlow.flow().getQuantityDelta().abs().multiply(indexedFlow.flow().getUnitPriceUsd(), MC);
+            BigDecimal weight = totalValue.signum() == 0 ? BigDecimal.ZERO : value.divide(totalValue, MC);
+            BigDecimal allocatedCost = last ? remainingCost : totalCost.multiply(weight, MC);
+            BigDecimal allocatedNetCost = last ? remainingNetCost : totalNetCost.multiply(weight, MC);
+            remainingCost = remainingCost.subtract(allocatedCost, MC);
+            remainingNetCost = remainingNetCost.subtract(allocatedNetCost, MC);
+            restoreShareSettlementWithNet(transaction, indexedFlow, replayState, allocatedCost, allocatedNetCost);
+        }
+    }
+
+    /**
+     * ADR-040: net-aware peer of {@code allocateIndexedSettlementByQuantity}. Splits BOTH lanes across
+     * the share inflows by the SAME quantity weights (used for all-same-asset settlements).
+     */
+    private void allocateShareSettlementByQuantityWithNet(
+            NormalizedTransaction transaction,
+            List<IndexedFlow> flows,
+            ReplayExecutionState replayState,
+            BigDecimal totalCost,
+            BigDecimal totalNetCost
+    ) {
+        BigDecimal totalQuantity = BigDecimal.ZERO;
+        for (IndexedFlow indexedFlow : flows) {
+            totalQuantity = totalQuantity.add(indexedFlow.flow().getQuantityDelta().abs(), MC);
+        }
+        BigDecimal remainingCost = totalCost;
+        BigDecimal remainingNetCost = totalNetCost;
+        for (int index = 0; index < flows.size(); index++) {
+            IndexedFlow indexedFlow = flows.get(index);
+            boolean last = index == flows.size() - 1;
+            BigDecimal quantity = indexedFlow.flow().getQuantityDelta().abs();
+            BigDecimal weight = totalQuantity.signum() == 0 ? BigDecimal.ZERO : quantity.divide(totalQuantity, MC);
+            BigDecimal allocatedCost = last ? remainingCost : totalCost.multiply(weight, MC);
+            BigDecimal allocatedNetCost = last ? remainingNetCost : totalNetCost.multiply(weight, MC);
+            remainingCost = remainingCost.subtract(allocatedCost, MC);
+            remainingNetCost = remainingNetCost.subtract(allocatedNetCost, MC);
+            restoreShareSettlementWithNet(transaction, indexedFlow, replayState, allocatedCost, allocatedNetCost);
+        }
+    }
+
+    /** Enforces the ADR-040 global gate {@code 0 ≤ net ≤ tax} on the receipt net lane. */
+    private static BigDecimal clampNetToTax(BigDecimal netCost, BigDecimal taxCost) {
+        BigDecimal net = netCost == null ? BigDecimal.ZERO : netCost;
+        if (net.signum() < 0) {
+            net = BigDecimal.ZERO;
+        }
+        if (taxCost != null && net.compareTo(taxCost) > 0) {
+            net = taxCost;
+        }
+        return net;
+    }
+
+    private static BigDecimal safeDivide(BigDecimal numerator, BigDecimal denominator) {
+        if (numerator == null || denominator == null || denominator.signum() == 0) {
+            return null;
+        }
+        return numerator.divide(denominator, MC);
     }
 
     private boolean supportsGmxLpEntryRequestPattern(NormalizedTransaction transaction) {

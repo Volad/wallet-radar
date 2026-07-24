@@ -63,10 +63,16 @@ class TokenMetadataRegistryTest {
     }
 
     @Test
-    @DisplayName("groups stay isolated: a builder-only contract is not visible via fallback lookups and vice versa")
-    void groupsAreIsolated() {
-        assertThat(TokenMetadataRegistry.fallbackSymbol("0xb8ce59fc3717ada4c02eadf9682a9e934f625ebb")).isNull();
-        assertThat(TokenMetadataRegistry.builderSymbol("0x39de0f00189306062d79edec6dca5bb6bfd108f9")).isNull();
+    @DisplayName("WS-7: the unified descriptor override is visible via both fallback and builder lookups")
+    void unifiedOverridesAreSharedAcrossLookups() {
+        // The legacy fallbackTokens/builderTokens split collapsed into one per-contract descriptor
+        // override, so a contract now resolves the same symbol/decimals through either accessor.
+        // This only widens (correct) coverage; the contracts are disjoint tokens, so no load-bearing
+        // decimals/quantity changes for any token.
+        assertThat(TokenMetadataRegistry.fallbackSymbol("0xb8ce59fc3717ada4c02eadf9682a9e934f625ebb"))
+                .isEqualTo("USDT0");
+        assertThat(TokenMetadataRegistry.builderSymbol("0x39de0f00189306062d79edec6dca5bb6bfd108f9"))
+                .isEqualTo("eUSDC-2");
     }
 
     @Test

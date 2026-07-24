@@ -902,7 +902,7 @@ canvas#chart {
 
 .stats {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 1px;
   background: var(--b0);
   border: 1px solid var(--b0);
@@ -1024,11 +1024,6 @@ canvas#chart {
     color: #22d3ee;
   }
 
-  &.avco-secondary {
-    color: rgba(255, 255, 255, 0.72);
-    font-size: 16px;
-  }
-
   &.avco-breakeven-value {
     color: rgb(52, 211, 153);
   }
@@ -1046,6 +1041,20 @@ canvas#chart {
 
   &.sc-s-surplus {
     color: rgb(52, 211, 153);
+  }
+
+  &.sc-s-lowcov {
+    font-style: italic;
+  }
+}
+
+// The two headline AVCO metric cards (Effective cost + Balance AVCO) get a subtle top accent so
+// they read as the primary numbers, distinct from the neutral qty/PnL/gas cards.
+.sc-headline {
+  box-shadow: inset 0 2px 0 0 rgba(52, 211, 153, 0.35);
+
+  .sc-v {
+    font-size: 20px;
   }
 }
 
@@ -1339,24 +1348,8 @@ canvas#chart {
   font-weight: 500;
 }
 
-.avco-tax-cell,
-.avco-tax-value {
-  color: var(--sub);
-}
-
-.avco-blended-value {
-  color: rgb(245, 158, 11);
-}
-
-.ti-pool-note {
-  margin-top: 4px;
-
-  .v {
-    color: rgb(245, 158, 11);
-    font-size: 9px;
-    line-height: 1.35;
-    white-space: normal;
-  }
+.avco-effective-value {
+  color: rgb(52, 211, 153);
 }
 
 .avco-legend {

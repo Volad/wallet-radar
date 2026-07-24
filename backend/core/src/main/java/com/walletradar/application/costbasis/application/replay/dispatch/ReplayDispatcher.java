@@ -1,8 +1,10 @@
 package com.walletradar.application.costbasis.application.replay.dispatch;
 
 import com.walletradar.application.costbasis.support.AccountingAssetClassificationSupport;
+import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
 import com.walletradar.application.costbasis.support.AccountingAssetIdentitySupport;
 import com.walletradar.application.costbasis.support.AcquisitionFeeCapitalizationPolicy;
+import com.walletradar.application.costbasis.support.LpReceiptStakeWrapSupport;
 import com.walletradar.canonical.correlation.BybitCarryContinuitySupport;
 import com.walletradar.application.costbasis.application.replay.handler.AsyncSpotOrderReplayHandler;
 import com.walletradar.application.costbasis.application.replay.handler.BorrowReplayHandler;
@@ -46,6 +48,28 @@ import java.util.Optional;
 public class ReplayDispatcher {
 
     private static final MathContext MC = MathContext.DECIMAL128;
+
+    /**
+     * FB-01 / ADR-082: index of the "net-realized-kept" magnitude accumulated alongside the
+     * ADR-040 swap net/market basis released ({@code swapNetRef[0]}=net released,
+     * {@code swapNetRef[1]}=market released). A positive value means a paired SELL leg realized NET
+     * PnL that was NOT reversed by the counterparty-basis-pool undo path — i.e. the pre-loop
+     * discount has already been banked once, so the acquired lot must re-base its NET basis to the
+     * market acquisition cost instead of recycling the released net basis.
+     */
+    private static final int SWAP_NET_REF_KEPT_INDEX = 2;
+
+    /** Dust threshold (USD) below which a kept NET realized magnitude is treated as none. */
+    private static final BigDecimal NET_REALISED_KEPT_EPSILON_USD = new BigDecimal("0.01");
+
+    /**
+     * FB-01 / ADR-082: a disposed lot carries a genuine reward/yield discount only when its released
+     * NET basis is materially below its released Market basis. A tiny relative gap (rounding / AVCO
+     * dust, e.g. the observed ~0.34% cmETH↔PT-cmETH residual) is NOT a reward discount and must
+     * re-base; a material gap (a real zero-cost reward carry) must be preserved. 1% sits ~3x above
+     * the artifact residual and far below genuine reward discounts (typically ≫10%, often 100%).
+     */
+    private static final BigDecimal NET_DISCOUNT_RELATIVE_THRESHOLD = new BigDecimal("0.01");
 
     private final ReplayTransactionRouter replayTransactionRouter;
     private final ReplayAssetSupport assetSupport;
@@ -247,14 +271,32 @@ public class ReplayDispatcher {
         // conversions), track net basis released by SELL/outbound flows so that BUY/inbound flows
         // can inherit the correct net cost instead of using fresh market price.
         // swapNetRef[0] accumulates net basis released; swapNetRef[1] accumulates market basis released.
+        // FB-01 / ADR-082: swapNetRef[2] accumulates the KEPT NET realized magnitude (not undone by
+        // the counterparty-basis-pool path) so a realizing distinct-canonical swap re-bases the
+        // acquired NET basis to market instead of recycling the released net basis.
         // null means neither type — BUY flows fall back to standard market-price net cost.
+        // ADR-083 §4.4: an intra-cluster cross-canonical conversion (ETH↔mETH, SOL↔mSOL,
+        // AVAX↔sAVAX, …) is carried at the CLUSTER_CARRY route with PnL=0 and must NOT also enter
+        // the realize path. Routing alone does not stop this: replayGenericFlowsSkipping iterates
+        // ALL flows (ignoring the carried skip set) for the swapNetRef re-base / D1 applyUnknownTransfer
+        // / stampCrossCanonicalRedemptionProceedsFromInbound machinery. Gate those OFF for carried
+        // txs while keeping them live for cluster↔non-cluster and cross-cluster realizing conversions.
         boolean isCrossCanonicalStaking = (transaction.getType() == NormalizedTransactionType.STAKING_DEPOSIT
                 || transaction.getType() == NormalizedTransactionType.STAKING_WITHDRAW
                 || transaction.getType() == NormalizedTransactionType.VAULT_DEPOSIT
                 || transaction.getType() == NormalizedTransactionType.VAULT_WITHDRAW)
-                && AccountingAssetClassificationSupport.hasCrossCanonicalIdentityPrincipalPair(transaction);
+                && AccountingAssetClassificationSupport.hasCrossCanonicalIdentityPrincipalPair(transaction)
+                && !AccountingAssetClassificationSupport.isIntraClusterConversion(transaction);
+        // ADR-054 addendum: for an atomic cross-canonical redemption, the outbound (disposed,
+        // illiquid receipt) proceeds must equal the resolved FMV of the inbound (acquired,
+        // reliably-priced underlying) so value-out == value-in. Stamp the outbound leg price
+        // BEFORE the disposal leg is applied (outbound is processed first, see
+        // compositeAwareFlowOrder). Self-gated to WITHDRAW-direction redemptions.
+        if (isCrossCanonicalStaking) {
+            stampCrossCanonicalRedemptionProceedsFromInbound(transaction);
+        }
         BigDecimal[] swapNetRef = (transaction.getType() == NormalizedTransactionType.SWAP || isCrossCanonicalStaking)
-                ? new BigDecimal[]{BigDecimal.ZERO, BigDecimal.ZERO}
+                ? new BigDecimal[]{BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO}
                 : null;
         for (int flowIndex : compositeAwareFlowOrder(transaction, skippedIndexes, isCrossCanonicalStaking)) {
             NormalizedTransaction.Flow flow = transaction.getFlows().get(flowIndex);
@@ -485,6 +527,22 @@ public class ReplayDispatcher {
         position.setLastEventTimestamp(flowSupport.laterOf(position.lastEventTimestamp(), transaction.getBlockTimestamp()));
         PositionSnapshot before = flowSupport.snapshot(position);
 
+        if (LpReceiptStakeWrapSupport.isNonRealizingLpReceiptStakeLeg(transaction, flow)) {
+            applyLpReceiptStakeWrap(transaction, flow, flowIndex, position, before, replayState);
+            return;
+        }
+
+        if (isLpPositionUnstakeRewardInflow(transaction, flow)) {
+            // R6a: BAL/AURA/WAVAX (and any non-principal reward token) received on an
+            // LP_POSITION_UNSTAKE are zero-cost income legs, not carried LP principal. Book them
+            // like the LP-exit reward sideflow: tax lane = FMV (income realized on later sale),
+            // net lane = $0 (REWARD_CLAIM zero-cost). The LP-RECEIPT principal leg is excluded (it
+            // rides the continuity carry) and the wrapper receipt is outbound, so only genuine
+            // reward tokens reach this branch.
+            applyZeroCostRewardInflow(transaction, flow, flowIndex, position, before, replayState);
+            return;
+        }
+
         if (isSponsoredGasIn(transaction, flow)) {
             // ERC-4337 Paymaster gas rebates are pure dust (no material economic substance).
             // Restore the tiny qty with zero cost so position qty is consistent, but emit
@@ -551,9 +609,17 @@ public class ReplayDispatcher {
             // Cycle/15 R5 F3: pegged-native spot-basis fallback for unbacked inbound transfers
             // (CMETH / METH / WEETH / BBSOL). Runs after the standard continuity carry so the
             // pairing path remains authoritative whenever it does supply basis.
-            PositionSnapshot afterTransfer = flowSupport.snapshot(position);
-            flowSupport.applyInboundShortfallSpotFallback(transaction, flow, position, before);
-            accumulateInboundSpotFallbackProvisional(transaction, flow, position, afterTransfer, replayState);
+            //
+            // Finding 2: NEVER run the spot fallback on a custody-roundtrip return leg. The pooled
+            // envelope already redistributes EXACTLY the carried-out basis onto the returned assets
+            // (Σ carried-in == Σ carried-out); any returned quantity whose value exceeds the pool is
+            // deliberately left uncovered. Market-pricing that surplus here fabricated the observed
+            // +$204.58 ETH-family basis. The envelope path is fully authoritative for these legs.
+            if (!transferClassifier.isCustodyRoundTripContinuityTransfer(transaction, flow)) {
+                PositionSnapshot afterTransfer = flowSupport.snapshot(position);
+                flowSupport.applyInboundShortfallSpotFallback(transaction, flow, position, before);
+                accumulateInboundSpotFallbackProvisional(transaction, flow, position, afterTransfer, replayState);
+            }
             // NEW-02: after the spot fallback prices an unpaired external-capital INFLOW at market
             // value it is economically an acquisition — relabel UNKNOWN → ACQUIRE (label only).
             basisEffect = resolveExternalCapitalInflowAcquisition(transaction, flow, position, basisEffect);
@@ -581,10 +647,18 @@ public class ReplayDispatcher {
                         // paired outbound disposal released basis into swapNetRef, inherit that basis
                         // as the acquisition cost. This preserves cost continuity for unpriced receipt
                         // tokens (e.g. METH acquired via ETH staking, GTUSDCC via wstETH vault deposit).
+                        //
+                        // D1 / ADR-054 §9 fail-closed: take the inheritance path ONLY when a market
+                        // cost is resolvable for this acquisition leg. The ADR-040 Net≤Market cap needs
+                        // a market anchor; without one, applyBuyWithOptionalPool would collapse to
+                        // flowSupport.applyBuy(...) and silently book $0 in BOTH lanes — stripping the
+                        // disposed family's cost basis. When no market cost resolves, fall through to
+                        // the UNKNOWN path below so AVCO is left UNDEFINED and the point is flagged.
                         if (swapNetRef != null
                                 && swapNetRef[1].signum() > 0
                                 && flow.getQuantityDelta() != null
-                                && flow.getQuantityDelta().signum() > 0) {
+                                && flow.getQuantityDelta().signum() > 0
+                                && computeMarketCost(transaction, flow) != null) {
                             applyBuyWithOptionalPool(transaction, flow, position, replayState, continuityTransferPath, swapNetRef);
                             replayState.ledgerPointCollector().record(
                                     transaction,
@@ -667,6 +741,118 @@ public class ReplayDispatcher {
         );
     }
 
+    /**
+     * RC-6 (ADR-047 addendum): books a non-realizing LP-receipt stake/unstake wrap leg.
+     *
+     * <p>Staking a Pendle LP receipt into an Equilibria/Penpie booster (or the symmetric unstake)
+     * is a continuation of the same LP position, not a sale. The authoritative basis lives in the
+     * {@code pendle-lp:*} receipt basis pool (deposited at LP entry, restored at the zap-out
+     * {@code LP_EXIT} by {@code PositionScopedLpExitReplayHandler}), so this handler must NOT touch
+     * that pool. It simply drains the synthetic receipt holding with no realized P&amp;L (outbound
+     * {@code CARRY_OUT}) — or receives the wrapper receipt without pricing it (inbound
+     * {@code CARRY_IN}). Draining here (rather than parking basis into a continuity bucket that no
+     * downstream leg consumes) keeps the ledger clean and leaves the pool-backed exit path intact.</p>
+     */
+    private void applyLpReceiptStakeWrap(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            int flowIndex,
+            PositionState position,
+            PositionSnapshot before,
+            ReplayExecutionState replayState
+    ) {
+        flow.setAvcoAtTimeOfSale(null);
+        flow.setRealisedPnlUsd(null);
+        AssetLedgerPoint.BasisEffect basisEffect;
+        if (flow.getQuantityDelta().signum() < 0) {
+            flowSupport.removeFromPosition(flow, position);
+            basisEffect = AssetLedgerPoint.BasisEffect.CARRY_OUT;
+        } else {
+            flowSupport.applyUnknownTransfer(flow, position);
+            basisEffect = AssetLedgerPoint.BasisEffect.CARRY_IN;
+        }
+        replayState.ledgerPointCollector().record(
+                transaction,
+                flow,
+                flowIndex,
+                position.assetKey(),
+                before,
+                position,
+                basisEffect
+        );
+    }
+
+    /**
+     * R6a: {@code true} when {@code flow} is a zero-cost reward token received on an
+     * {@code LP_POSITION_UNSTAKE}. Excludes the LP-RECEIPT principal leg (which carries the position
+     * basis through the wrapper via the continuity path). The wrapper receipt token itself is
+     * outbound (burned) on an unstake, so only genuine reward tokens (BAL/AURA/WAVAX, etc.) reach
+     * this branch. Generalized: no protocol/address/token hardcoding.
+     */
+    private boolean isLpPositionUnstakeRewardInflow(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        if (transaction == null
+                || transaction.getType() != NormalizedTransactionType.LP_POSITION_UNSTAKE
+                || flow == null
+                || flow.getRole() != NormalizedLegRole.TRANSFER
+                || flow.getQuantityDelta() == null
+                || flow.getQuantityDelta().signum() <= 0) {
+            return false;
+        }
+        // Scope guard (plan R6a): only Balancer/Aura unstakes, whose LP principal is canonicalized to
+        // an LP-RECEIPT leg. On these txs the only inbound non-LP-RECEIPT TRANSFER legs are genuine
+        // reward tokens (BAL/AURA/WAVAX). Fungible v2-gauge unstakes (Velodrome/Aerodrome) return the
+        // raw staked LP token as principal (NOT an LP-RECEIPT), so they must keep the continuity-carry
+        // path and are intentionally excluded here.
+        String corrId = transaction.getCorrelationId();
+        if (corrId == null || !corrId.toLowerCase(java.util.Locale.ROOT).contains(":balancerv3:")) {
+            return false;
+        }
+        // Exclude the LP principal itself (the LP-RECEIPT leg rides the continuity carry).
+        if (Boolean.TRUE.equals(flow.getLpReceipt())
+                || AccountingAssetFamilySupport.isLpReceiptSymbol(flow.getAssetSymbol())) {
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * R6a: books a zero-cost reward inflow — tax lane at FMV (income realized on later sale), net
+     * lane at $0 ({@code REWARD_CLAIM} zero-cost). Mirrors the LP-exit reward sideflow booking so
+     * gauge/Aura unstake rewards are consistent with fee/reward legs on LP exits.
+     */
+    private void applyZeroCostRewardInflow(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow,
+            int flowIndex,
+            PositionState position,
+            PositionSnapshot before,
+            ReplayExecutionState replayState
+    ) {
+        BigDecimal quantity = flow.getQuantityDelta().abs();
+        BigDecimal unitPriceUsd = assetSupport.replayUnitPriceUsd(transaction, flow);
+        BigDecimal acquisitionCostUsd = unitPriceUsd != null && unitPriceUsd.signum() > 0
+                ? quantity.multiply(unitPriceUsd, MC)
+                : BigDecimal.ZERO;
+        flowSupport.applyBuyWithAcquisitionCost(
+                flow,
+                position,
+                acquisitionCostUsd,
+                NormalizedTransactionType.REWARD_CLAIM
+        );
+        replayState.ledgerPointCollector().record(
+                transaction,
+                flow,
+                flowIndex,
+                position.assetKey(),
+                before,
+                position,
+                AssetLedgerPoint.BasisEffect.ACQUIRE
+        );
+    }
+
     private void applyBuyWithOptionalPool(
             NormalizedTransaction transaction,
             NormalizedTransaction.Flow flow,
@@ -705,14 +891,39 @@ public class ReplayDispatcher {
         // ADR-040 invariant: Net AVCO ≤ Market AVCO — cap inherited net basis at market basis.
         if (swapNetRef != null && swapNetRef[1].signum() > 0) {
             BigDecimal netBasisReleased = swapNetRef[0];
+            // FB-01 / ADR-082 ("re-base on realize"): when the paired disposal REALIZED-AND-KEPT its
+            // NET PnL on a lot that carried no reward discount (net released ≈ market released), the
+            // pre-loop discount has already been banked once at the SELL. Recycling the released net
+            // basis onto the freshly-priced acquisition would re-plant that discount and realize the
+            // same appreciation again on the next disposal (the cmETH↔PT-cmETH recycling defect).
+            // Re-base the NET lane to the market acquisition cost instead. The existing
+            // min(released, market) carry is PRESERVED for genuine reward discounts (net ≪ market)
+            // and for deferred/pool disposals whose NET realized was undone (kept ≈ 0). Market lane
+            // is never touched (byte-identical); realized PnL on the disposal legs is unchanged.
+            boolean netRealisedKept = swapNetRef.length > SWAP_NET_REF_KEPT_INDEX
+                    && swapNetRef[SWAP_NET_REF_KEPT_INDEX].compareTo(NET_REALISED_KEPT_EPSILON_USD) > 0;
+            boolean rewardDiscountPresent = hasRewardDiscount(netBasisReleased, swapNetRef[1]);
+            boolean reBaseNetToMarket = netRealisedKept && !rewardDiscountPresent;
             if (poolAcquisitionCost != null) {
-                BigDecimal effectiveNetBasis = netBasisReleased.min(poolAcquisitionCost);
+                BigDecimal effectiveNetBasis = reBaseNetToMarket
+                        ? poolAcquisitionCost
+                        : netBasisReleased.min(poolAcquisitionCost);
                 flowSupport.applyBuyWithExplicitNetCost(flow, position, poolAcquisitionCost, effectiveNetBasis);
             } else {
                 BigDecimal taxCost = computeMarketCost(transaction, flow);
                 if (taxCost != null) {
-                    BigDecimal effectiveNetBasis = netBasisReleased.min(taxCost);
+                    BigDecimal effectiveNetBasis = reBaseNetToMarket
+                            ? taxCost
+                            : netBasisReleased.min(taxCost);
                     flowSupport.applyBuyWithExplicitNetCost(flow, position, taxCost, effectiveNetBasis);
+                } else if (isCrossCanonicalStakingPrincipalAcquisition(transaction, flow)) {
+                    // D1 / ADR-054 §9 fail-closed: never silently book $0 for an unpriced
+                    // cross-canonical staking/vault acquisition leg. Route to the UNKNOWN transfer
+                    // mechanism so AVCO is left UNDEFINED (and the ledger point is flagged) instead of
+                    // fabricating a $0-basis lot that strips the disposed family's cost basis. The
+                    // priced branch (taxCost != null) is unchanged, so net-inheritance conversions
+                    // such as AVAX → sAVAX are unaffected.
+                    flowSupport.applyUnknownTransfer(flow, position);
                 } else {
                     flowSupport.applyBuy(transaction, flow, position);
                 }
@@ -720,6 +931,9 @@ public class ReplayDispatcher {
             // Consume the swap net context so subsequent BUY flows use standard pricing
             swapNetRef[0] = BigDecimal.ZERO;
             swapNetRef[1] = BigDecimal.ZERO;
+            if (swapNetRef.length > SWAP_NET_REF_KEPT_INDEX) {
+                swapNetRef[SWAP_NET_REF_KEPT_INDEX] = BigDecimal.ZERO;
+            }
             capitalizeCexFeeIfApplicable(transaction, flow, position);
             return;
         }
@@ -784,6 +998,21 @@ public class ReplayDispatcher {
                     continuityTransferPath
             );
         }
+        // FB-01 / ADR-082: record whether this SELL KEPT its NET realized PnL. The counterparty
+        // basis-pool path above reverses it (undoSellRealisedPnl) → nothing was banked → the paired
+        // acquisition must keep inheriting the released net basis (deferred carry). A kept realized
+        // delta means the pre-loop discount has already been banked once, so the acquisition must
+        // re-base its NET basis to market. Measured AFTER the pool branch so an undo yields zero.
+        if (swapNetRef != null && swapNetRef.length > SWAP_NET_REF_KEPT_INDEX) {
+            BigDecimal netRealisedBefore = zeroIfNull(before.totalNetRealisedPnlUsd());
+            BigDecimal netRealisedAfter = zeroIfNull(position.totalNetRealisedPnlUsd());
+            BigDecimal keptNetRealised = netRealisedAfter.subtract(netRealisedBefore, MC).abs();
+            swapNetRef[SWAP_NET_REF_KEPT_INDEX] = swapNetRef[SWAP_NET_REF_KEPT_INDEX].add(keptNetRealised, MC);
+        }
+    }
+
+    private static BigDecimal zeroIfNull(BigDecimal value) {
+        return value == null ? BigDecimal.ZERO : value;
     }
 
     private BigDecimal computeMarketCost(NormalizedTransaction transaction, NormalizedTransaction.Flow flow) {
@@ -801,6 +1030,25 @@ public class ReplayDispatcher {
                     .orElse(null);
         }
         return null;
+    }
+
+    /**
+     * FB-01 / ADR-082: {@code true} when the disposed lot carried a genuine reward/yield discount,
+     * i.e. its released NET basis is materially below its released Market basis. Rounding / AVCO dust
+     * (a sub-threshold relative gap) is not a discount, so the acquired lot must re-base its NET lane
+     * to the market acquisition cost rather than recycle the released net basis.
+     */
+    private static boolean hasRewardDiscount(BigDecimal netReleased, BigDecimal marketReleased) {
+        if (marketReleased == null || marketReleased.signum() <= 0) {
+            return false;
+        }
+        BigDecimal net = zeroIfNull(netReleased);
+        BigDecimal discount = marketReleased.subtract(net, MC);
+        if (discount.signum() <= 0) {
+            return false;
+        }
+        BigDecimal threshold = marketReleased.multiply(NET_DISCOUNT_RELATIVE_THRESHOLD, MC);
+        return discount.compareTo(threshold) > 0;
     }
 
     private static BigDecimal safeDelta(BigDecimal before, BigDecimal after) {
@@ -893,6 +1141,123 @@ public class ReplayDispatcher {
             case STAKING_DEPOSIT, STAKING_WITHDRAW, VAULT_DEPOSIT, VAULT_WITHDRAW -> true;
             default -> false;
         };
+    }
+
+    /**
+     * D1 / ADR-054 §9: {@code true} when {@code flow} is the inbound (acquisition) principal leg of a
+     * cross-canonical staking/vault identity change. Used as the fail-closed guard so an unpriced C2
+     * acquisition leg is never booked at $0.
+     */
+    private static boolean isCrossCanonicalStakingPrincipalAcquisition(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        if (flow == null
+                || flow.getQuantityDelta() == null
+                || flow.getQuantityDelta().signum() <= 0) {
+            return false;
+        }
+        return shouldApplyCrossCanonicalMarketLeg(transaction, flow);
+    }
+
+    /**
+     * ADR-054 addendum — cross-canonical redemption proceeds conservation.
+     *
+     * <p>An atomic cross-canonical redemption ({@code VAULT_WITHDRAW} / {@code STAKING_WITHDRAW}
+     * that burns a receipt/vault token — C2, frequently illiquid — and returns the underlying —
+     * C1, reliably priced) has no external cash leg, so value-out MUST equal value-in. The generic
+     * cross-canonical path (ADR-054) otherwise DISPOSEs the outbound receipt at its own stale
+     * FLOW/cache price (an illiquid {@code yv*}/receipt token has no live source), understating the
+     * realized loss, while the inbound underlying ACQUIREs at its correct live FMV.
+     *
+     * <p>Mirroring {@code LinkedBridgeTransferReplaySupport.applyAssetConvertingSettlementOutbound}
+     * (proceeds = destination FMV) and the {@code SwapDerivedPriceResolver} counterpart-derivation
+     * semantics, this stamps the outbound DISPOSE leg's {@code unitPriceUsd} so its proceeds equal
+     * the resolved total FMV of the inbound leg(s):
+     * {@code unitPriceUsd = Σ(inbound resolved FMV) / |outbound qty|}. Unlike the swap-derived
+     * resolver, it OVERRIDES the already-present (stale) outbound price.
+     *
+     * <p>Determinism / generality: gated purely on the structural condition — a WITHDRAW-direction
+     * cross-canonical redemption ({@link AccountingAssetClassificationSupport#hasCrossCanonicalIdentityPrincipalPair})
+     * with exactly one outbound principal DISPOSE leg paired with inbound principal ACQUIRE leg(s).
+     * No tx-hash / symbol / wallet keying; generalizes to any {@code yv*}/receipt → underlying
+     * atomic redemption on any network.
+     *
+     * <p>Direction &amp; fail-safe: only the illiquid outbound is derived FROM the reliably-priced
+     * inbound. When the inbound leg has no resolved FMV, behaviour is unchanged.
+     */
+    private void stampCrossCanonicalRedemptionProceedsFromInbound(NormalizedTransaction transaction) {
+        if (transaction == null || transaction.getFlows() == null) {
+            return;
+        }
+        boolean isRedemption = transaction.getType() == NormalizedTransactionType.VAULT_WITHDRAW
+                || transaction.getType() == NormalizedTransactionType.STAKING_WITHDRAW;
+        if (!isRedemption
+                || !AccountingAssetClassificationSupport.hasCrossCanonicalIdentityPrincipalPair(transaction)) {
+            return;
+        }
+        NormalizedTransaction.Flow outboundLeg = null;
+        int outboundPrincipalCount = 0;
+        BigDecimal inboundResolvedFmvUsd = BigDecimal.ZERO;
+        boolean inboundFmvResolved = false;
+        for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
+            if (!isPrincipalReplayFlow(flow)) {
+                continue;
+            }
+            int sign = flow.getQuantityDelta().signum();
+            if (sign < 0) {
+                outboundLeg = flow;
+                outboundPrincipalCount++;
+            } else if (sign > 0) {
+                BigDecimal legFmvUsd = computeMarketCost(transaction, flow);
+                if (legFmvUsd != null && legFmvUsd.signum() > 0) {
+                    inboundResolvedFmvUsd = inboundResolvedFmvUsd.add(legFmvUsd, MC);
+                    inboundFmvResolved = true;
+                }
+            }
+        }
+        // Structural gate: exactly one outbound DISPOSE leg + at least one resolved inbound FMV.
+        // Fail-safe (constraint 2): unresolved inbound FMV → leave outbound proceeds unchanged.
+        if (outboundPrincipalCount != 1 || outboundLeg == null || !inboundFmvResolved) {
+            return;
+        }
+        BigDecimal outboundQuantity = outboundLeg.getQuantityDelta().abs();
+        if (outboundQuantity.signum() <= 0) {
+            return;
+        }
+        BigDecimal derivedUnitPriceUsd = inboundResolvedFmvUsd.divide(outboundQuantity, MC);
+        outboundLeg.setUnitPriceUsd(derivedUnitPriceUsd);
+        outboundLeg.setPriceSource(PriceSource.SWAP_DERIVED);
+        log.debug(
+                "REPLAY_CROSS_CANONICAL_REDEMPTION_PROCEEDS txId={} type={} outboundAsset={} "
+                        + "inboundFmvUsd={} outboundQty={} derivedUnitPriceUsd={}",
+                transaction.getId(),
+                transaction.getType(),
+                outboundLeg.getAssetSymbol(),
+                inboundResolvedFmvUsd,
+                outboundQuantity,
+                derivedUnitPriceUsd
+        );
+    }
+
+    /**
+     * Principal (non-fee, economically significant) flow test mirroring
+     * {@link AccountingAssetClassificationSupport}'s internal principal-flow definition so the
+     * redemption-proceeds gate scans the same legs as {@code hasCrossCanonicalIdentityPrincipalPair}.
+     */
+    private static boolean isPrincipalReplayFlow(NormalizedTransaction.Flow flow) {
+        if (flow == null
+                || flow.getRole() == null
+                || flow.getRole() == NormalizedLegRole.FEE
+                || flow.getQuantityDelta() == null
+                || flow.getQuantityDelta().signum() == 0) {
+            return false;
+        }
+        if (flow.getRole() == NormalizedLegRole.TRANSFER) {
+            return true;
+        }
+        return (flow.getRole() == NormalizedLegRole.SELL && flow.getQuantityDelta().signum() < 0)
+                || (flow.getRole() == NormalizedLegRole.BUY && flow.getQuantityDelta().signum() > 0);
     }
 
     /**

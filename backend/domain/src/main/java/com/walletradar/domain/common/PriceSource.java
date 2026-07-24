@@ -17,6 +17,10 @@ public enum PriceSource {
     BINANCE,
     COINGECKO,
     DEFILLAMA,
+    /** Jupiter aggregator (Solana): SPL latest USD price by mint (Price API v3). */
+    JUPITER,
+    /** STON.fi DEX (TON): jetton latest USD price by master contract (free /v1/assets feed). */
+    STON_FI,
     PROTOCOL_SNAPSHOT,
     MANUAL,
     /** Matched crypto-loan principal disposal at borrow-time AVCO (ADR-012 §D3). */

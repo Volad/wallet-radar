@@ -1,5 +1,6 @@
 package com.walletradar.application.normalization.pipeline.onchain;
 
+import com.walletradar.application.normalization.pipeline.NormalizedCapabilityFlagStamper;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
@@ -83,6 +84,9 @@ public class OnChainNormalizedTransactionBuilder {
         if (classificationResult.status() == NormalizedTransactionStatus.CONFIRMED) {
             normalized.setConfirmedAt(now);
         }
+        // WS-8 (ADR-073/074): stamp capability flags at the single ingestion seam, after correlationId
+        // is finalized, so every network is handled uniformly and the flags survive reclassification.
+        NormalizedCapabilityFlagStamper.stamp(normalized);
         return normalized;
     }
 
@@ -120,6 +124,9 @@ public class OnChainNormalizedTransactionBuilder {
         } else {
             normalized.setConfirmedAt(existing.getConfirmedAt());
         }
+        // WS-8 (ADR-073/074): re-derive capability flags after the correlation-id fallback so a
+        // clarified row keeps them (single ingestion seam, network-uniform).
+        NormalizedCapabilityFlagStamper.stamp(normalized);
         return normalized;
     }
 
@@ -157,6 +164,10 @@ public class OnChainNormalizedTransactionBuilder {
         } else {
             normalized.setConfirmedAt(existing.getConfirmedAt());
         }
+        // WS-8 (ADR-073/074): re-derive capability flags after the correlation-id fallback so a
+        // reclassified row keeps them — this is the seam that ON_CHAIN_RECLASSIFICATION drops
+        // without, silently stripping the Solana lpConcentrated / receiptBearingCollateral flags.
+        NormalizedCapabilityFlagStamper.stamp(normalized);
         return normalized;
     }
 

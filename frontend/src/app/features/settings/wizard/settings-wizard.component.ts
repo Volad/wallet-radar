@@ -12,6 +12,12 @@ import {
 } from '../../../core/models/wallet-api.models';
 import { SessionStorageService } from '../../../core/services/session-storage.service';
 import { WalletApiService } from '../../../core/services/wallet-api.service';
+import {
+  detectWalletDomain,
+  isValidWalletAddress,
+  normalizeWalletAddress,
+  WalletAddressDomain,
+} from '../../../core/utils/wallet-address.util';
 
 type WizardStepId = 'wallets' | 'integrations' | 'accounting' | 'review';
 
@@ -27,12 +33,13 @@ interface WizardWalletDraft {
   readonly address: string;
   readonly label: string;
   readonly color: string;
-  readonly networks: ReadonlyArray<EvmNetworkId>;
+  readonly networks: ReadonlyArray<OnChainWalletNetworkId>;
   readonly networksOpen: boolean;
+  readonly domain: WalletAddressDomain;
 }
 
 const WIZARD_STEPS: ReadonlyArray<WizardStepMeta> = [
-  { id: 'wallets', icon: '◍', label: 'Wallets', desc: 'Add EVM addresses to track' },
+  { id: 'wallets', icon: '◍', label: 'Wallets', desc: 'Add your wallets to track' },
   { id: 'integrations', icon: '⇄', label: 'Integrations', desc: 'Optional exchange connections' },
   { id: 'accounting', icon: '◈', label: 'Accounting', desc: 'Cost basis method' },
   { id: 'review', icon: '✓', label: 'Review', desc: 'Confirm & start indexing' },
@@ -47,8 +54,6 @@ const WALLET_COLOR_PALETTE: ReadonlyArray<string> = [
   '#f472b6',
   '#34d399',
 ];
-
-const EVM_ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/u;
 
 @Component({
   selector: 'wr-settings-wizard',
@@ -91,7 +96,7 @@ export class SettingsWizardComponent {
         address: wallet.address.trim(),
         label: wallet.label.trim(),
       }))
-      .filter((wallet) => EVM_ADDRESS_PATTERN.test(wallet.address))
+      .filter((wallet) => isValidWalletAddress(wallet.address))
       .filter((wallet) => wallet.networks.length > 0)
   );
 
@@ -101,7 +106,7 @@ export class SettingsWizardComponent {
       if (address.length === 0) {
         return false;
       }
-      return !EVM_ADDRESS_PATTERN.test(address) || wallet.networks.length === 0;
+      return !isValidWalletAddress(address) || wallet.networks.length === 0;
     })
   );
 
@@ -166,7 +171,20 @@ export class SettingsWizardComponent {
 
   updateWallet(walletId: string, patch: Partial<Pick<WizardWalletDraft, 'address' | 'label'>>): void {
     this.wallets.update((wallets) =>
-      wallets.map((wallet) => (wallet.id === walletId ? { ...wallet, ...patch } : wallet))
+      wallets.map((wallet) => {
+        if (wallet.id !== walletId) return wallet;
+        const next = { ...wallet, ...patch };
+        if ('address' in patch) {
+          const domain = detectWalletDomain((patch.address ?? '').trim());
+          const networks: ReadonlyArray<OnChainWalletNetworkId> =
+            domain === 'SOLANA' ? ['SOLANA'] :
+            domain === 'TON' ? ['TON'] :
+            domain === 'EVM' ? [...this.allNetworkIds] :
+            next.networks;
+          return { ...next, domain, networks };
+        }
+        return next;
+      })
     );
   }
 
@@ -217,7 +235,12 @@ export class SettingsWizardComponent {
 
     const rows = candidates.slice(0, this.maxWallets).map((address, index) => {
       const draft = this.createWalletDraft(rowIndex + index);
-      return { ...draft, address };
+      const domain = detectWalletDomain(address);
+      const networks: ReadonlyArray<OnChainWalletNetworkId> =
+        domain === 'SOLANA' ? ['SOLANA'] :
+        domain === 'TON' ? ['TON'] :
+        [...this.allNetworkIds];
+      return { ...draft, address, domain, networks };
     });
     this.wallets.update((existing) => {
       const next = [...existing];
@@ -235,10 +258,10 @@ export class SettingsWizardComponent {
 
     const sessionId = this.createSessionId();
     const walletsPayload: ReadonlyArray<AddSessionRequestItem> = this.validWallets().map((wallet) => ({
-      address: wallet.address.trim(),
+      address: normalizeWalletAddress(wallet.address),
       label: wallet.label.trim(),
       color: wallet.color,
-      networks: wallet.networks as ReadonlyArray<OnChainWalletNetworkId>,
+      networks: wallet.networks,
     }));
 
     const payload: PutSessionSettingsRequest = {
@@ -277,13 +300,37 @@ export class SettingsWizardComponent {
     if (address.length === 0) {
       return null;
     }
-    if (!EVM_ADDRESS_PATTERN.test(address)) {
-      return 'Not a valid EVM address (0x + 40 hex chars).';
+    if (!isValidWalletAddress(address)) {
+      return 'Invalid wallet address (EVM, Solana, or TON).';
     }
     if (wallet.networks.length === 0) {
       return 'Select at least one network.';
     }
     return null;
+  }
+
+  networkLabel(domain: WalletAddressDomain): string {
+    switch (domain) {
+      case 'SOLANA': return 'Solana';
+      case 'TON': return 'TON';
+      default: return '';
+    }
+  }
+
+  networkIcon(domain: WalletAddressDomain): string {
+    switch (domain) {
+      case 'SOLANA': return '◎';
+      case 'TON': return '💎';
+      default: return '';
+    }
+  }
+
+  networkColor(domain: WalletAddressDomain): string {
+    switch (domain) {
+      case 'SOLANA': return '#9945FF';
+      case 'TON': return '#0098EA';
+      default: return '';
+    }
   }
 
   isStepComplete(stepId: WizardStepId): boolean {
@@ -323,6 +370,7 @@ export class SettingsWizardComponent {
       color: WALLET_COLOR_PALETTE[index % WALLET_COLOR_PALETTE.length]!,
       networks: [...this.allNetworkIds],
       networksOpen: false,
+      domain: 'UNKNOWN',
     };
   }
 
@@ -348,4 +396,3 @@ export class SettingsWizardComponent {
     });
   }
 }
-
