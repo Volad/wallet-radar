@@ -121,7 +121,7 @@ cashFlow          string decimal
 txHash            string | null
 networkId         string | null  (ARBITRUM, ETHEREUM, …)
 receivedAddress   string
-outOfScope        boolean  (true for TON / SOL / HYPEREVM)
+outOfScope        boolean  (true only for chains with no mapped NetworkId, e.g. HYPEREVM; TON / SOL are mapped and in scope)
 onChainCorrelation: { status: PENDING | MATCHED | UNMATCHED }
 
 status            RAW → CONFIRMED
@@ -1241,7 +1241,7 @@ BYBIT-SKIP-01  basisRelevant = false
                These records stay in external_ledger_raw with status = RAW.
                Covers: INTERNAL_TRANSFER · FUNDING_FEE · APPROVE · UNKNOWN_CEX
 
-BYBIT-SKIP-02  outOfScope = true  (TON · SOL without tracking · HYPEREVM)
+BYBIT-SKIP-02  outOfScope = true  (chains with no mapped NetworkId, e.g. HYPEREVM; TON / SOL are now mapped and in scope)
                Asset lifecycle ends at Bybit. No normalized_transaction created.
 
 BYBIT-SKIP-03  canonicalType = UNKNOWN_CEX
