@@ -3,6 +3,7 @@ package com.walletradar.application.pricing.latest;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.common.NetworkStablecoinContracts;
 import com.walletradar.domain.common.PriceSource;
+import com.walletradar.testsupport.NetworkTestFixtures;
 import com.walletradar.platform.networks.ton.price.TonPriceClient;
 import org.bson.Document;
 import org.bson.types.Decimal128;
@@ -28,6 +29,12 @@ import static org.mockito.Mockito.when;
  * {@link TonJettonLatestPriceProvider}.
  */
 class TonJettonLatestPriceProviderTest {
+
+    // Ensures NetworkNativeAssets (nativeIdentity for TON) is bound before tests run.
+    // The @BeforeAll will subsequently override NetworkStablecoinContracts with test-specific setup.
+    static {
+        NetworkTestFixtures.registry();
+    }
 
     private static final String STON_MASTER = "0:3690254dc15b2297610cda60744a45f2b710aa4234b89adb630e99d79b01bd4f";
     private static final String XAUT_MASTER = "0:3547f2ee4022c794c80ea354b81bb63b5b571dd05ac091b035d19abbadd74ac6";

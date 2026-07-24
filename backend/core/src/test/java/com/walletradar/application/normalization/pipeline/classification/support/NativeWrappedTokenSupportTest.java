@@ -61,8 +61,9 @@ class NativeWrappedTokenSupportTest {
     void canonicalWeth_resolvesConfiguredWrappedNativeAndNullOtherwise() {
         assertThat(NativeWrappedTokenSupport.canonicalWeth(null)).isNull();
         // Solana has a configured wrapped-native (wSOL SPL mint) in network-descriptors.yml.
+        // W16: base58 is case-sensitive; NetworkRegistry preserves case for non-EVM contracts.
         assertThat(NativeWrappedTokenSupport.canonicalWeth(NetworkId.SOLANA))
-                .isEqualTo("so11111111111111111111111111111111111111112");
+                .isEqualTo("So11111111111111111111111111111111111111112");
         // TON has no wrapped-native configured.
         assertThat(NativeWrappedTokenSupport.canonicalWeth(NetworkId.TON)).isNull();
     }

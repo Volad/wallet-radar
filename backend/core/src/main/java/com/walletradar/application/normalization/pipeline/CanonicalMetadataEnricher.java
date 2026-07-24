@@ -1,6 +1,7 @@
 package com.walletradar.application.normalization.pipeline;
 
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.common.NetworkNativeAssets;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
@@ -67,9 +68,8 @@ public class CanonicalMetadataEnricher {
         finalizeTokenIdentity(normalizedTransaction, NetworkId.TON);
     }
 
-    /** Native pseudo-contracts booked by the builders; these already carry a real symbol (SOL/TON). */
+    /** wSOL SPL mint — accounting-identical to native SOL; carries a correct real symbol (SOL). */
     private static final String SOLANA_WSOL_MINT = "So11111111111111111111111111111111111111112";
-    private static final String TON_NATIVE_CONTRACT = "TONCOIN";
     private static final String SPL_FALLBACK_PREFIX = "SPL:";
     private static final String TON_FALLBACK_PREFIX = "JETTON:";
     private static final int FALLBACK_SUFFIX_LENGTH = 6;
@@ -84,8 +84,10 @@ public class CanonicalMetadataEnricher {
      *
      * <p>Last resort: when no tier resolves a symbol, a deterministic, replay-stable non-blank
      * fallback derived from the contract is applied ({@code SPL:xxxxxx} / {@code JETTON:xxxxxx}) so
-     * {@code assetSymbol} is never blank and never the full raw address. This never changes the
-     * accounting identity/family, which is contract-keyed (see
+     * {@code assetSymbol} is never blank and never the full raw address. Native pseudo-contracts
+     * (wSOL native alias, descriptor {@code native-identity} sentinel for TON) are excluded from
+     * this fallback — they already carry a real symbol. This never changes the accounting
+     * identity/family, which is contract-keyed (see
      * {@code AccountingAssetFamilySupport.continuityIdentity}) and falls through to the contract
      * whether the symbol is blank or the fallback.</p>
      */
@@ -143,7 +145,7 @@ public class CanonicalMetadataEnricher {
         String trimmed = contract.trim();
         return switch (networkId) {
             case SOLANA -> trimmed.equals(SOLANA_WSOL_MINT);
-            case TON -> trimmed.equalsIgnoreCase(TON_NATIVE_CONTRACT);
+            case TON -> trimmed.equalsIgnoreCase(NetworkNativeAssets.nativeIdentity(NetworkId.TON));
             default -> false;
         };
     }

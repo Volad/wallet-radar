@@ -6,12 +6,12 @@ import com.walletradar.application.liquiditypools.enrichment.solana.MeteoraDlmmA
 import com.walletradar.application.liquiditypools.enrichment.solana.RaydiumClmmApiClient;
 import com.walletradar.application.liquiditypools.enrichment.solana.RaydiumClmmApiClient.RaydiumPool;
 import com.walletradar.application.liquiditypools.enrichment.solana.RaydiumClmmApiClient.RaydiumToken;
-import com.walletradar.application.liquiditypools.enrichment.solana.SolanaBase58;
 import com.walletradar.application.liquiditypools.enrichment.solana.SolanaLpChainClient;
 import com.walletradar.application.liquiditypools.enrichment.solana.SolanaLpChainClient.OnChainAccount;
 import com.walletradar.application.liquiditypools.persistence.LpPositionSnapshot;
 import com.walletradar.application.normalization.pipeline.solana.JupiterSplTokenMetadataResolver;
-import com.walletradar.application.normalization.pipeline.solana.SolanaProgramIds;
+import com.walletradar.application.normalization.pipeline.solana.SolanaProtocolPrograms;
+import com.walletradar.platform.networks.solana.SolanaBase58;
 import com.walletradar.domain.common.NetworkId;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -218,7 +218,7 @@ class SolanaLpPositionReaderTest {
     void raydiumResolvesPoolTokensFromPersonalPositionState() {
         byte[] pps = raydiumPersonalPosition(-100, 100);
         when(chainClient.getTokenAccountMint(RAYDIUM_NFT_ACCOUNT)).thenReturn(Optional.of("NftMint1111"));
-        when(chainClient.findProgramAccountData(eq(SolanaProgramIds.RAYDIUM_CLMM), anyInt(),
+        when(chainClient.findProgramAccountData(eq(SolanaProtocolPrograms.RAYDIUM_CLMM_ID), anyInt(),
                 anyString(), anyInt())).thenReturn(Optional.of(pps));
         when(raydiumClient.fetchPool(POOL)).thenReturn(Optional.of(new RaydiumPool(
                 new RaydiumToken(SOL_MINT, "WSOL", 9),

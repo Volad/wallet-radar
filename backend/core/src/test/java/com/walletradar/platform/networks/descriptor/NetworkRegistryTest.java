@@ -63,6 +63,26 @@ class NetworkRegistryTest {
     }
 
     @Test
+    @DisplayName("W14: nativeIdentity and nativeDecimals are exposed for SOLANA and TON; absent for EVM")
+    void nativeIdentityAndDecimalsFromDescriptor() {
+        // SOLANA: native-identity = NATIVE:SOLANA, native-decimals = 9
+        assertThat(NetworkNativeAssets.nativeIdentity(NetworkId.SOLANA)).isEqualTo("NATIVE:SOLANA");
+        assertThat(NetworkNativeAssets.nativeDecimals(NetworkId.SOLANA)).isEqualTo(9);
+        assertThat(NetworkNativeAssets.nativeSymbol(NetworkId.SOLANA)).isEqualTo("SOL");
+
+        // TON: native-identity = TONCOIN, native-decimals = 9
+        assertThat(NetworkNativeAssets.nativeIdentity(NetworkId.TON)).isEqualTo("TONCOIN");
+        assertThat(NetworkNativeAssets.nativeDecimals(NetworkId.TON)).isEqualTo(9);
+        assertThat(NetworkNativeAssets.nativeSymbol(NetworkId.TON)).isEqualTo("TON");
+
+        // EVM: native-identity absent (null), native-decimals present (18)
+        assertThat(NetworkNativeAssets.nativeIdentity(NetworkId.ETHEREUM)).isNull();
+        assertThat(NetworkNativeAssets.nativeDecimals(NetworkId.ETHEREUM)).isEqualTo(18);
+        assertThat(NetworkNativeAssets.nativeDecimals(NetworkId.ARBITRUM)).isEqualTo(18);
+        assertThat(NetworkNativeAssets.nativeDecimals(NetworkId.BSC)).isEqualTo(18);
+    }
+
+    @Test
     @DisplayName("ETH-family equivalent contracts derive from descriptors (W11): ETH-native "
             + "wrapped/alias + explicit bridged WETH; excludes non-ETH wrapped-natives")
     void ethFamilyEquivalentContracts() {

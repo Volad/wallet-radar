@@ -3,6 +3,7 @@ package com.walletradar.application.normalization.pipeline.ton;
 import com.walletradar.application.session.application.AccountingUniverseService;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.common.ton.TonAddressCanonicalizer;
+import com.walletradar.testsupport.NetworkTestFixtures;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
@@ -33,6 +34,11 @@ import static org.mockito.Mockito.when;
  * expected direction can be produced.</p>
  */
 class TonNormalizedTransactionBuilderTest {
+
+    // Ensures NetworkNativeAssets (nativeIdentity/nativeDecimals/nativeSymbol for TON) is bound before tests run.
+    static {
+        NetworkTestFixtures.registry();
+    }
 
     /** USDT-TON jetton master (descriptor-override to 6 decimals in network-descriptors.yml). Evidence anchor. */
     private static final String USDT_TON_MASTER = "EQCxE6mUtQJKFnGfaROTKOt1lZbDiiX1kCixRv7Nw2Id_sDs";

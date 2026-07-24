@@ -3,6 +3,7 @@ package com.walletradar.application.lending.application;
 import com.walletradar.application.costbasis.application.balance.OnChainBalanceProvider.ProviderBalance;
 import com.walletradar.application.lending.persistence.LendingLivePositionSnapshot;
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.testsupport.NetworkTestFixtures;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -19,6 +20,11 @@ import static org.mockito.Mockito.when;
  * picks up the ~5.42 SOL without a separate row — and only for Solana with a fresh snapshot.
  */
 class JupiterLendLockedCollateralProviderTest {
+
+    // Ensures NetworkNativeAssets (nativeIdentity) is bound before tests run.
+    static {
+        NetworkTestFixtures.registry();
+    }
 
     private static final String WALLET = "9Grpx4HKXTe51Ug9nAYuND9qf2bw326WvxFyEULt1DhG";
 

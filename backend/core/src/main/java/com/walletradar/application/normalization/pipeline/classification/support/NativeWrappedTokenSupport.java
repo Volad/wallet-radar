@@ -30,9 +30,10 @@ public final class NativeWrappedTokenSupport {
     }
 
     /**
-     * Returns the canonical wrapped-native contract address (lowercase) for {@code networkId}
-     * from {@code network-descriptors.yml}, or {@code null} if the network has no configured
-     * wrapped-native.
+     * Returns the canonical wrapped-native contract address for {@code networkId} from
+     * {@code network-descriptors.yml}, or {@code null} if the network has no configured
+     * wrapped-native. EVM contracts are lowercased; non-EVM (Solana base58, TON) are
+     * case-preserved (W16).
      */
     public static String canonicalWeth(NetworkId networkId) {
         return networkId == null ? null : NetworkNativeAssets.wrappedNativeContract(networkId);

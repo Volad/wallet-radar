@@ -15,9 +15,10 @@ import com.walletradar.application.costbasis.domain.LpReceiptBasisPool;
 import com.walletradar.application.costbasis.domain.LpReceiptBasisPoolKey;
 import com.walletradar.application.costbasis.domain.LpReceiptBasisPoolRepository;
 import com.walletradar.application.normalization.pipeline.solana.SolanaNormalizedTransactionBuilder;
-import com.walletradar.application.normalization.pipeline.solana.SolanaProgramIds;
+import com.walletradar.application.normalization.pipeline.solana.SolanaProtocolPrograms;
 import com.walletradar.application.normalization.pipeline.solana.SolanaTransactionClassifier;
 import com.walletradar.application.session.application.AccountingUniverseService;
+import com.walletradar.platform.networks.solana.SolanaChain;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
@@ -398,7 +399,7 @@ class SolanaLpContinuityReplayTest {
                 .isEqualTo("lp-position:solana:meteora-damm:" + DAMM_POOL + ":" + WALLET);
         assertThat(entryHandler.isLpReceiptEntry(entry)).isTrue();
 
-        NormalizedTransaction.Flow solFlow = dammLeg(entry, SolanaProgramIds.WSOL_MINT);
+        NormalizedTransaction.Flow solFlow = dammLeg(entry, SolanaChain.WSOL_MINT);
         NormalizedTransaction.Flow msolFlow = dammLeg(entry, MSOL_MINT);
         NormalizedTransaction.Flow mlpEntryFlow = dammLeg(entry, MLP_MINT);
         AssetKey solKey = assetSupport.assetKey(entry, solFlow);
@@ -446,7 +447,7 @@ class SolanaLpContinuityReplayTest {
         assertThat(state.position(msolKey).totalCostBasisUsd()).isCloseTo(DAMM_MSOL_BASIS, within(eps));
         List<com.walletradar.application.costbasis.domain.AssetLedgerPoint> exitPoints =
                 points.subList(pointsBeforeExit, points.size());
-        assertThat(exitPoints).filteredOn(p -> SolanaProgramIds.WSOL_MINT.equals(p.getAssetContract()))
+        assertThat(exitPoints).filteredOn(p -> SolanaChain.WSOL_MINT.equals(p.getAssetContract()))
                 .allMatch(p -> p.getBasisEffect()
                         == com.walletradar.application.costbasis.domain.AssetLedgerPoint.BasisEffect.REALLOCATE_IN);
 
@@ -480,10 +481,10 @@ class SolanaLpContinuityReplayTest {
 
     private static Document dammLiquidityInstruction() {
         // addBalanceLiquidity / removeBalanceLiquidity: [pool, lpMint, userPoolLp, ...] (damm-v1-sdk IDL).
-        return new Document("programId", SolanaProgramIds.METEORA_DYNAMIC_AMM).append("accounts", List.of(
+        return new Document("programId", SolanaProtocolPrograms.METEORA_DYNAMIC_AMM_ID).append("accounts", List.of(
                 DAMM_POOL, MLP_MINT, DAMM_USER_POOL_LP, "aVaultLp", "bVaultLp", "aVault", "bVault",
                 "aTokenVault", "bTokenVault", "aVaultLpMint", "bVaultLpMint", WALLET,
-                SolanaProgramIds.TOKEN_PROGRAM, SolanaProgramIds.METEORA_VAULT));
+                SolanaChain.TOKEN_PROGRAM, SolanaProtocolPrograms.METEORA_VAULT_ID));
     }
 
     private static RawTransaction dammEntryRaw() {
@@ -493,7 +494,7 @@ class SolanaLpContinuityReplayTest {
                 .append("instructions", List.of(dammLiquidityInstruction()))
                 .append("tokenTransfers", List.of(
                         new Document("fromUserAccount", WALLET).append("toUserAccount", DAMM_POOL)
-                                .append("mint", SolanaProgramIds.WSOL_MINT).append("symbol", "SOL")
+                                .append("mint", SolanaChain.WSOL_MINT).append("symbol", "SOL")
                                 .append("tokenAmount", DAMM_SOL_QTY.doubleValue()),
                         new Document("fromUserAccount", WALLET).append("toUserAccount", DAMM_POOL)
                                 .append("mint", MSOL_MINT).append("symbol", "MSOL")
@@ -511,7 +512,7 @@ class SolanaLpContinuityReplayTest {
                 .append("instructions", List.of(dammLiquidityInstruction()))
                 .append("tokenTransfers", List.of(
                         new Document("fromUserAccount", DAMM_POOL).append("toUserAccount", WALLET)
-                                .append("mint", SolanaProgramIds.WSOL_MINT).append("symbol", "SOL")
+                                .append("mint", SolanaChain.WSOL_MINT).append("symbol", "SOL")
                                 .append("tokenAmount", DAMM_SOL_QTY.doubleValue()),
                         new Document("fromUserAccount", DAMM_POOL).append("toUserAccount", WALLET)
                                 .append("mint", MSOL_MINT).append("symbol", "MSOL")
@@ -527,10 +528,10 @@ class SolanaLpContinuityReplayTest {
 
     private static Document raydiumClmmLiquidityInstruction() {
         // increase/decrease liquidity: accounts[0]=nftOwner(wallet), accounts[1]=nftAccount.
-        return new Document("programId", SolanaProgramIds.RAYDIUM_CLMM).append("accounts", List.of(
+        return new Document("programId", SolanaProtocolPrograms.RAYDIUM_CLMM_ID).append("accounts", List.of(
                 WALLET, RAYDIUM_NFT_ACCOUNT, "poolState", "protocolPosition", "personalPosition",
                 "tickLower", "tickUpper", "tokenAcc0", "tokenAcc1", "tokenVault0", "tokenVault1",
-                SolanaProgramIds.TOKEN_PROGRAM));
+                SolanaChain.TOKEN_PROGRAM));
     }
 
     private static RawTransaction raydiumEntryRaw() {
@@ -540,7 +541,7 @@ class SolanaLpContinuityReplayTest {
                 .append("instructions", List.of(raydiumClmmLiquidityInstruction()))
                 .append("tokenTransfers", List.of(new Document("fromUserAccount", WALLET)
                         .append("toUserAccount", RAYDIUM_POOL_VAULT)
-                        .append("mint", SolanaProgramIds.WSOL_MINT)
+                        .append("mint", SolanaChain.WSOL_MINT)
                         .append("symbol", "SOL")
                         .append("tokenAmount", SOL_QTY.doubleValue())));
         return raw("raydiumEntrySig", parsed);
@@ -553,7 +554,7 @@ class SolanaLpContinuityReplayTest {
                 .append("instructions", List.of(raydiumClmmLiquidityInstruction()))
                 .append("tokenTransfers", List.of(new Document("fromUserAccount", RAYDIUM_POOL_VAULT)
                         .append("toUserAccount", WALLET)
-                        .append("mint", SolanaProgramIds.WSOL_MINT)
+                        .append("mint", SolanaChain.WSOL_MINT)
                         .append("symbol", "SOL")
                         .append("tokenAmount", SOL_QTY.doubleValue())));
         return raw("raydiumExitSig", parsed);
@@ -571,7 +572,7 @@ class SolanaLpContinuityReplayTest {
                 .append("instructions", List.of(raydiumClmmLiquidityInstruction()))
                 .append("tokenTransfers", List.of(new Document("fromUserAccount", RAYDIUM_POOL_VAULT)
                         .append("toUserAccount", WALLET)
-                        .append("mint", SolanaProgramIds.WSOL_MINT)
+                        .append("mint", SolanaChain.WSOL_MINT)
                         .append("symbol", "SOL")
                         .append("tokenAmount", new BigDecimal(solReturned).doubleValue())))
                 .append("accountData", List.of(new Document("account", RAYDIUM_NFT_ACCOUNT)
@@ -590,7 +591,7 @@ class SolanaLpContinuityReplayTest {
                 .append("instructions", List.of(dlmmLiquidityInstruction()))
                 .append("tokenTransfers", List.of(new Document("fromUserAccount", POOL)
                         .append("toUserAccount", WALLET)
-                        .append("mint", SolanaProgramIds.WSOL_MINT)
+                        .append("mint", SolanaChain.WSOL_MINT)
                         .append("symbol", "SOL")
                         .append("tokenAmount", new BigDecimal(solReturned).doubleValue())))
                 .append("accountData", List.of(new Document("account", POSITION)
@@ -599,9 +600,9 @@ class SolanaLpContinuityReplayTest {
     }
 
     private static Document dlmmLiquidityInstruction() {
-        return new Document("programId", SolanaProgramIds.METEORA_DLMM).append("accounts", List.of(
-                POSITION, POOL, SolanaProgramIds.METEORA_DLMM, "userTokenX", "userTokenY",
-                "reserveX", "reserveY", SolanaProgramIds.WSOL_MINT, "binLower", "binUpper", WALLET));
+        return new Document("programId", SolanaProtocolPrograms.METEORA_DLMM_ID).append("accounts", List.of(
+                POSITION, POOL, SolanaProtocolPrograms.METEORA_DLMM_ID, "userTokenX", "userTokenY",
+                "reserveX", "reserveY", SolanaChain.WSOL_MINT, "binLower", "binUpper", WALLET));
     }
 
     private static RawTransaction raw(String signature, Document heliusParsed) {
@@ -621,7 +622,7 @@ class SolanaLpContinuityReplayTest {
                 .append("instructions", List.of(dlmmLiquidityInstruction()))
                 .append("tokenTransfers", List.of(new Document("fromUserAccount", WALLET)
                         .append("toUserAccount", POOL)
-                        .append("mint", SolanaProgramIds.WSOL_MINT)
+                        .append("mint", SolanaChain.WSOL_MINT)
                         .append("symbol", "SOL")
                         .append("tokenAmount", SOL_QTY.doubleValue())));
         return raw("entrySig", parsed);
@@ -634,7 +635,7 @@ class SolanaLpContinuityReplayTest {
                 .append("instructions", List.of(dlmmLiquidityInstruction()))
                 .append("tokenTransfers", List.of(new Document("fromUserAccount", POOL)
                         .append("toUserAccount", WALLET)
-                        .append("mint", SolanaProgramIds.WSOL_MINT)
+                        .append("mint", SolanaChain.WSOL_MINT)
                         .append("symbol", "SOL")
                         .append("tokenAmount", SOL_QTY.doubleValue())));
         return raw("exitSig", parsed);

@@ -7,6 +7,7 @@ import com.walletradar.application.pricing.latest.CurrentPriceReadService;
 import com.walletradar.application.pricing.latest.ResolvedPrice;
 import com.walletradar.domain.common.PriceSource;
 import com.walletradar.platform.networks.solana.jupiter.lend.JupiterLendClient;
+import com.walletradar.testsupport.NetworkTestFixtures;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -26,6 +27,11 @@ import static org.mockito.Mockito.when;
  * CF 0.80 / LT 0.85 ⇒ HF ≈ 1.51, LTV ≈ 56.4% — and counts the position exactly once.
  */
 class JupiterLendLivePositionReaderTest {
+
+    // Ensures NetworkNativeAssets (nativeIdentity/nativeDecimals/nativeSymbol) is bound before tests run.
+    static {
+        NetworkTestFixtures.registry();
+    }
 
     private static final String WSOL_MINT = "So11111111111111111111111111111111111111112";
     private static final String USDT_MINT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";

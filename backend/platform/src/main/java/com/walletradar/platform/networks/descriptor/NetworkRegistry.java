@@ -51,6 +51,8 @@ public class NetworkRegistry {
                     networkId,
                     addressFormat,
                     config.getNativeSymbol(),
+                    config.getNativeIdentity(),
+                    config.getNativeDecimals(),
                     normalizeContract(config.getWrappedNative() == null ? null : config.getWrappedNative().getContract()),
                     config.getWrappedNative() == null ? null : config.getWrappedNative().getSymbol(),
                     normalizeContracts(config.getNativeAliasContracts()),
@@ -75,7 +77,9 @@ public class NetworkRegistry {
         NetworkNativeAssets.bind(
                 id -> find(id).map(NetworkDescriptor::nativeSymbol).orElse(null),
                 this::wrappedNativeContract,
-                this::nativeAliasIdentityContracts);
+                this::nativeAliasIdentityContracts,
+                id -> find(id).map(NetworkDescriptor::nativeIdentity).orElse(null),
+                id -> find(id).map(NetworkDescriptor::nativeDecimals).orElse(null));
         log.info("Loaded network registry: {} descriptors ({} wallet-supported, {} EVM-wallet-supported)",
                 descriptorsById.size(),
                 walletSupportedNetworks.size(),
@@ -293,6 +297,11 @@ public class NetworkRegistry {
         if (contract == null || contract.isBlank()) {
             return null;
         }
-        return contract.trim().toLowerCase(Locale.ROOT);
+        String trimmed = contract.trim();
+        // EVM contracts are checksummed hex (0x-prefixed, case-insensitive) → lowercase for uniform comparison.
+        // Non-EVM contracts (Solana base58, TON addresses) are case-sensitive → preserve case (W16).
+        return (trimmed.startsWith("0x") || trimmed.startsWith("0X"))
+                ? trimmed.toLowerCase(Locale.ROOT)
+                : trimmed;
     }
 }

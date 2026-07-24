@@ -15,6 +15,7 @@ walletradar:
       ETHEREUM:
         address-format: EVM
         native-symbol: ETH
+        native-decimals: 18
         wrapped-native:
           contract: "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
           symbol: WETH
@@ -34,6 +35,7 @@ walletradar:
       ARBITRUM:
         address-format: EVM
         native-symbol: ETH
+        native-decimals: 18
         wrapped-native:
           contract: "0x82af49447d8a07e3bd95bd0d56f35241523fbab1"
           symbol: WETH
@@ -54,6 +56,7 @@ walletradar:
       OPTIMISM:
         address-format: EVM
         native-symbol: ETH
+        native-decimals: 18
         wrapped-native:
           contract: "0x4200000000000000000000000000000000000006"
           symbol: WETH
@@ -69,6 +72,7 @@ walletradar:
       BASE:
         address-format: EVM
         native-symbol: ETH
+        native-decimals: 18
         wrapped-native:
           contract: "0x4200000000000000000000000000000000000006"
           symbol: WETH
@@ -84,6 +88,7 @@ walletradar:
       UNICHAIN:
         address-format: EVM
         native-symbol: ETH
+        native-decimals: 18
         wrapped-native:
           contract: "0x4200000000000000000000000000000000000006"
           symbol: WETH
@@ -95,6 +100,7 @@ walletradar:
       ZKSYNC:
         address-format: EVM
         native-symbol: ETH
+        native-decimals: 18
         wrapped-native:
           contract: "0x5aea5775959fbc2557cc8789bc1bf90a239d9a91"
           symbol: WETH
@@ -108,6 +114,7 @@ walletradar:
       LINEA:
         address-format: EVM
         native-symbol: ETH
+        native-decimals: 18
         wrapped-native:
           contract: "0xe5d7c2a44ffddf6b295a15c148167daaaf5cf34f"
           symbol: WETH
@@ -118,6 +125,7 @@ walletradar:
       KATANA:
         address-format: EVM
         native-symbol: ETH
+        native-decimals: 18
         wrapped-native:
           # Katana WETH (aka vbETH / Vault Bridge ETH) — NOT the default OP-Stack 0x420...006.
           contract: "0xee7d8bcfb72bc1880d0cf19822eb0a2e6577ab62"
@@ -127,6 +135,7 @@ walletradar:
       BSC:
         address-format: EVM
         native-symbol: BNB
+        native-decimals: 18
         wrapped-native:
           contract: "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c"
           symbol: WBNB
@@ -138,6 +147,7 @@ walletradar:
       POLYGON:
         address-format: EVM
         native-symbol: MATIC
+        native-decimals: 18
         wrapped-native:
           contract: "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270"
           symbol: WMATIC
@@ -150,6 +160,7 @@ walletradar:
       AVALANCHE:
         address-format: EVM
         native-symbol: AVAX
+        native-decimals: 18
         wrapped-native:
           contract: "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7"
           symbol: WAVAX
@@ -167,6 +178,7 @@ walletradar:
       MANTLE:
         address-format: EVM
         native-symbol: MNT
+        native-decimals: 18
         wrapped-native:
           contract: "0x78c1b0c915c4faa5fffa6cabf0219da63d7f4cb8"
           symbol: WMNT
@@ -184,6 +196,7 @@ walletradar:
       PLASMA:
         address-format: EVM
         native-symbol: XPL
+        native-decimals: 18
         wrapped-native:
           contract: "0x6100e367285b01f48d07953803a2d8dca5d19873"
           symbol: WXPL
@@ -197,9 +210,13 @@ walletradar:
       SOLANA:
         address-format: SOLANA
         native-symbol: SOL
+        # Accounting identity sentinel stamped on native SOL flows by SolanaNormalizedTransactionBuilder
+        # and used by balance/lending/pricing readers as the canonical contract for native SOL.
+        native-identity: "NATIVE:SOLANA"
+        native-decimals: 9
         # Wrapped SOL (wSOL) SPL mint — accounting-identical to native SOL (wrap/unwrap has no basis impact).
-        # NOTE: base-58 is case-sensitive; NetworkRegistry lowercases contract keys and lowercases the
-        # query side symmetrically, so stablecoin/wrapped-native membership checks still match.
+        # NOTE: base-58 is case-sensitive. NetworkRegistry preserves exact case for non-EVM (non-0x)
+        # contracts (W16). Consumers must compare wSOL with the case-preserved mint address.
         wrapped-native:
           contract: "So11111111111111111111111111111111111111112"
           symbol: WSOL
@@ -219,6 +236,10 @@ walletradar:
         wallet-supported: true
         evm-wallet-supported: false
         native-symbol: TON
+        # Accounting identity sentinel stamped on native TON flows by TonNormalizedTransactionBuilder
+        # and used by balance/pricing readers as the canonical contract for native TON.
+        native-identity: "TONCOIN"
+        native-decimals: 9
         usd-stable-contracts:
           - "EQCxE6mUtQJKFnGfaROTKOt1lZbDiiX1kCixRv7Nw2Id_sDs"  # USD₮ (Tether jetton master, TON)
         # Jetton masters keyed in any canonical form (friendly EQ…/UQ… or raw workchain:hex);

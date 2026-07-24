@@ -7,6 +7,7 @@ import com.walletradar.platform.networks.RpcEndpointRotator;
 import com.walletradar.platform.networks.solana.SolanaRpcClient;
 import com.walletradar.platform.networks.solana.jupiter.JupiterClient;
 import com.walletradar.platform.networks.solana.jupiter.JupiterProperties;
+import com.walletradar.testsupport.NetworkTestFixtures;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -27,6 +28,11 @@ import static org.mockito.Mockito.lenient;
 
 @ExtendWith(MockitoExtension.class)
 class SolanaOnChainBalanceProviderTest {
+
+    // Ensures NetworkNativeAssets (nativeIdentity/nativeDecimals/nativeSymbol) is bound before tests run.
+    static {
+        NetworkTestFixtures.registry();
+    }
 
     private static final String OWNER = "So1anaWa11etAbcDefGhiJkLmNoPqRsTuVwXyz12";
     private static final String USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
@@ -88,6 +94,40 @@ class SolanaOnChainBalanceProviderTest {
                     assertThat(b.assetSymbol()).isEqualTo(UNKNOWN_MINT);
                     assertThat(b.quantity()).isEqualByComparingTo("1");
                 });
+    }
+
+    @Test
+    void enumeratesToken2022BalancesAlongsideClassicSpl() {
+        String splProgramId = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+        String token2022ProgramId = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+        String token2022Mint = "T22Mint1111111111111111111111111111111111";
+
+        lenient().when(rpcClient.call(anyString(), eq("getBalance"), any()))
+                .thenReturn(Mono.just("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"value\":0}}"));
+        lenient().when(rpcClient.call(anyString(), eq("getTokenAccountsByOwner"), any()))
+                .thenAnswer(invocation -> {
+                    List<?> params = invocation.getArgument(2);
+                    String programId = (String) ((Map<?, ?>) params.get(1)).get("programId");
+                    if (splProgramId.equals(programId)) {
+                        return Mono.just("{\"result\":{\"value\":[" + tokenAccount(USDC_MINT, "1500000", 6) + "]}}");
+                    }
+                    if (token2022ProgramId.equals(programId)) {
+                        return Mono.just("{\"result\":{\"value\":[" + tokenAccount(token2022Mint, "2000000000", 9) + "]}}");
+                    }
+                    return Mono.just("{\"result\":{\"value\":[]}}");
+                });
+
+        List<OnChainBalanceProvider.ProviderBalance> balances = provider().fetchBalances(OWNER);
+
+        assertThat(balances).hasSize(2);
+        assertThat(balances)
+                .filteredOn(b -> USDC_MINT.equals(b.assetContract()))
+                .singleElement()
+                .satisfies(b -> assertThat(b.quantity()).isEqualByComparingTo("1.5"));
+        assertThat(balances)
+                .filteredOn(b -> token2022Mint.equals(b.assetContract()))
+                .singleElement()
+                .satisfies(b -> assertThat(b.quantity()).isEqualByComparingTo("2"));
     }
 
     @Test

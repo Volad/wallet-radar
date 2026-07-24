@@ -4,6 +4,7 @@ import com.walletradar.application.costbasis.application.balance.OnChainBalanceP
 import com.walletradar.application.costbasis.application.balance.ProtocolLockedBalanceProvider;
 import com.walletradar.application.lending.persistence.LendingLivePositionSnapshot;
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.common.NetworkNativeAssets;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -16,14 +17,13 @@ import java.util.List;
  * single-authority). Reads the freshest persisted {@link LendingLivePositionSnapshot} for the wallet
  * — never performs network I/O on the balance-refresh path (snapshot-first) — and surfaces the
  * collateral legs so the dashboard SOL quantity and move-basis pick up the locked ~5.42 SOL exactly
- * like an Aave aToken (Aave-parity). Native SOL collateral is booked as {@code NATIVE:SOLANA} so it
+ * like an Aave aToken (Aave-parity). Native SOL collateral is booked using the descriptor
+ * {@code native-identity} sentinel (resolved via {@link NetworkNativeAssets#nativeIdentity}) so it
  * merges with the wallet's free SOL rather than appearing as a separate row.
  */
 @Component
 @RequiredArgsConstructor
 public class JupiterLendLockedCollateralProvider implements ProtocolLockedBalanceProvider {
-
-    private static final String NATIVE_SOL_IDENTITY = "NATIVE:SOLANA";
 
     private final LendingLivePositionSnapshotService snapshotService;
 
@@ -44,7 +44,8 @@ public class JupiterLendLockedCollateralProvider implements ProtocolLockedBalanc
             if (quantity == null || quantity.signum() <= 0) {
                 continue;
             }
-            boolean nativeAsset = NATIVE_SOL_IDENTITY.equals(leg.getAssetContract());
+            boolean nativeAsset = leg.getAssetContract() != null
+                    && leg.getAssetContract().equals(NetworkNativeAssets.nativeIdentity(NetworkId.SOLANA));
             balances.add(new ProviderBalance(
                     leg.getAssetSymbol(),
                     leg.getAssetContract(),

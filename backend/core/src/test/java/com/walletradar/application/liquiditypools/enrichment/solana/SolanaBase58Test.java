@@ -1,5 +1,6 @@
 package com.walletradar.application.liquiditypools.enrichment.solana;
 
+import com.walletradar.platform.networks.solana.SolanaBase58;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;

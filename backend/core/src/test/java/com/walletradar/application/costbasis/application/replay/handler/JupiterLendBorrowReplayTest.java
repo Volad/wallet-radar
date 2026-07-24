@@ -10,15 +10,18 @@ import com.walletradar.application.costbasis.application.replay.support.GenericF
 import com.walletradar.application.costbasis.application.replay.support.ReplayAssetSupport;
 import com.walletradar.application.costbasis.application.replay.support.ReplayFlowSupport;
 import com.walletradar.application.normalization.pipeline.solana.SolanaNormalizedTransactionBuilder;
-import com.walletradar.application.normalization.pipeline.solana.SolanaProgramIds;
+import com.walletradar.application.normalization.pipeline.solana.SolanaProtocolPrograms;
 import com.walletradar.application.normalization.pipeline.solana.SolanaTransactionClassifier;
 import com.walletradar.application.session.application.AccountingUniverseService;
+import com.walletradar.domain.common.NetworkStablecoinContracts;
+import com.walletradar.testsupport.NetworkTestFixtures;
 import com.walletradar.domain.common.PriceSource;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import org.bson.Document;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -45,6 +48,12 @@ class JupiterLendBorrowReplayTest {
     private static final String RESERVE = "7s1da8DduuBFqGra5bJBjpnvL5E9mGzCuMk1Qkh4or2Z";
     private static final String UNIVERSE = "df5e69cc-a0c0-4910-8b7d-74488fa266e2";
     private static final BigDecimal BORROW_QTY = new BigDecimal("210");
+    private static final String USDT_MINT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
+
+    @BeforeAll
+    static void bindStablecoinContracts() {
+        NetworkStablecoinContracts.bind(networkId -> NetworkTestFixtures.registry().usdStableContracts(networkId));
+    }
 
     private final SolanaNormalizedTransactionBuilder builder = new SolanaNormalizedTransactionBuilder(
             new SolanaTransactionClassifier(),
@@ -76,7 +85,7 @@ class JupiterLendBorrowReplayTest {
         NormalizedTransaction borrow = builder.build(
                 raw("borrowSig", borrowParsed()), Instant.parse("2025-09-22T07:08:09Z"));
         assertThat(borrow.getType()).isEqualTo(NormalizedTransactionType.BORROW);
-        String expectedOrderId = "solana:jupiter-lend:" + SolanaProgramIds.USDT_MINT + ":" + WALLET;
+        String expectedOrderId = "solana:jupiter-lend:" + USDT_MINT + ":" + WALLET;
         assertThat(borrow.getCorrelationId()).isEqualTo(expectedOrderId);
 
         NormalizedTransaction.Flow borrowFlow = borrow.getFlows().stream()
@@ -115,10 +124,10 @@ class JupiterLendBorrowReplayTest {
         return new Document("type", "UNKNOWN")
                 .append("fee", 5_000L)
                 .append("timestamp", 1_758_524_889L)
-                .append("instructions", List.of(new Document("programId", SolanaProgramIds.JUPITER_LEND)))
+                .append("instructions", List.of(new Document("programId", SolanaProtocolPrograms.jupiterLendProgramIds().iterator().next())))
                 .append("tokenTransfers", List.of(new Document("fromUserAccount", RESERVE)
                         .append("toUserAccount", WALLET)
-                        .append("mint", SolanaProgramIds.USDT_MINT)
+                        .append("mint", USDT_MINT)
                         .append("symbol", "USDT")
                         .append("tokenAmount", 210.0)));
     }
@@ -127,10 +136,10 @@ class JupiterLendBorrowReplayTest {
         return new Document("type", "UNKNOWN")
                 .append("fee", 5_000L)
                 .append("timestamp", 1_759_276_800L)
-                .append("instructions", List.of(new Document("programId", SolanaProgramIds.JUPITER_LEND)))
+                .append("instructions", List.of(new Document("programId", SolanaProtocolPrograms.jupiterLendProgramIds().iterator().next())))
                 .append("tokenTransfers", List.of(new Document("fromUserAccount", WALLET)
                         .append("toUserAccount", RESERVE)
-                        .append("mint", SolanaProgramIds.USDT_MINT)
+                        .append("mint", USDT_MINT)
                         .append("symbol", "USDT")
                         .append("tokenAmount", 210.0)));
     }

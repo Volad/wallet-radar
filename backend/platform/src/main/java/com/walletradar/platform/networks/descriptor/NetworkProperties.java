@@ -44,6 +44,10 @@ public class NetworkProperties {
 
         private String addressFormat = "EVM";
         private String nativeSymbol;
+        /** Accounting identity sentinel for native flows (e.g. {@code NATIVE:SOLANA}, {@code TONCOIN}). Absent for EVM. */
+        private String nativeIdentity;
+        /** Precision of the native token in decimal places (e.g. 9 for SOL/TON, 18 for EVM). */
+        private Integer nativeDecimals;
         private WrappedNative wrappedNative = new WrappedNative();
         private List<String> nativeAliasContracts = new ArrayList<>();
         private Boolean walletSupported = true;

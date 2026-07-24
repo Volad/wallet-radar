@@ -1,7 +1,9 @@
 package com.walletradar.application.pricing.latest;
 
+import com.walletradar.platform.networks.solana.SolanaChain;
 import com.walletradar.application.pricing.domain.CanonicalAssetCatalog;
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.common.NetworkNativeAssets;
 import com.walletradar.domain.common.PriceSource;
 import com.walletradar.platform.networks.solana.jupiter.JupiterClient;
 import com.walletradar.platform.networks.solana.jupiter.JupiterProperties;
@@ -28,11 +30,12 @@ import java.util.Map;
  * via the free Jupiter Price v3 API, keyed in {@code current_price_quotes} by the resolved canonical
  * symbol.
  *
- * <p>Mapping is derived from {@code on_chain_balances} (networkId=SOLANA): each row's
- * {@code assetSymbol} → canonical symbol and {@code assetContract} → the mint to price. Native SOL
- * and USD-pegged stablecoins are skipped (SOL is priced by CEX venues; stablecoins are pinned to
- * $1). When several mints canonicalize to the same symbol, the mint held in the largest quantity
- * wins.</p>
+     * <p>Mapping is derived from {@code on_chain_balances} (networkId=SOLANA): each row's
+     * {@code assetSymbol} → canonical symbol and {@code assetContract} → the mint to price. Native SOL
+     * (descriptor {@code native-identity}) and wSOL ({@code SolanaChain.WSOL_MINT}) and
+     * USD-pegged stablecoins are skipped (SOL is priced by CEX venues; stablecoins are pinned to
+     * $1). When several mints canonicalize to the same symbol, the mint held in the largest quantity
+     * wins.</p>
  *
  * <p>Lower priority than Bybit/Dzengi so majors still come from the CEX venues; this is the only
  * source for SPL memecoins. Never throws.</p>
@@ -43,13 +46,6 @@ public class JupiterPriceLatestPriceProvider implements LatestPriceProvider {
     private static final Logger log = LoggerFactory.getLogger(JupiterPriceLatestPriceProvider.class);
 
     private static final String COLLECTION = "on_chain_balances";
-    private static final String NATIVE_SOL_IDENTITY = "NATIVE:SOLANA";
-    /**
-     * Wrapped SOL SPL mint. wSOL is accounting- and price-identical to native SOL (it canonicalises
-     * to SOL), so it must be priced by the CEX venues (Bybit/Dzengi), never as a distinct SPL via
-     * Jupiter — otherwise a spurious JUPITER SOL quote competes with the authoritative CEX mark.
-     */
-    private static final String WRAPPED_SOL_MINT = "So11111111111111111111111111111111111111112";
     private static final String USD_QUOTE = "USD";
     /** Below Bybit (1) and Dzengi (2): CEX venues win for symbols they cover. */
     private static final int PRIORITY = 5;
@@ -134,7 +130,9 @@ public class JupiterPriceLatestPriceProvider implements LatestPriceProvider {
         Map<String, List<MintQuantity>> result = new LinkedHashMap<>();
         for (Document doc : mongoOperations.find(query, Document.class, COLLECTION)) {
             String mint = trimToNull(doc.getString("assetContract"));
-            if (mint == null || NATIVE_SOL_IDENTITY.equals(mint) || WRAPPED_SOL_MINT.equals(mint)) {
+            if (mint == null
+                    || mint.equals(NetworkNativeAssets.nativeIdentity(NetworkId.SOLANA))
+                    || mint.equals(SolanaChain.WSOL_MINT)) {
                 continue;
             }
             String rawSymbol = trimToNull(doc.getString("assetSymbol"));

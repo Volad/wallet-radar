@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.walletradar.application.normalization.pipeline.ton.TonJettonMetadataRegistry;
 import com.walletradar.domain.common.Decimal128Support;
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.common.NetworkNativeAssets;
 import com.walletradar.domain.common.ton.TonAddressCanonicalizer;
 import com.walletradar.platform.networks.RpcException;
 import com.walletradar.platform.networks.ton.TonNetworkProperties;
@@ -25,8 +26,9 @@ import java.util.Map;
  * a wallet via the shared {@link TonRpcClient} (TON Center v3 REST API).
  *
  * <ul>
- *   <li>Native TON: {@code GET /accountStates?address=...} → {@code balance} nanoTON at 9 decimals,
- *       booked with the same {@code TONCOIN} contract that {@code TonNormalizedTransactionBuilder}
+ *   <li>Native TON: {@code GET /accountStates?address=...} → {@code balance} nanoTON at
+ *       {@code native-decimals} from the network descriptor (9), booked with the
+ *       {@code native-identity} sentinel ({@code TONCOIN}) that {@code TonNormalizedTransactionBuilder}
  *       stamps on native flows so the accounting identity matches the ledger.</li>
  *   <li>Jettons: {@code GET /jetton/wallets?owner_address=...} → one balance per jetton master.
  *       Decimals resolve via {@link TonJettonMetadataRegistry} (then the response {@code metadata}
@@ -43,10 +45,6 @@ import java.util.Map;
 @Slf4j
 public class TonOnChainBalanceProvider implements OnChainBalanceProvider {
 
-    private static final int TON_DECIMALS = 9;
-    private static final String NATIVE_TON_SYMBOL = "TON";
-    /** Native TON contract sentinel — mirrors {@code TonNormalizedTransactionBuilder.TON_COIN_CONTRACT}. */
-    private static final String NATIVE_TON_CONTRACT = "TONCOIN";
     private static final int JETTON_PAGE_SIZE = 128;
 
     private final TonRpcClient rpcClient;
@@ -81,7 +79,12 @@ public class TonOnChainBalanceProvider implements OnChainBalanceProvider {
 
         BigDecimal nativeTon = fetchNativeTon(owner);
         if (nativeTon != null && nativeTon.signum() > 0) {
-            balances.add(new ProviderBalance(NATIVE_TON_SYMBOL, NATIVE_TON_CONTRACT, TON_DECIMALS, nativeTon, true));
+            balances.add(new ProviderBalance(
+                    NetworkNativeAssets.nativeSymbol(NetworkId.TON),
+                    NetworkNativeAssets.nativeIdentity(NetworkId.TON),
+                    NetworkNativeAssets.nativeDecimals(NetworkId.TON),
+                    nativeTon,
+                    true));
         }
 
         balances.addAll(fetchJettons(owner));
@@ -100,7 +103,7 @@ public class TonOnChainBalanceProvider implements OnChainBalanceProvider {
         if (nano == null || nano.signum() <= 0) {
             return null;
         }
-        return Decimal128Support.normalize(new BigDecimal(nano).movePointLeft(TON_DECIMALS));
+        return Decimal128Support.normalize(new BigDecimal(nano).movePointLeft(NetworkNativeAssets.nativeDecimals(NetworkId.TON)));
     }
 
     private List<ProviderBalance> fetchJettons(String owner) {

@@ -4,6 +4,7 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.walletradar.domain.common.ConfidenceLevel;
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.common.NetworkNativeAssets;
 import com.walletradar.domain.common.ton.TonAddressCanonicalizer;
 import com.walletradar.domain.transaction.normalized.ClassificationSource;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
@@ -65,11 +66,14 @@ import java.util.Set;
 public class TonNormalizedTransactionBuilder {
 
     private static final BigDecimal NANO_TON_DIVISOR = BigDecimal.valueOf(1_000_000_000L);
-    private static final String TON_SYMBOL = "TON";
-    private static final String TON_COIN_CONTRACT = "TONCOIN";
+    /**
+     * Per-jetton fallback decimals when a jetton has no entry in {@code network-descriptors.yml}
+     * token-overrides and no live-resolver result. This is NOT the native TON precision
+     * (which is derived from the descriptor via {@link NetworkNativeAssets#nativeDecimals}) —
+     * it is only the blind fallback for unknown jettons whose decimals could not be resolved,
+     * kept at 9 because the most common misconfigured jettons use this precision.
+     */
     private static final int DEFAULT_JETTON_DECIMALS = 9;
-    /** Native TON precision (nanoTON = 1e-9); proxy-TON (pTON) uses the same 9 decimals. */
-    private static final int TON_DECIMALS = 9;
     /** DEX swap forward-payload {@code @type} markers (toncenter decoded). */
     private static final String STONFI_SWAP_MARKER = "stonfi_swap";
     private static final String DEDUST_MARKER = "dedust";
@@ -370,9 +374,9 @@ public class TonNormalizedTransactionBuilder {
         // WS-2: proxy-TON (pTON) is native TON wrapped for Ston.fi routing. Net it to native TON so
         // it never surfaces as a held pTON jetton (phantom inventory + bogus avco).
         if (TonProtocolRegistry.isProxyTon(jettonMaster)) {
-            BigDecimal quantity = rawAmount.movePointLeft(TON_DECIMALS);
-            flow.setAssetContract(TON_COIN_CONTRACT);
-            flow.setAssetSymbol(TON_SYMBOL);
+            BigDecimal quantity = rawAmount.movePointLeft(NetworkNativeAssets.nativeDecimals(NetworkId.TON));
+            flow.setAssetContract(NetworkNativeAssets.nativeIdentity(NetworkId.TON));
+            flow.setAssetSymbol(NetworkNativeAssets.nativeSymbol(NetworkId.TON));
             flow.setRole(NormalizedLegRole.TRANSFER);
             flow.setQuantityDelta(incoming ? quantity : quantity.negate());
             flow.setCounterpartyAddress(incoming ? src : dest);
@@ -402,8 +406,8 @@ public class TonNormalizedTransactionBuilder {
 
         if (inboundNative) {
             NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
-            flow.setAssetContract(TON_COIN_CONTRACT);
-            flow.setAssetSymbol(TON_SYMBOL);
+            flow.setAssetContract(NetworkNativeAssets.nativeIdentity(NetworkId.TON));
+            flow.setAssetSymbol(NetworkNativeAssets.nativeSymbol(NetworkId.TON));
             flow.setRole(NormalizedLegRole.TRANSFER);
             flow.setQuantityDelta(nanoToTon(inValue));
             flow.setCounterpartyAddress(view.inMsgSource());
@@ -419,8 +423,8 @@ public class TonNormalizedTransactionBuilder {
             if (val > 0 && sameTonAddress(walletAddress, outSrc)
                     && isNativeValueOpcode(stringField(outMsg, "decoded_opcode"))) {
                 NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
-                flow.setAssetContract(TON_COIN_CONTRACT);
-                flow.setAssetSymbol(TON_SYMBOL);
+                flow.setAssetContract(NetworkNativeAssets.nativeIdentity(NetworkId.TON));
+                flow.setAssetSymbol(NetworkNativeAssets.nativeSymbol(NetworkId.TON));
                 flow.setRole(NormalizedLegRole.TRANSFER);
                 flow.setQuantityDelta(nanoToTon(val).negate());
                 flow.setCounterpartyAddress(outDest);
@@ -436,8 +440,8 @@ public class TonNormalizedTransactionBuilder {
             return List.of();
         }
         NormalizedTransaction.Flow fee = new NormalizedTransaction.Flow();
-        fee.setAssetContract(TON_COIN_CONTRACT);
-        fee.setAssetSymbol(TON_SYMBOL);
+        fee.setAssetContract(NetworkNativeAssets.nativeIdentity(NetworkId.TON));
+        fee.setAssetSymbol(NetworkNativeAssets.nativeSymbol(NetworkId.TON));
         fee.setRole(NormalizedLegRole.FEE);
         fee.setQuantityDelta(nanoToTon(feeNano).negate());
         return List.of(fee);
@@ -534,12 +538,12 @@ public class TonNormalizedTransactionBuilder {
             } catch (NumberFormatException e) {
                 continue;
             }
-            String contract = proxy ? TON_COIN_CONTRACT : canonicalJettonContract(master);
+            String contract = proxy ? NetworkNativeAssets.nativeIdentity(NetworkId.TON) : canonicalJettonContract(master);
             if (contract == null) {
                 continue;
             }
-            String symbol = proxy ? TON_SYMBOL : resolveJettonSymbol(jt, master);
-            int decimals = proxy ? TON_DECIMALS : resolveJettonDecimals(jt, master);
+            String symbol = proxy ? NetworkNativeAssets.nativeSymbol(NetworkId.TON) : resolveJettonSymbol(jt, master);
+            int decimals = proxy ? NetworkNativeAssets.nativeDecimals(NetworkId.TON) : resolveJettonDecimals(jt, master);
             BigDecimal signed = rawAmount.movePointLeft(decimals);
             if (outgoing) {
                 signed = signed.negate();

@@ -4,8 +4,12 @@ import com.walletradar.application.lending.spi.LendingLivePositionReader;
 import com.walletradar.application.lending.spi.LiveLendingAssetAmount;
 import com.walletradar.application.lending.spi.LiveLendingPosition;
 import com.walletradar.application.lending.spi.LivePositionRequest;
+import com.walletradar.application.normalization.pipeline.metadata.NetworkTokenOverrides;
+import com.walletradar.platform.networks.solana.SolanaChain;
 import com.walletradar.application.pricing.latest.CurrentPriceReadService;
 import com.walletradar.application.pricing.latest.ResolvedPrice;
+import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.common.NetworkNativeAssets;
 import com.walletradar.platform.networks.solana.jupiter.lend.JupiterLendClient;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -52,15 +56,6 @@ public class JupiterLendLivePositionReader implements LendingLivePositionReader 
     private static final String NETWORK_SOLANA = "SOLANA";
     private static final String PROTOCOL_MATCH = "JUPITER";
 
-    /** Canonical Solana asset identities used to align live collateral with {@code on_chain_balances}. */
-    private static final String WSOL_MINT = "So11111111111111111111111111111111111111112";
-    private static final String NATIVE_SOL_IDENTITY = "NATIVE:SOLANA";
-    private static final String SOL_SYMBOL = "SOL";
-    private static final int SOL_DECIMALS = 9;
-    private static final int STABLE_DECIMALS = 6;
-    private static final String USDT_MINT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
-    private static final String USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-
     private static final long VAULT_CACHE_TTL_MS = 60_000L;
 
     private final JupiterLendClient jupiterLendClient;
@@ -102,8 +97,9 @@ public class JupiterLendLivePositionReader implements LendingLivePositionReader 
             if (vault == null) {
                 continue;
             }
-            LiveLendingAssetAmount collateral = assetAmount(vault.supplyToken(), position.supply(), SOL_DECIMALS);
-            LiveLendingAssetAmount debt = assetAmount(vault.borrowToken(), outstandingDebt(position), STABLE_DECIMALS);
+            LiveLendingAssetAmount collateral = assetAmount(vault.supplyToken(), position.supply(),
+                    NetworkNativeAssets.nativeDecimals(NetworkId.SOLANA));
+            LiveLendingAssetAmount debt = assetAmount(vault.borrowToken(), outstandingDebt(position), 6);
             if (collateral != null) {
                 mergeAsset(collateralByIdentity, collateral);
                 collateralUsd = collateralUsd.add(nz(collateral.marketValueUsd()), MC);
@@ -164,37 +160,38 @@ public class JupiterLendLivePositionReader implements LendingLivePositionReader 
             return null;
         }
         String mint = token.mint() == null ? "" : token.mint().trim();
-        boolean isNative = WSOL_MINT.equals(mint);
+        boolean isNative = SolanaChain.WSOL_MINT.equals(mint);
         int decimals = token.decimals() != null && token.decimals() >= 0
                 ? token.decimals()
                 : defaultDecimals(mint, fallbackDecimals);
         BigDecimal quantity = new BigDecimal(rawBaseUnits).movePointLeft(Math.max(0, decimals));
         String symbol = canonicalSymbol(mint, token.symbol());
-        String contract = isNative ? NATIVE_SOL_IDENTITY : mint;
+        String contract = isNative ? NetworkNativeAssets.nativeIdentity(NetworkId.SOLANA) : mint;
         BigDecimal price = resolvePrice(symbol);
         BigDecimal usd = price == null ? null : quantity.multiply(price, MC);
         return new LiveLendingAssetAmount(symbol, contract, decimals, quantity, usd);
     }
 
-    private int defaultDecimals(String mint, int fallback) {
-        if (WSOL_MINT.equals(mint)) {
-            return SOL_DECIMALS;
+    private static int defaultDecimals(String mint, int fallback) {
+        if (SolanaChain.WSOL_MINT.equals(mint)) {
+            return NetworkNativeAssets.nativeDecimals(NetworkId.SOLANA);
         }
-        if (USDT_MINT.equals(mint) || USDC_MINT.equals(mint)) {
-            return STABLE_DECIMALS;
-        }
-        return fallback;
+        return NetworkTokenOverrides.find(NetworkId.SOLANA, mint)
+                .map(NetworkTokenOverrides.Override::effectiveDecimals)
+                .filter(d -> d != null)
+                .orElse(fallback);
     }
 
-    private String canonicalSymbol(String mint, String rawSymbol) {
-        if (WSOL_MINT.equals(mint)) {
-            return SOL_SYMBOL;
+    private static String canonicalSymbol(String mint, String rawSymbol) {
+        if (SolanaChain.WSOL_MINT.equals(mint)) {
+            return NetworkNativeAssets.nativeSymbol(NetworkId.SOLANA);
         }
-        if (USDT_MINT.equals(mint)) {
-            return "USDT";
-        }
-        if (USDC_MINT.equals(mint)) {
-            return "USDC";
+        String overrideSymbol = NetworkTokenOverrides.find(NetworkId.SOLANA, mint)
+                .map(NetworkTokenOverrides.Override::symbol)
+                .filter(s -> s != null && !s.isBlank())
+                .orElse(null);
+        if (overrideSymbol != null) {
+            return overrideSymbol;
         }
         return rawSymbol == null || rawSymbol.isBlank() ? mint : rawSymbol.trim();
     }

@@ -367,7 +367,12 @@ public final class CanonicalAssetCatalog {
         if (contract == null || contract.isBlank()) {
             return null;
         }
-        return contract.trim().toLowerCase(Locale.ROOT);
+        String trimmed = contract.trim();
+        // EVM contracts are checksummed hex (0x-prefixed, case-insensitive) → lowercase for uniform comparison.
+        // Non-EVM contracts (Solana base58, TON addresses) are case-sensitive → preserve case (W16).
+        return (trimmed.startsWith("0x") || trimmed.startsWith("0X"))
+                ? trimmed.toLowerCase(Locale.ROOT)
+                : trimmed;
     }
 
     /**

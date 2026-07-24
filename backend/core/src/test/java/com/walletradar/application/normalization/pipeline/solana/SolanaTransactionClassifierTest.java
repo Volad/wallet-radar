@@ -1,8 +1,12 @@
 package com.walletradar.application.normalization.pipeline.solana;
 
+import com.walletradar.domain.common.NetworkStablecoinContracts;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.transaction.raw.RawTransaction;
+import com.walletradar.platform.networks.solana.SolanaChain;
+import com.walletradar.testsupport.NetworkTestFixtures;
 import org.bson.Document;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -14,6 +18,14 @@ class SolanaTransactionClassifierTest {
 
     private static final String WALLET = "6Rc7yKz3aT2j2n7f3Q8Q3zvz1n2u9Wq3rXyZabCdEfG";
     private static final String PEER = "9Grpx4HKXTe51Ug9nAYuND9qf2bw326WvxFyEULt1DhG";
+
+    private static final String USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+    private static final String USDT_MINT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
+
+    @BeforeAll
+    static void bindStablecoinContracts() {
+        NetworkStablecoinContracts.bind(networkId -> NetworkTestFixtures.registry().usdStableContracts(networkId));
+    }
 
     private final SolanaTransactionClassifier classifier = new SolanaTransactionClassifier();
 
@@ -82,7 +94,7 @@ class SolanaTransactionClassifierTest {
     @DisplayName("RC-S6: Meteora farm claim classifies REWARD_CLAIM")
     void meteoraFarmClaimIsRewardClaim() {
         Document parsed = new Document("type", "CLAIM_REWARD")
-                .append("instructions", List.of(instruction(SolanaProgramIds.METEORA_FARM)));
+                .append("instructions", List.of(instruction(SolanaProtocolPrograms.METEORA_FARM_ID)));
         SolanaClassificationResult result = classifier.classify(view(WALLET, parsed));
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.REWARD_CLAIM);
         assertThat(result.protocolName()).isEqualTo("Meteora Farm");
@@ -92,13 +104,13 @@ class SolanaTransactionClassifierTest {
     @DisplayName("Jupiter v6 program id classifies SWAP")
     void jupiterProgramIsSwap() {
         Document parsed = new Document("type", "SWAP")
-                .append("instructions", List.of(instruction(SolanaProgramIds.JUPITER_SWAP_V6)));
+                .append("instructions", List.of(instruction(SolanaProtocolPrograms.JUPITER_SWAP_V6_ID)));
         assertThat(classifier.classify(view(WALLET, parsed)).type())
                 .isEqualTo(NormalizedTransactionType.SWAP);
     }
 
     private static Document raydiumClmmInstruction() {
-        return new Document("programId", SolanaProgramIds.RAYDIUM_CLMM);
+        return new Document("programId", SolanaProtocolPrograms.RAYDIUM_CLMM_ID);
     }
 
     private static Document tokenTransfer(String from, String to, String mint, double amount) {
@@ -115,7 +127,7 @@ class SolanaTransactionClassifierTest {
                 .append("instructions", List.of(raydiumClmmInstruction()))
                 .append("tokenTransfers", List.of(
                         tokenTransfer(WALLET, PEER, "WLFinEv6ypjkczcS83FZqFpgFZYwQXutRbxGe7oC16g", 0.365),
-                        tokenTransfer(WALLET, PEER, SolanaProgramIds.USDC_MINT, 0.158)));
+                        tokenTransfer(WALLET, PEER, USDC_MINT, 0.158)));
         SolanaClassificationResult result = classifier.classify(view(WALLET, parsed));
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.LP_ENTRY);
         assertThat(result.protocolName()).isEqualTo("Raydium CLMM");
@@ -129,7 +141,7 @@ class SolanaTransactionClassifierTest {
                 .append("instructions", List.of(raydiumClmmInstruction()))
                 .append("tokenTransfers", List.of(
                         tokenTransfer(PEER, WALLET, "WLFinEv6ypjkczcS83FZqFpgFZYwQXutRbxGe7oC16g", 0.40),
-                        tokenTransfer(PEER, WALLET, SolanaProgramIds.USDC_MINT, 0.20)));
+                        tokenTransfer(PEER, WALLET, USDC_MINT, 0.20)));
         assertThat(classifier.classify(view(WALLET, parsed)).type())
                 .isEqualTo(NormalizedTransactionType.LP_EXIT);
     }
@@ -140,7 +152,7 @@ class SolanaTransactionClassifierTest {
         Document parsed = new Document("type", "SWAP")
                 .append("instructions", List.of(raydiumClmmInstruction()))
                 .append("tokenTransfers", List.of(
-                        tokenTransfer(WALLET, PEER, SolanaProgramIds.USDC_MINT, 10.0),
+                        tokenTransfer(WALLET, PEER, USDC_MINT, 10.0),
                         tokenTransfer(PEER, WALLET, "WLFinEv6ypjkczcS83FZqFpgFZYwQXutRbxGe7oC16g", 25.0)));
         assertThat(classifier.classify(view(WALLET, parsed)).type())
                 .isEqualTo(NormalizedTransactionType.SWAP);
@@ -157,11 +169,11 @@ class SolanaTransactionClassifierTest {
         Document parsed = new Document("type", "UNKNOWN")
                 .append("source", "RAYDIUM")
                 .append("instructions", List.of(
-                        instruction(SolanaProgramIds.OKX_DEX_ROUTER),
+                        instruction(SolanaProtocolPrograms.OKX_DEX_ROUTER_ID),
                         raydiumClmmInstruction()))
                 .append("nativeTransfers", List.of(nativeTransfer(WALLET, PEER, 2_000L)))
                 .append("tokenTransfers", List.of(
-                        tokenTransfer(WALLET, PEER, SolanaProgramIds.USDC_MINT, 296.04),
+                        tokenTransfer(WALLET, PEER, USDC_MINT, 296.04),
                         tokenTransfer(PEER, WALLET, USD1_MINT, 295.97)));
         SolanaClassificationResult result = classifier.classify(view(WALLET, parsed));
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.SWAP);
@@ -181,10 +193,10 @@ class SolanaTransactionClassifierTest {
         Document parsed = new Document("type", "SWAP")
                 .append("source", "METEORA")
                 .append("instructions", List.of(
-                        instruction(SolanaProgramIds.METEORA_DYNAMIC_AMM),
-                        instruction(SolanaProgramIds.METEORA_VAULT)))
+                        instruction(SolanaProtocolPrograms.METEORA_DYNAMIC_AMM_ID),
+                        instruction(SolanaProtocolPrograms.METEORA_VAULT_ID)))
                 .append("tokenTransfers", List.of(
-                        tokenTransfer(WALLET, PEER, SolanaProgramIds.WSOL_MINT, 0.263064376),
+                        tokenTransfer(WALLET, PEER, SolanaChain.WSOL_MINT, 0.263064376),
                         tokenTransfer(PEER, WALLET, VSOL_MINT, 0.247723139)));
         SolanaClassificationResult result = classifier.classify(view(WALLET, parsed));
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.SWAP);
@@ -199,9 +211,9 @@ class SolanaTransactionClassifierTest {
         // vault deposit — the DAMM-absence guard preserves this genuine case.
         Document parsed = new Document("type", "UNKNOWN")
                 .append("source", "METEORA")
-                .append("instructions", List.of(instruction(SolanaProgramIds.METEORA_VAULT)))
+                .append("instructions", List.of(instruction(SolanaProtocolPrograms.METEORA_VAULT_ID)))
                 .append("tokenTransfers", List.of(
-                        tokenTransfer(WALLET, PEER, SolanaProgramIds.USDC_MINT, 100.0)));
+                        tokenTransfer(WALLET, PEER, USDC_MINT, 100.0)));
         SolanaClassificationResult result = classifier.classify(view(WALLET, parsed));
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.VAULT_DEPOSIT);
         assertThat(result.protocolName()).isEqualTo("Meteora Vault");
@@ -223,9 +235,9 @@ class SolanaTransactionClassifierTest {
     void unlabeledOutboundSplTransferIsExternalOut() {
         Document parsed = new Document("type", "UNKNOWN")
                 .append("instructions", List.of(
-                        instruction(SolanaProgramIds.COMPUTE_BUDGET_PROGRAM),
-                        instruction(SolanaProgramIds.ASSOCIATED_TOKEN_PROGRAM),
-                        instruction(SolanaProgramIds.TOKEN_PROGRAM)))
+                        instruction(SolanaChain.COMPUTE_BUDGET_PROGRAM),
+                        instruction(SolanaChain.ASSOCIATED_TOKEN_PROGRAM),
+                        instruction(SolanaChain.TOKEN_PROGRAM)))
                 .append("tokenTransfers", List.of(
                         tokenTransfer(WALLET, PEER, PUMP_MINT, 149.589668)));
         SolanaClassificationResult result = classifier.classify(view(WALLET, parsed));
@@ -237,7 +249,7 @@ class SolanaTransactionClassifierTest {
     @DisplayName("RC-S8: unlabeled inbound SPL transfer classifies EXTERNAL_TRANSFER_IN")
     void unlabeledInboundSplTransferIsExternalIn() {
         Document parsed = new Document("type", "UNKNOWN")
-                .append("instructions", List.of(instruction(SolanaProgramIds.TOKEN_PROGRAM)))
+                .append("instructions", List.of(instruction(SolanaChain.TOKEN_PROGRAM)))
                 .append("tokenTransfers", List.of(
                         tokenTransfer(PEER, WALLET, PUMP_MINT, 10.0)));
         SolanaClassificationResult result = classifier.classify(view(WALLET, parsed));
@@ -250,7 +262,7 @@ class SolanaTransactionClassifierTest {
     void unlabeledWithUnknownProgramStaysUnknown() {
         Document parsed = new Document("type", "UNKNOWN")
                 .append("instructions", List.of(
-                        instruction(SolanaProgramIds.TOKEN_PROGRAM),
+                        instruction(SolanaChain.TOKEN_PROGRAM),
                         instruction("SomeUnknownDeFiProgram1111111111111111111111")))
                 .append("tokenTransfers", List.of(
                         tokenTransfer(WALLET, PEER, PUMP_MINT, 5.0)));
@@ -263,7 +275,7 @@ class SolanaTransactionClassifierTest {
     private static final String JL_RECEIPT_MINT = "4XuocgW9zK5ozuaCQMLjRHkvzeT63D3jwpNKKHaE7BY5";
 
     private static Document lendInstruction() {
-        return instruction(SolanaProgramIds.JUPITER_LEND);
+        return instruction(SolanaProtocolPrograms.jupiterLendProgramIds().iterator().next());
     }
 
     @Test
@@ -272,7 +284,7 @@ class SolanaTransactionClassifierTest {
         Document parsed = new Document("type", "UNKNOWN")
                 .append("instructions", List.of(lendInstruction()))
                 .append("tokenTransfers", List.of(
-                        tokenTransfer(RESERVE, WALLET, SolanaProgramIds.USDT_MINT, 210.0)));
+                        tokenTransfer(RESERVE, WALLET, USDT_MINT, 210.0)));
         SolanaClassificationResult result = classifier.classify(view(WALLET, parsed));
         assertThat(result.type()).isEqualTo(NormalizedTransactionType.BORROW);
         assertThat(result.protocolName()).isEqualTo("Jupiter Lend");
@@ -285,7 +297,7 @@ class SolanaTransactionClassifierTest {
         Document parsed = new Document("type", "UNKNOWN")
                 .append("instructions", List.of(lendInstruction()))
                 .append("tokenTransfers", List.of(
-                        tokenTransfer(WALLET, RESERVE, SolanaProgramIds.WSOL_MINT, 1.96),
+                        tokenTransfer(WALLET, RESERVE, SolanaChain.WSOL_MINT, 1.96),
                         tokenTransfer(RESERVE, WALLET, JL_RECEIPT_MINT, 1.96)));
         assertThat(classifier.classify(view(WALLET, parsed)).type())
                 .isEqualTo(NormalizedTransactionType.LENDING_DEPOSIT);
@@ -297,7 +309,7 @@ class SolanaTransactionClassifierTest {
         Document parsed = new Document("type", "UNKNOWN")
                 .append("instructions", List.of(lendInstruction()))
                 .append("tokenTransfers", List.of(
-                        tokenTransfer(RESERVE, WALLET, SolanaProgramIds.WSOL_MINT, 0.939),
+                        tokenTransfer(RESERVE, WALLET, SolanaChain.WSOL_MINT, 0.939),
                         tokenTransfer(WALLET, RESERVE, JL_RECEIPT_MINT, 0.939)));
         assertThat(classifier.classify(view(WALLET, parsed)).type())
                 .isEqualTo(NormalizedTransactionType.LENDING_WITHDRAW);
@@ -307,11 +319,11 @@ class SolanaTransactionClassifierTest {
     @DisplayName("RULE 1: Jupiter Lend + Jupiter Swap with net collateral change classifies LENDING_LOOP_OPEN (USDT nets 0)")
     void jupiterLendLoopIsLoopOpen() {
         Document parsed = new Document("type", "UNKNOWN")
-                .append("instructions", List.of(lendInstruction(), instruction(SolanaProgramIds.JUPITER_SWAP_V6)))
+                .append("instructions", List.of(lendInstruction(), instruction(SolanaProtocolPrograms.JUPITER_SWAP_V6_ID)))
                 .append("tokenTransfers", List.of(
-                        tokenTransfer(RESERVE, WALLET, SolanaProgramIds.USDT_MINT, 15.81),
-                        tokenTransfer(WALLET, "pool", SolanaProgramIds.USDT_MINT, 15.81),
-                        tokenTransfer(WALLET, RESERVE, SolanaProgramIds.WSOL_MINT, 0.10)));
+                        tokenTransfer(RESERVE, WALLET, USDT_MINT, 15.81),
+                        tokenTransfer(WALLET, "pool", USDT_MINT, 15.81),
+                        tokenTransfer(WALLET, RESERVE, SolanaChain.WSOL_MINT, 0.10)));
         assertThat(classifier.classify(view(WALLET, parsed)).type())
                 .isEqualTo(NormalizedTransactionType.LENDING_LOOP_OPEN);
     }
@@ -320,13 +332,13 @@ class SolanaTransactionClassifierTest {
     @DisplayName("RULE 1 regression (5YMocs): Jupiter Lend SOL deposit co-located with a third-party Jupiter swap (wallet has no stablecoin flow) stays LENDING_DEPOSIT, not LENDING_LOOP_OPEN")
     void jupiterLendDepositWithForeignSwapIsNotLoopOpen() {
         Document parsed = new Document("type", "TRANSFER")
-                .append("instructions", List.of(lendInstruction(), instruction(SolanaProgramIds.JUPITER_SWAP_V6)))
+                .append("instructions", List.of(lendInstruction(), instruction(SolanaProtocolPrograms.JUPITER_SWAP_V6_ID)))
                 .append("tokenTransfers", List.of(
                         // Wallet only deposits SOL collateral into Jupiter Lend.
-                        tokenTransfer(WALLET, RESERVE, SolanaProgramIds.WSOL_MINT, 0.0998),
+                        tokenTransfer(WALLET, RESERVE, SolanaChain.WSOL_MINT, 0.0998),
                         // The USDT<->SOL swap legs are owned by maker/pool accounts, not the wallet.
-                        tokenTransfer("maker", "pool", SolanaProgramIds.USDT_MINT, 15.81),
-                        tokenTransfer("pool", "maker", SolanaProgramIds.WSOL_MINT, 0.236)));
+                        tokenTransfer("maker", "pool", USDT_MINT, 15.81),
+                        tokenTransfer("pool", "maker", SolanaChain.WSOL_MINT, 0.236)));
         assertThat(classifier.classify(view(WALLET, parsed)).type())
                 .isEqualTo(NormalizedTransactionType.LENDING_DEPOSIT);
     }
@@ -335,11 +347,115 @@ class SolanaTransactionClassifierTest {
     @DisplayName("RULE 1 negative case: pure Jupiter Swap (no Jupiter Lend) stays SWAP, never lending")
     void pureJupiterSwapIsNotLending() {
         Document parsed = new Document("type", "SWAP")
-                .append("instructions", List.of(instruction(SolanaProgramIds.JUPITER_SWAP_V6)))
+                .append("instructions", List.of(instruction(SolanaProtocolPrograms.JUPITER_SWAP_V6_ID)))
                 .append("tokenTransfers", List.of(
-                        tokenTransfer(WALLET, "pool", SolanaProgramIds.WSOL_MINT, 1.0),
-                        tokenTransfer("pool", WALLET, SolanaProgramIds.USDT_MINT, 150.0)));
+                        tokenTransfer(WALLET, "pool", SolanaChain.WSOL_MINT, 1.0),
+                        tokenTransfer("pool", WALLET, USDT_MINT, 150.0)));
         assertThat(classifier.classify(view(WALLET, parsed)).type())
                 .isEqualTo(NormalizedTransactionType.SWAP);
+    }
+
+    // --- Rule 12: Native Solana staking (SolanaChain.STAKE_PROGRAM) ---
+
+    @Test
+    @DisplayName("Rule 12: STAKE_PROGRAM with non-withdraw helius type classifies STAKING_DEPOSIT")
+    void nativeStakingDepositIsStakingDeposit() {
+        Document parsed = new Document("type", "STAKE_SOL")
+                .append("instructions", List.of(instruction(SolanaChain.STAKE_PROGRAM)));
+        SolanaClassificationResult result = classifier.classify(view(WALLET, parsed));
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.STAKING_DEPOSIT);
+        assertThat(result.protocolName()).isEqualTo("Solana Staking");
+    }
+
+    @Test
+    @DisplayName("Rule 12: STAKE_PROGRAM with DELEGATE_STAKE helius type classifies STAKING_DEPOSIT")
+    void nativeStakingDelegateIsStakingDeposit() {
+        Document parsed = new Document("type", "DELEGATE_STAKE")
+                .append("instructions", List.of(instruction(SolanaChain.STAKE_PROGRAM)));
+        assertThat(classifier.classify(view(WALLET, parsed)).type())
+                .isEqualTo(NormalizedTransactionType.STAKING_DEPOSIT);
+    }
+
+    @Test
+    @DisplayName("Rule 12: STAKE_PROGRAM with UNSTAKE_SOL helius type classifies STAKING_WITHDRAW")
+    void nativeStakingUnstakeIsStakingWithdraw() {
+        Document parsed = new Document("type", "UNSTAKE_SOL")
+                .append("instructions", List.of(instruction(SolanaChain.STAKE_PROGRAM)));
+        SolanaClassificationResult result = classifier.classify(view(WALLET, parsed));
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.STAKING_WITHDRAW);
+        assertThat(result.protocolName()).isEqualTo("Solana Staking");
+    }
+
+    @Test
+    @DisplayName("Rule 12: STAKE_PROGRAM with WITHDRAW_STAKE helius type classifies STAKING_WITHDRAW")
+    void nativeStakingWithdrawIsStakingWithdraw() {
+        Document parsed = new Document("type", "WITHDRAW_STAKE")
+                .append("instructions", List.of(instruction(SolanaChain.STAKE_PROGRAM)));
+        assertThat(classifier.classify(view(WALLET, parsed)).type())
+                .isEqualTo(NormalizedTransactionType.STAKING_WITHDRAW);
+    }
+
+    // --- Rule 13: Liquid staking (Marinade, Jito) ---
+
+    @Test
+    @DisplayName("Rule 13: Marinade liquid staking deposit classifies STAKING_DEPOSIT")
+    void marinadeStakingIsStakingDeposit() {
+        Document parsed = new Document("type", "STAKE_SOL")
+                .append("instructions", List.of(instruction(SolanaProtocolPrograms.MARINADE_ID)));
+        SolanaClassificationResult result = classifier.classify(view(WALLET, parsed));
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.STAKING_DEPOSIT);
+        assertThat(result.protocolName()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("Rule 13: Marinade unstake classifies STAKING_WITHDRAW")
+    void marinadeUnstakeIsStakingWithdraw() {
+        Document parsed = new Document("type", "UNSTAKE_SOL")
+                .append("instructions", List.of(instruction(SolanaProtocolPrograms.MARINADE_ID)));
+        assertThat(classifier.classify(view(WALLET, parsed)).type())
+                .isEqualTo(NormalizedTransactionType.STAKING_WITHDRAW);
+    }
+
+    @Test
+    @DisplayName("Rule 13: Jito stake classifies STAKING_DEPOSIT")
+    void jitoStakingIsStakingDeposit() {
+        Document parsed = new Document("type", "STAKE_SOL")
+                .append("instructions", List.of(instruction(SolanaProtocolPrograms.JITO_ID)));
+        assertThat(classifier.classify(view(WALLET, parsed)).type())
+                .isEqualTo(NormalizedTransactionType.STAKING_DEPOSIT);
+    }
+
+    // --- Rule 2: Kamino Lend ---
+
+    @Test
+    @DisplayName("Rule 2: Kamino Lend DEPOSIT helius type classifies LENDING_DEPOSIT")
+    void kaminoLendDepositIsLendingDeposit() {
+        Document parsed = new Document("type", "DEPOSIT")
+                .append("instructions", List.of(instruction(SolanaProtocolPrograms.KAMINO_LEND_ID)));
+        SolanaClassificationResult result = classifier.classify(view(WALLET, parsed));
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.LENDING_DEPOSIT);
+        assertThat(result.protocolName()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("Rule 2: Kamino Lend BORROW helius type classifies BORROW")
+    void kaminoLendBorrowIsBorrow() {
+        Document parsed = new Document("type", "BORROW")
+                .append("instructions", List.of(instruction(SolanaProtocolPrograms.KAMINO_LEND_ID)));
+        assertThat(classifier.classify(view(WALLET, parsed)).type())
+                .isEqualTo(NormalizedTransactionType.BORROW);
+    }
+
+    // --- Rule 15: SWAP by Helius type alone (no DeFi program) ---
+
+    @Test
+    @DisplayName("Rule 15: SWAP helius type with no matching DeFi program classifies SWAP (unknown AMM)")
+    void swapByHeliusTypeAloneIsSwap() {
+        Document parsed = new Document("type", "SWAP")
+                .append("instructions", List.of(instruction(SolanaChain.TOKEN_PROGRAM)));
+        SolanaClassificationResult result = classifier.classify(view(WALLET, parsed));
+        assertThat(result.type()).isEqualTo(NormalizedTransactionType.SWAP);
+        // Unknown AMM: protocol name may be null
+        assertThat(result.needsReview()).isFalse();
     }
 }

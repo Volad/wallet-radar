@@ -2,12 +2,16 @@ package com.walletradar.application.normalization.pipeline.solana;
 
 import com.walletradar.application.costbasis.domain.AssetFamily;
 import com.walletradar.application.session.application.AccountingUniverseService;
+import com.walletradar.domain.common.NetworkStablecoinContracts;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.transaction.raw.RawTransaction;
+import com.walletradar.platform.networks.solana.SolanaChain;
+import com.walletradar.testsupport.NetworkTestFixtures;
 import org.bson.Document;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -21,6 +25,11 @@ class SolanaNormalizedTransactionBuilderTest {
 
     private static final String WALLET = "6Rc7yKz3aT2j2n7f3Q8Q3zvz1n2u9Wq3rXyZabCdEfG";
     private static final String PEER = "9Grpx4HKXTe51Ug9nAYuND9qf2bw326WvxFyEULt1DhG";
+
+    @BeforeAll
+    static void bindStablecoinContracts() {
+        NetworkStablecoinContracts.bind(networkId -> NetworkTestFixtures.registry().usdStableContracts(networkId));
+    }
 
     private final SolanaNormalizedTransactionBuilder builder = new SolanaNormalizedTransactionBuilder(
             new SolanaTransactionClassifier(),
@@ -49,11 +58,11 @@ class SolanaNormalizedTransactionBuilderTest {
         Document walletAccount = new Document("account", WALLET)
                 .append("nativeBalanceChange", -(1_000_000_000L + fee))
                 .append("tokenBalanceChanges", List.of(new Document("userAccount", WALLET)
-                        .append("mint", SolanaProgramIds.USDC_MINT)
+                        .append("mint", USDC_MINT)
                         .append("rawTokenAmount", new Document("tokenAmount", "1000000").append("decimals", 6))));
         Document parsed = new Document("type", "SWAP")
                 .append("fee", fee)
-                .append("instructions", List.of(new Document("programId", SolanaProgramIds.JUPITER_SWAP_V6)))
+                .append("instructions", List.of(new Document("programId", SolanaProtocolPrograms.JUPITER_SWAP_V6_ID)))
                 .append("accountData", List.of(walletAccount));
 
         NormalizedTransaction tx = builder.build(raw(parsed), Instant.now());
@@ -63,9 +72,9 @@ class SolanaNormalizedTransactionBuilderTest {
                 .filter(f -> f.getRole() == NormalizedLegRole.SELL).findFirst().orElseThrow();
         NormalizedTransaction.Flow buy = tx.getFlows().stream()
                 .filter(f -> f.getRole() == NormalizedLegRole.BUY).findFirst().orElseThrow();
-        assertThat(sell.getAssetContract()).isEqualTo(SolanaProgramIds.WSOL_MINT);
+        assertThat(sell.getAssetContract()).isEqualTo(SolanaChain.WSOL_MINT);
         assertThat(sell.getQuantityDelta().doubleValue()).isEqualTo(-1.0);
-        assertThat(buy.getAssetContract()).isEqualTo(SolanaProgramIds.USDC_MINT);
+        assertThat(buy.getAssetContract()).isEqualTo(USDC_MINT);
         assertThat(buy.getQuantityDelta().doubleValue()).isEqualTo(1.0);
     }
 
@@ -80,12 +89,12 @@ class SolanaNormalizedTransactionBuilderTest {
         Document walletAccount = new Document("account", WALLET)
                 .append("nativeBalanceChange", -1_000_000_000L)
                 .append("tokenBalanceChanges", List.of(new Document("userAccount", WALLET)
-                        .append("mint", SolanaProgramIds.USDC_MINT)
+                        .append("mint", USDC_MINT)
                         .append("rawTokenAmount", new Document("tokenAmount", "1000000").append("decimals", 6))));
         Document parsed = new Document("type", "SWAP")
                 .append("feePayer", "BoT1111111111111111111111111111111111111111")
                 .append("fee", fee)
-                .append("instructions", List.of(new Document("programId", SolanaProgramIds.JUPITER_SWAP_V6)))
+                .append("instructions", List.of(new Document("programId", SolanaProtocolPrograms.JUPITER_SWAP_V6_ID)))
                 .append("accountData", List.of(walletAccount));
 
         NormalizedTransaction tx = builder.build(raw(parsed), Instant.now());
@@ -107,12 +116,12 @@ class SolanaNormalizedTransactionBuilderTest {
         Document walletAccount = new Document("account", WALLET)
                 .append("nativeBalanceChange", 529_292_579L)
                 .append("tokenBalanceChanges", List.of(new Document("userAccount", WALLET)
-                        .append("mint", SolanaProgramIds.USDT_MINT)
+                        .append("mint", USDT_MINT)
                         .append("rawTokenAmount", new Document("tokenAmount", "-33500000").append("decimals", 6))));
         Document parsed = new Document("type", "UNKNOWN")
                 .append("source", "UNKNOWN")
                 .append("fee", fee)
-                .append("instructions", List.of(new Document("programId", SolanaProgramIds.JUPITER_RFQ_ORDER_ENGINE)))
+                .append("instructions", List.of(new Document("programId", SolanaProtocolPrograms.JUPITER_RFQ_ID)))
                 .append("accountData", List.of(walletAccount));
 
         NormalizedTransaction tx = builder.build(raw(parsed), Instant.now());
@@ -123,9 +132,9 @@ class SolanaNormalizedTransactionBuilderTest {
                 .filter(f -> f.getRole() == NormalizedLegRole.SELL).findFirst().orElseThrow();
         NormalizedTransaction.Flow buy = tx.getFlows().stream()
                 .filter(f -> f.getRole() == NormalizedLegRole.BUY).findFirst().orElseThrow();
-        assertThat(sell.getAssetContract()).isEqualTo(SolanaProgramIds.USDT_MINT);
+        assertThat(sell.getAssetContract()).isEqualTo(USDT_MINT);
         assertThat(sell.getQuantityDelta().doubleValue()).isEqualTo(-33.5);
-        assertThat(buy.getAssetContract()).isEqualTo(SolanaProgramIds.WSOL_MINT);
+        assertThat(buy.getAssetContract()).isEqualTo(SolanaChain.WSOL_MINT);
         assertThat(buy.getQuantityDelta().signum()).isPositive();
     }
 
@@ -178,9 +187,9 @@ class SolanaNormalizedTransactionBuilderTest {
 
     private static Document dlmmLiquidityInstruction() {
         // >= 10 accounts, accounts[0] = position PDA (add/remove-liquidity layout).
-        return instruction(SolanaProgramIds.METEORA_DLMM, List.of(
-                DLMM_POSITION, DLMM_POOL, SolanaProgramIds.METEORA_DLMM, "userTokenX", "userTokenY",
-                "reserveX", "reserveY", SolanaProgramIds.WSOL_MINT, "binLower", "binUpper", WALLET));
+        return instruction(SolanaProtocolPrograms.METEORA_DLMM_ID, List.of(
+                DLMM_POSITION, DLMM_POOL, SolanaProtocolPrograms.METEORA_DLMM_ID, "userTokenX", "userTokenY",
+                "reserveX", "reserveY", SolanaChain.WSOL_MINT, "binLower", "binUpper", WALLET));
     }
 
     private static Document tokenTransfer(String from, String to, String mint, String symbol, double amount) {
@@ -198,7 +207,7 @@ class SolanaNormalizedTransactionBuilderTest {
                 .append("fee", 5_000L)
                 .append("instructions", List.of(dlmmLiquidityInstruction()))
                 .append("tokenTransfers", List.of(
-                        tokenTransfer(WALLET, DLMM_POOL, SolanaProgramIds.WSOL_MINT, "SOL", 1.15788447)));
+                        tokenTransfer(WALLET, DLMM_POOL, SolanaChain.WSOL_MINT, "SOL", 1.15788447)));
 
         NormalizedTransaction tx = builder.build(raw(parsed), Instant.now());
 
@@ -209,7 +218,7 @@ class SolanaNormalizedTransactionBuilderTest {
         NormalizedTransaction.Flow principal = tx.getFlows().stream()
                 .filter(f -> f.getRole() == NormalizedLegRole.TRANSFER).findFirst().orElseThrow();
         assertThat(principal.getQuantityDelta().signum()).isNegative();
-        assertThat(principal.getAssetContract()).isEqualTo(SolanaProgramIds.WSOL_MINT);
+        assertThat(principal.getAssetContract()).isEqualTo(SolanaChain.WSOL_MINT);
         assertThat(principal.getCounterpartyAddress()).isEqualTo(DLMM_POOL);
     }
 
@@ -220,7 +229,7 @@ class SolanaNormalizedTransactionBuilderTest {
                 .append("fee", 5_000L)
                 .append("instructions", List.of(dlmmLiquidityInstruction()))
                 .append("tokenTransfers", List.of(
-                        tokenTransfer(DLMM_POOL, WALLET, SolanaProgramIds.WSOL_MINT, "SOL", 2.0),
+                        tokenTransfer(DLMM_POOL, WALLET, SolanaChain.WSOL_MINT, "SOL", 2.0),
                         tokenTransfer(DLMM_POOL, WALLET, PUMP_MINT, "PUMP", 100.0)));
 
         NormalizedTransaction tx = builder.build(raw(parsed), Instant.now());
@@ -240,7 +249,7 @@ class SolanaNormalizedTransactionBuilderTest {
         Document parsed = new Document("type", "EXTENSION_EXECUTE")
                 .append("source", "HAWKSIGHT")
                 .append("fee", 5_000L)
-                .append("instructions", List.of(instruction(SolanaProgramIds.HAWKSIGHT, List.of(WALLET, HAWKSIGHT_VAULT))))
+                .append("instructions", List.of(instruction(SolanaProtocolPrograms.HAWKSIGHT_ID, List.of(WALLET, HAWKSIGHT_VAULT))))
                 .append("tokenTransfers", List.of(
                         tokenTransfer(HAWKSIGHT_VAULT, WALLET, PUMP_MINT, "PUMP", 149.424164)));
 
@@ -271,10 +280,10 @@ class SolanaNormalizedTransactionBuilderTest {
         // per-position basis pool that was funded on the (also-Hawksight) entry and never drained,
         // surfacing as a phantom "open" position. The resolver must now return null so the row rides
         // generic family continuity and no lpConcentrated position is fabricated.
-        Document dlmmRemoveInner = instruction(SolanaProgramIds.METEORA_DLMM, List.of(
-                DLMM_POSITION, DLMM_POOL, SolanaProgramIds.METEORA_DLMM, "userTokenX", "userTokenY",
-                "reserveX", "reserveY", SolanaProgramIds.WSOL_MINT, "binLower", "binUpper", WALLET));
-        Document hawksight = new Document("programId", SolanaProgramIds.HAWKSIGHT)
+        Document dlmmRemoveInner = instruction(SolanaProtocolPrograms.METEORA_DLMM_ID, List.of(
+                DLMM_POSITION, DLMM_POOL, SolanaProtocolPrograms.METEORA_DLMM_ID, "userTokenX", "userTokenY",
+                "reserveX", "reserveY", SolanaChain.WSOL_MINT, "binLower", "binUpper", WALLET));
+        Document hawksight = new Document("programId", SolanaProtocolPrograms.HAWKSIGHT_ID)
                 .append("accounts", List.of(WALLET, HAWKSIGHT_VAULT))
                 .append("innerInstructions", List.of(dlmmRemoveInner));
         // Wallet receives only position rent (small positive native change), no token legs.
@@ -305,10 +314,10 @@ class SolanaNormalizedTransactionBuilderTest {
         // add-liquidity (position PDA at accounts[0]). The wallet's principal (SOL) leaves to the
         // Hawksight vault. Must book an LP move WITHOUT a fabricated position correlation so the
         // entry and its later Hawksight close stay symmetric on the generic family-continuity bucket.
-        Document dlmmAddInner = instruction(SolanaProgramIds.METEORA_DLMM, List.of(
-                DLMM_POSITION, DLMM_POOL, SolanaProgramIds.METEORA_DLMM, "userTokenX", "userTokenY",
-                "reserveX", "reserveY", SolanaProgramIds.WSOL_MINT, "binLower", "binUpper", WALLET));
-        Document hawksight = new Document("programId", SolanaProgramIds.HAWKSIGHT)
+        Document dlmmAddInner = instruction(SolanaProtocolPrograms.METEORA_DLMM_ID, List.of(
+                DLMM_POSITION, DLMM_POOL, SolanaProtocolPrograms.METEORA_DLMM_ID, "userTokenX", "userTokenY",
+                "reserveX", "reserveY", SolanaChain.WSOL_MINT, "binLower", "binUpper", WALLET));
+        Document hawksight = new Document("programId", SolanaProtocolPrograms.HAWKSIGHT_ID)
                 .append("accounts", List.of(WALLET, HAWKSIGHT_VAULT))
                 .append("innerInstructions", List.of(dlmmAddInner));
         Document parsed = new Document("type", "TRANSFER")
@@ -316,7 +325,7 @@ class SolanaNormalizedTransactionBuilderTest {
                 .append("fee", 5_000L)
                 .append("instructions", List.of(hawksight))
                 .append("tokenTransfers", List.of(
-                        tokenTransfer(WALLET, HAWKSIGHT_VAULT, SolanaProgramIds.WSOL_MINT, "SOL", 0.241654293)));
+                        tokenTransfer(WALLET, HAWKSIGHT_VAULT, SolanaChain.WSOL_MINT, "SOL", 0.241654293)));
 
         NormalizedTransaction tx = builder.build(raw(parsed), Instant.now());
 
@@ -331,9 +340,9 @@ class SolanaNormalizedTransactionBuilderTest {
     void lendingDepositBooksTransferOut() {
         Document parsed = new Document("type", "DEPOSIT")
                 .append("fee", 5_000L)
-                .append("instructions", List.of(instruction(SolanaProgramIds.JUPITER_LEND, List.of(WALLET, "reserve"))))
+                .append("instructions", List.of(instruction(SolanaProtocolPrograms.jupiterLendProgramIds().iterator().next(), List.of(WALLET, "reserve"))))
                 .append("tokenTransfers", List.of(
-                        tokenTransfer(WALLET, "reserve", SolanaProgramIds.WSOL_MINT, "SOL", 2.0)));
+                        tokenTransfer(WALLET, "reserve", SolanaChain.WSOL_MINT, "SOL", 2.0)));
 
         NormalizedTransaction tx = builder.build(raw(parsed), Instant.now());
 
@@ -353,10 +362,10 @@ class SolanaNormalizedTransactionBuilderTest {
 
     /** increaseLiquidity/decreaseLiquidity layout: accounts[0]=nftOwner(wallet), accounts[1]=nftAccount. */
     private static Document raydiumClmmLiquidityInstruction() {
-        return instruction(SolanaProgramIds.RAYDIUM_CLMM, List.of(
+        return instruction(SolanaProtocolPrograms.RAYDIUM_CLMM_ID, List.of(
                 WALLET, RAYDIUM_NFT_ACCOUNT, "poolState", "protocolPosition", "personalPosition",
                 "tickArrayLower", "tickArrayUpper", "tokenAccount0", "tokenAccount1", "tokenVault0",
-                "tokenVault1", SolanaProgramIds.TOKEN_PROGRAM));
+                "tokenVault1", SolanaChain.TOKEN_PROGRAM));
     }
 
     @Test
@@ -439,10 +448,10 @@ class SolanaNormalizedTransactionBuilderTest {
         // addBalanceLiquidity / removeBalanceLiquidity: [pool, lpMint, userPoolLp, aVaultLp, bVaultLp,
         // aVault, bVault, aTokenVault, bTokenVault, aVaultLpMint, bVaultLpMint, user, tokenProgram,
         // vaultProgram] (verified against MeteoraAg/damm-v1-sdk IDL).
-        return instruction(SolanaProgramIds.METEORA_DYNAMIC_AMM, List.of(
+        return instruction(SolanaProtocolPrograms.METEORA_DYNAMIC_AMM_ID, List.of(
                 DAMM_POOL, MLP_MINT, DAMM_USER_POOL_LP, "aVaultLp", "bVaultLp", "aVault", "bVault",
                 "aTokenVault", "bTokenVault", "aVaultLpMint", "bVaultLpMint", WALLET,
-                SolanaProgramIds.TOKEN_PROGRAM, SolanaProgramIds.METEORA_VAULT));
+                SolanaChain.TOKEN_PROGRAM, SolanaProtocolPrograms.METEORA_VAULT_ID));
     }
 
     @Test
@@ -452,7 +461,7 @@ class SolanaNormalizedTransactionBuilderTest {
                 .append("fee", 5_000L)
                 .append("instructions", List.of(dammLiquidityInstruction()))
                 .append("tokenTransfers", List.of(
-                        tokenTransfer(WALLET, DAMM_POOL, SolanaProgramIds.WSOL_MINT, "SOL", 1.0),
+                        tokenTransfer(WALLET, DAMM_POOL, SolanaChain.WSOL_MINT, "SOL", 1.0),
                         tokenTransfer(WALLET, DAMM_POOL, MSOL_MINT, "MSOL", 0.9),
                         tokenTransfer(DAMM_POOL, WALLET, MLP_MINT, "MLP", 0.3096)));
 
@@ -485,7 +494,7 @@ class SolanaNormalizedTransactionBuilderTest {
                 .append("fee", 5_000L)
                 .append("instructions", List.of(dammLiquidityInstruction()))
                 .append("tokenTransfers", List.of(
-                        tokenTransfer(DAMM_POOL, WALLET, SolanaProgramIds.WSOL_MINT, "SOL", 1.1),
+                        tokenTransfer(DAMM_POOL, WALLET, SolanaChain.WSOL_MINT, "SOL", 1.1),
                         tokenTransfer(DAMM_POOL, WALLET, MSOL_MINT, "MSOL", 0.95),
                         tokenTransfer(WALLET, DAMM_POOL, MLP_MINT, "MLP", 0.3096)))
                 .append("accountData", List.of(
@@ -511,7 +520,7 @@ class SolanaNormalizedTransactionBuilderTest {
     void meteoraFarmStakeBooksTransferNotSell() {
         Document parsed = new Document("type", "STAKE_TOKEN")
                 .append("fee", 5_000L)
-                .append("instructions", List.of(instruction(SolanaProgramIds.METEORA_FARM,
+                .append("instructions", List.of(instruction(SolanaProtocolPrograms.METEORA_FARM_ID,
                         List.of(WALLET, METEORA_FARM_ADDR, MLP_MINT))))
                 .append("tokenTransfers", List.of(
                         tokenTransfer(WALLET, METEORA_FARM_ADDR, MLP_MINT, "MLP", 0.3096)));
@@ -537,7 +546,7 @@ class SolanaNormalizedTransactionBuilderTest {
     void meteoraFarmUnstakeBooksTransferNotBuy() {
         Document parsed = new Document("type", "UNSTAKE_TOKEN")
                 .append("fee", 5_000L)
-                .append("instructions", List.of(instruction(SolanaProgramIds.METEORA_FARM,
+                .append("instructions", List.of(instruction(SolanaProtocolPrograms.METEORA_FARM_ID,
                         List.of(WALLET, METEORA_FARM_ADDR, MLP_MINT))))
                 .append("tokenTransfers", List.of(
                         tokenTransfer(METEORA_FARM_ADDR, WALLET, MLP_MINT, "MLP", 0.3096)));
@@ -569,11 +578,11 @@ class SolanaNormalizedTransactionBuilderTest {
     }
 
     private static Document computeBudgetInstruction() {
-        return new Document("programId", SolanaProgramIds.COMPUTE_BUDGET_PROGRAM);
+        return new Document("programId", SolanaChain.COMPUTE_BUDGET_PROGRAM);
     }
 
     private static Document splTokenInstruction() {
-        return new Document("programId", SolanaProgramIds.TOKEN_PROGRAM);
+        return new Document("programId", SolanaChain.TOKEN_PROGRAM);
     }
 
     @Test
@@ -640,7 +649,7 @@ class SolanaNormalizedTransactionBuilderTest {
     private static final String JL_RECEIPT_MINT = "4XuocgW9zK5ozuaCQMLjRHkvzeT63D3jwpNKKHaE7BY5";
 
     private static Document lendInstruction() {
-        return instruction(SolanaProgramIds.JUPITER_LEND, List.of(WALLET, JL_RESERVE));
+        return instruction(SolanaProtocolPrograms.jupiterLendProgramIds().iterator().next(), List.of(WALLET, JL_RESERVE));
     }
 
     @Test
@@ -670,11 +679,11 @@ class SolanaNormalizedTransactionBuilderTest {
     void jupiterLendLoopCarriesSolOnlyNoPhantomUsdt() {
         Document parsed = new Document("type", "UNKNOWN")
                 .append("fee", 5_000L)
-                .append("instructions", List.of(lendInstruction(), instruction(SolanaProgramIds.JUPITER_SWAP_V6, List.of(WALLET))))
+                .append("instructions", List.of(lendInstruction(), instruction(SolanaProtocolPrograms.JUPITER_SWAP_V6_ID, List.of(WALLET))))
                 .append("tokenTransfers", List.of(
                         tokenTransfer(JL_RESERVE, WALLET, USDT_MINT, "USDT", 15.81),
                         tokenTransfer(WALLET, "pool", USDT_MINT, "USDT", 15.81),
-                        tokenTransfer(WALLET, JL_RESERVE, SolanaProgramIds.WSOL_MINT, "SOL", 0.10)));
+                        tokenTransfer(WALLET, JL_RESERVE, SolanaChain.WSOL_MINT, "SOL", 0.10)));
 
         NormalizedTransaction tx = builder.build(raw(parsed), Instant.now());
 
@@ -684,7 +693,7 @@ class SolanaNormalizedTransactionBuilderTest {
                 || f.getRole() == NormalizedLegRole.SELL);
         NormalizedTransaction.Flow principal = tx.getFlows().stream()
                 .filter(f -> f.getRole() == NormalizedLegRole.TRANSFER).findFirst().orElseThrow();
-        assertThat(principal.getAssetContract()).isEqualTo(SolanaProgramIds.WSOL_MINT);
+        assertThat(principal.getAssetContract()).isEqualTo(SolanaChain.WSOL_MINT);
         assertThat(principal.getQuantityDelta().signum()).isNegative();
     }
 
@@ -698,14 +707,14 @@ class SolanaNormalizedTransactionBuilderTest {
         Document walletAccount = new Document("account", WALLET)
                 .append("nativeBalanceChange", -100_105_001L)
                 .append("tokenBalanceChanges", List.of(new Document("userAccount", WALLET)
-                        .append("mint", SolanaProgramIds.WSOL_MINT)
+                        .append("mint", SolanaChain.WSOL_MINT)
                         .append("rawTokenAmount", new Document("tokenAmount", "159795").append("decimals", 9))));
         Document parsed = new Document("type", "TRANSFER")
                 .append("source", "SYSTEM_PROGRAM")
                 .append("fee", fee)
                 .append("instructions", List.of(
                         lendInstruction(),
-                        instruction(SolanaProgramIds.JUPITER_SWAP_V6, List.of(WALLET))))
+                        instruction(SolanaProtocolPrograms.JUPITER_SWAP_V6_ID, List.of(WALLET))))
                 .append("accountData", List.of(walletAccount));
 
         NormalizedTransaction tx = builder.build(raw(parsed), Instant.now());
@@ -715,7 +724,7 @@ class SolanaNormalizedTransactionBuilderTest {
                 || f.getRole() == NormalizedLegRole.SELL);
         NormalizedTransaction.Flow principal = tx.getFlows().stream()
                 .filter(f -> f.getRole() == NormalizedLegRole.TRANSFER).findFirst().orElseThrow();
-        assertThat(principal.getAssetContract()).isEqualTo(SolanaProgramIds.WSOL_MINT);
+        assertThat(principal.getAssetContract()).isEqualTo(SolanaChain.WSOL_MINT);
         assertThat(principal.getQuantityDelta().doubleValue()).isEqualTo(-0.099840206);
     }
 
@@ -742,7 +751,7 @@ class SolanaNormalizedTransactionBuilderTest {
                         .append("toUserAccount", tempWsolAta)
                         .append("amount", 500_000_001L)))
                 .append("tokenTransfers", List.of(
-                        tokenTransfer(WALLET, JL_RESERVE, SolanaProgramIds.WSOL_MINT, "SOL", 0.500000001)));
+                        tokenTransfer(WALLET, JL_RESERVE, SolanaChain.WSOL_MINT, "SOL", 0.500000001)));
 
         NormalizedTransaction tx = builder.build(raw(parsed), Instant.now());
 
@@ -751,7 +760,7 @@ class SolanaNormalizedTransactionBuilderTest {
                 || f.getRole() == NormalizedLegRole.SELL);
         List<NormalizedTransaction.Flow> collateralLegs = tx.getFlows().stream()
                 .filter(f -> f.getRole() == NormalizedLegRole.TRANSFER
-                        && SolanaProgramIds.WSOL_MINT.equals(f.getAssetContract()))
+                        && SolanaChain.WSOL_MINT.equals(f.getAssetContract()))
                 .toList();
         assertThat(collateralLegs).hasSize(1);
         assertThat(collateralLegs.get(0).getQuantityDelta().doubleValue()).isEqualTo(-0.500000001);
@@ -760,14 +769,14 @@ class SolanaNormalizedTransactionBuilderTest {
     @Test
     @DisplayName("WS-1: earn-only Jupiter Lend program (no borrow router) still classifies as a Jupiter Lend supply")
     void jupiterLendEarnProgramClassifiesAsLending() {
-        String earnProgram = SolanaProgramIds.JUPITER_LEND_PROGRAM_IDS.stream()
-                .filter(id -> !id.equals(SolanaProgramIds.JUPITER_LEND))
+        String earnProgram = SolanaProtocolPrograms.jupiterLendProgramIds().stream()
+                .filter(id -> !id.equals(SolanaProtocolPrograms.jupiterLendProgramIds().iterator().next()))
                 .findFirst().orElseThrow();
         Document parsed = new Document("type", "UNKNOWN")
                 .append("fee", 5_000L)
                 .append("instructions", List.of(instruction(earnProgram, List.of(WALLET, JL_RESERVE))))
                 .append("tokenTransfers", List.of(
-                        tokenTransfer(WALLET, JL_RESERVE, SolanaProgramIds.WSOL_MINT, "SOL", 1.5)));
+                        tokenTransfer(WALLET, JL_RESERVE, SolanaChain.WSOL_MINT, "SOL", 1.5)));
 
         NormalizedTransaction tx = builder.build(raw(parsed), Instant.now());
 
@@ -782,7 +791,7 @@ class SolanaNormalizedTransactionBuilderTest {
                 .append("fee", 5_000L)
                 .append("instructions", List.of(lendInstruction()))
                 .append("tokenTransfers", List.of(
-                        tokenTransfer(JL_RESERVE, WALLET, SolanaProgramIds.WSOL_MINT, "SOL", 0.939),
+                        tokenTransfer(JL_RESERVE, WALLET, SolanaChain.WSOL_MINT, "SOL", 0.939),
                         tokenTransfer(WALLET, JL_RESERVE, JL_RECEIPT_MINT, "jlSOL", 0.939)));
 
         NormalizedTransaction tx = builder.build(raw(parsed), Instant.now());
@@ -791,7 +800,7 @@ class SolanaNormalizedTransactionBuilderTest {
         assertThat(tx.getFlows()).noneMatch(f -> JL_RECEIPT_MINT.equals(f.getAssetContract()));
         NormalizedTransaction.Flow principal = tx.getFlows().stream()
                 .filter(f -> f.getRole() == NormalizedLegRole.TRANSFER).findFirst().orElseThrow();
-        assertThat(principal.getAssetContract()).isEqualTo(SolanaProgramIds.WSOL_MINT);
+        assertThat(principal.getAssetContract()).isEqualTo(SolanaChain.WSOL_MINT);
         assertThat(principal.getQuantityDelta().signum()).isPositive();
     }
 
@@ -800,9 +809,9 @@ class SolanaNormalizedTransactionBuilderTest {
     void vaultDepositBooksTransferOut() {
         Document parsed = new Document("type", "DEPOSIT")
                 .append("fee", 5_000L)
-                .append("instructions", List.of(instruction(SolanaProgramIds.METEORA_VAULT, List.of(WALLET, "vault"))))
+                .append("instructions", List.of(instruction(SolanaProtocolPrograms.METEORA_VAULT_ID, List.of(WALLET, "vault"))))
                 .append("tokenTransfers", List.of(
-                        tokenTransfer(WALLET, "vault", SolanaProgramIds.WSOL_MINT, "SOL", 1.0)));
+                        tokenTransfer(WALLET, "vault", SolanaChain.WSOL_MINT, "SOL", 1.0)));
 
         NormalizedTransaction tx = builder.build(raw(parsed), Instant.now());
 

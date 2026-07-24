@@ -6,6 +6,7 @@ import com.walletradar.application.linking.pipeline.clarification.ProtocolNameEn
 import com.walletradar.application.normalization.pipeline.metadata.ResolvedTokenMetadata;
 import com.walletradar.application.normalization.pipeline.metadata.TokenMetadataResolutionService;
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.testsupport.NetworkTestFixtures;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus;
@@ -28,6 +29,11 @@ import static org.mockito.Mockito.when;
  * never overwrite the native TON symbol with a contract-derived placeholder.
  */
 class CanonicalMetadataEnricherTest {
+
+    // Ensures NetworkNativeAssets (nativeIdentity for TON) is bound before tests run.
+    static {
+        NetworkTestFixtures.registry();
+    }
 
     private static final String SPL_MINT = "vPtS4ywrbEuufwPkBXsCYkeTBfpzCd6hF52p8kJGt9b";
     private static final String TON_JETTON = "0:3547f2ee4022c794c80ea354b81bb63b5b571dd05ac091b035d19abbadd74ac6";

@@ -3,6 +3,7 @@ package com.walletradar.application.pricing.latest;
 import com.walletradar.domain.common.PriceSource;
 import com.walletradar.platform.networks.solana.jupiter.JupiterClient;
 import com.walletradar.platform.networks.solana.jupiter.JupiterProperties;
+import com.walletradar.testsupport.NetworkTestFixtures;
 import org.bson.Document;
 import org.bson.types.Decimal128;
 import org.junit.jupiter.api.Test;
@@ -26,6 +27,11 @@ import static org.mockito.Mockito.when;
  * {@link JupiterPriceLatestPriceProvider}.
  */
 class JupiterPriceLatestPriceProviderTest {
+
+    // Ensures NetworkNativeAssets (nativeIdentity for SOLANA) is bound before tests run.
+    static {
+        NetworkTestFixtures.registry();
+    }
 
     private static final String USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     private static final String WSOL_MINT = "So11111111111111111111111111111111111111112";

@@ -1,6 +1,7 @@
 package com.walletradar.application.normalization.pipeline.solana;
 
 import com.walletradar.domain.transaction.raw.RawTransaction;
+import com.walletradar.platform.networks.solana.SolanaChain;
 import org.bson.Document;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -14,6 +15,7 @@ class SolanaLpPositionResolverTest {
     private static final String WALLET = "9Grpx4HKXTe51Ug9nAYuND9qf2bw326WvxFyEULt1DhG";
     private static final String POSITION = "H7wY3yb9LfJYv98yxfyqpPeco3ezKFE5n8VQKRcooe9w";
     private static final String POOL = "CgqwPLSFfht89pF5RSKGUUMFj5zRxoUt4861w2SkXaqY";
+    private static final String USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
     private static SolanaRawTransactionView view(Document heliusParsed) {
         RawTransaction r = new RawTransaction();
@@ -34,9 +36,9 @@ class SolanaLpPositionResolverTest {
     void resolvesPositionFromAddLiquidity() {
         Document parsed = new Document("type", "ADD_LIQUIDITY_BY_STRATEGY").append("instructions", List.of(
                 instruction("ComputeBudget111111111111111111111111111111", List.of()),
-                instruction(SolanaProgramIds.METEORA_DLMM, List.of(
-                        POSITION, POOL, SolanaProgramIds.METEORA_DLMM, "userTokenX", "userTokenY",
-                        "reserveX", "reserveY", SolanaProgramIds.WSOL_MINT, SolanaProgramIds.USDC_MINT,
+                instruction(SolanaProtocolPrograms.METEORA_DLMM_ID, List.of(
+                        POSITION, POOL, SolanaProtocolPrograms.METEORA_DLMM_ID, "userTokenX", "userTokenY",
+                        "reserveX", "reserveY", SolanaChain.WSOL_MINT, USDC_MINT,
                         "binArrayLower", "binArrayUpper", WALLET))));
 
         assertThat(SolanaLpPositionResolver.resolveCorrelationId(view(parsed)))
@@ -48,9 +50,9 @@ class SolanaLpPositionResolverTest {
     void capturesLbPairFromAccountsIndexOne() {
         Document parsed = new Document("type", "ADD_LIQUIDITY_BY_STRATEGY").append("instructions", List.of(
                 instruction("ComputeBudget111111111111111111111111111111", List.of()),
-                instruction(SolanaProgramIds.METEORA_DLMM, List.of(
-                        POSITION, POOL, SolanaProgramIds.METEORA_DLMM, "userTokenX", "userTokenY",
-                        "reserveX", "reserveY", SolanaProgramIds.WSOL_MINT, SolanaProgramIds.USDC_MINT,
+                instruction(SolanaProtocolPrograms.METEORA_DLMM_ID, List.of(
+                        POSITION, POOL, SolanaProtocolPrograms.METEORA_DLMM_ID, "userTokenX", "userTokenY",
+                        "reserveX", "reserveY", SolanaChain.WSOL_MINT, USDC_MINT,
                         "binArrayLower", "binArrayUpper", WALLET))));
 
         assertThat(SolanaLpPositionResolver.resolveLpPoolAddress(view(parsed))).isEqualTo(POOL);
@@ -61,11 +63,11 @@ class SolanaLpPositionResolverTest {
     void capturesLbPairFromLargestLiquidityInstruction() {
         Document parsed = new Document("type", "REMOVE_LIQUIDITY_BY_RANGE").append("instructions", List.of(
                 // removeLiquidityByRange (16 accounts) — accounts[0]=position, accounts[1]=pool
-                instruction(SolanaProgramIds.METEORA_DLMM, List.of(
+                instruction(SolanaProtocolPrograms.METEORA_DLMM_ID, List.of(
                         POSITION, POOL, "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9",
                         "a10", "a11", "a12", "a13", "a14", "a15")),
                 // claimFee (14 accounts) — accounts[0]=pool, accounts[1]=position; must not be chosen
-                instruction(SolanaProgramIds.METEORA_DLMM, List.of(
+                instruction(SolanaProtocolPrograms.METEORA_DLMM_ID, List.of(
                         POOL, POSITION, "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9",
                         "a10", "a11", "a12", "a13"))));
 
@@ -77,8 +79,8 @@ class SolanaLpPositionResolverTest {
     void doesNotCaptureImplausibleLbPair() {
         // accounts[1] is a routed program id, not a genuine pool — the plausibility guard rejects it.
         Document parsed = new Document("type", "ADD_LIQUIDITY_BY_STRATEGY").append("instructions", List.of(
-                instruction(SolanaProgramIds.METEORA_DLMM, List.of(
-                        POSITION, SolanaProgramIds.TOKEN_PROGRAM, "a2", "a3", "a4", "a5", "a6", "a7",
+                instruction(SolanaProtocolPrograms.METEORA_DLMM_ID, List.of(
+                        POSITION, SolanaChain.TOKEN_PROGRAM, "a2", "a3", "a4", "a5", "a6", "a7",
                         "a8", "a9", "a10"))));
 
         assertThat(SolanaLpPositionResolver.resolveLpPoolAddress(view(parsed))).isNull();
@@ -88,7 +90,7 @@ class SolanaLpPositionResolverTest {
     @DisplayName("LbPair guard: accounts[1] identical to the position PDA is not captured")
     void doesNotCaptureLbPairEqualToPosition() {
         Document parsed = new Document("type", "ADD_LIQUIDITY_BY_STRATEGY").append("instructions", List.of(
-                instruction(SolanaProgramIds.METEORA_DLMM, List.of(
+                instruction(SolanaProtocolPrograms.METEORA_DLMM_ID, List.of(
                         POSITION, POSITION, "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9", "a10"))));
 
         assertThat(SolanaLpPositionResolver.resolveLpPoolAddress(view(parsed))).isNull();
@@ -98,10 +100,10 @@ class SolanaLpPositionResolverTest {
     @DisplayName("Raydium CLMM interaction captures no LbPair (Meteora-only capture)")
     void raydiumCapturesNoLbPair() {
         Document parsed = new Document("type", "SWAP").append("instructions", List.of(
-                instruction(SolanaProgramIds.RAYDIUM_CLMM, List.of(
+                instruction(SolanaProtocolPrograms.RAYDIUM_CLMM_ID, List.of(
                         WALLET, RAYDIUM_NFT_ACCOUNT, RAYDIUM_POOL_STATE, "protocolPosition",
                         "personalPosition", "tickLower", "tickUpper", "tokenAcc0", "tokenAcc1",
-                        "tokenVault0", "tokenVault1", SolanaProgramIds.TOKEN_PROGRAM))));
+                        "tokenVault0", "tokenVault1", SolanaChain.TOKEN_PROGRAM))));
 
         assertThat(SolanaLpPositionResolver.resolveLpPoolAddress(view(parsed))).isNull();
     }
@@ -109,9 +111,9 @@ class SolanaLpPositionResolverTest {
     @Test
     @DisplayName("Hawksight-wrapped DLMM captures no LbPair (excluded scope)")
     void hawksightCapturesNoLbPair() {
-        Document inner = instruction(SolanaProgramIds.METEORA_DLMM, List.of(
+        Document inner = instruction(SolanaProtocolPrograms.METEORA_DLMM_ID, List.of(
                 POSITION, POOL, "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9", "a10"));
-        Document outer = new Document("programId", SolanaProgramIds.HAWKSIGHT)
+        Document outer = new Document("programId", SolanaProtocolPrograms.HAWKSIGHT_ID)
                 .append("accounts", List.of(WALLET))
                 .append("innerInstructions", List.of(inner));
         Document parsed = new Document("type", "EXTENSION_EXECUTE")
@@ -126,15 +128,15 @@ class SolanaLpPositionResolverTest {
     void picksPositionOverClaimFeePool() {
         Document parsed = new Document("type", "REMOVE_LIQUIDITY_BY_RANGE").append("instructions", List.of(
                 // removeLiquidityByRange (16 accounts) — accounts[0] = position
-                instruction(SolanaProgramIds.METEORA_DLMM, List.of(
+                instruction(SolanaProtocolPrograms.METEORA_DLMM_ID, List.of(
                         POSITION, POOL, "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9",
                         "a10", "a11", "a12", "a13", "a14", "a15")),
                 // claimFee (14 accounts) — accounts[0] = pool, accounts[1] = position
-                instruction(SolanaProgramIds.METEORA_DLMM, List.of(
+                instruction(SolanaProtocolPrograms.METEORA_DLMM_ID, List.of(
                         POOL, POSITION, "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9",
                         "a10", "a11", "a12", "a13")),
                 // closePosition (8 accounts) — below the liquidity-instruction threshold
-                instruction(SolanaProgramIds.METEORA_DLMM, List.of(
+                instruction(SolanaProtocolPrograms.METEORA_DLMM_ID, List.of(
                         POSITION, POOL, "a2", "a3", "a4", "a5", "a6", "a7"))));
 
         assertThat(SolanaLpPositionResolver.resolveCorrelationId(view(parsed)))
@@ -146,9 +148,9 @@ class SolanaLpPositionResolverTest {
     void resolvesFromInnerInstruction() {
         // A non-custody router (not Hawksight) that CPIs into Meteora DLMM at the wallet level still
         // resolves to a position — the flattened traversal must keep finding inner liquidity legs.
-        Document inner = instruction(SolanaProgramIds.METEORA_DLMM, List.of(
+        Document inner = instruction(SolanaProtocolPrograms.METEORA_DLMM_ID, List.of(
                 POSITION, POOL, "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9", "a10"));
-        Document outer = new Document("programId", SolanaProgramIds.JUPITER_SWAP_V6)
+        Document outer = new Document("programId", SolanaProtocolPrograms.JUPITER_SWAP_V6_ID)
                 .append("accounts", List.of(WALLET))
                 .append("innerInstructions", List.of(inner));
         Document parsed = new Document("type", "ADD_LIQUIDITY").append("instructions", List.of(outer));
@@ -165,9 +167,9 @@ class SolanaLpPositionResolverTest {
         // the position PDA at accounts[0]), the position is owned by the Hawksight vault, not the
         // wallet — fabricating a per-position identity here produced the phantom "open" positions
         // whose basis pool never drained. Must fall through to the generic family-continuity bucket.
-        Document inner = instruction(SolanaProgramIds.METEORA_DLMM, List.of(
+        Document inner = instruction(SolanaProtocolPrograms.METEORA_DLMM_ID, List.of(
                 POSITION, POOL, "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9", "a10"));
-        Document outer = new Document("programId", SolanaProgramIds.HAWKSIGHT)
+        Document outer = new Document("programId", SolanaProtocolPrograms.HAWKSIGHT_ID)
                 .append("accounts", List.of(WALLET))
                 .append("innerInstructions", List.of(inner));
         Document parsed = new Document("type", "EXTENSION_EXECUTE")
@@ -184,9 +186,9 @@ class SolanaLpPositionResolverTest {
         // deposit is routed through the Hawksight program (top-level) which CPIs the DLMM add. The
         // Hawksight program presence alone must suppress the position identity so the entry and its
         // later Hawksight close both ride generic family continuity (symmetric, no stuck pool).
-        Document dlmmInner = instruction(SolanaProgramIds.METEORA_DLMM, List.of(
+        Document dlmmInner = instruction(SolanaProtocolPrograms.METEORA_DLMM_ID, List.of(
                 POSITION, POOL, "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9", "a10"));
-        Document hawksight = new Document("programId", SolanaProgramIds.HAWKSIGHT)
+        Document hawksight = new Document("programId", SolanaProtocolPrograms.HAWKSIGHT_ID)
                 .append("accounts", List.of(WALLET, "vault"))
                 .append("innerInstructions", List.of(dlmmInner));
         Document parsed = new Document("type", "TRANSFER")
@@ -200,8 +202,8 @@ class SolanaLpPositionResolverTest {
     @DisplayName("Returns null when no DLMM liquidity instruction is present (Hawksight-internal shape)")
     void returnsNullWithoutDlmmInstruction() {
         Document parsed = new Document("type", "EXTENSION_EXECUTE").append("instructions", List.of(
-                instruction(SolanaProgramIds.HAWKSIGHT, List.of(WALLET, "vault")),
-                instruction(SolanaProgramIds.TOKEN_PROGRAM, List.of("a", "b"))));
+                instruction(SolanaProtocolPrograms.HAWKSIGHT_ID, List.of(WALLET, "vault")),
+                instruction(SolanaChain.TOKEN_PROGRAM, List.of("a", "b"))));
 
         assertThat(SolanaLpPositionResolver.resolveCorrelationId(view(parsed))).isNull();
     }
@@ -211,9 +213,9 @@ class SolanaLpPositionResolverTest {
     void ignoresSmallDlmmInstructions() {
         // initializePosition alone (8 accounts) is not the economic liquidity leg.
         Document parsed = new Document("type", "INITIALIZE_POSITION").append("instructions", List.of(
-                instruction(SolanaProgramIds.METEORA_DLMM, List.of(
-                        WALLET, POSITION, POOL, WALLET, SolanaProgramIds.SYSTEM_PROGRAM,
-                        "SysvarRent", "eventAuthority", SolanaProgramIds.METEORA_DLMM))));
+                instruction(SolanaProtocolPrograms.METEORA_DLMM_ID, List.of(
+                        WALLET, POSITION, POOL, WALLET, SolanaChain.SYSTEM_PROGRAM,
+                        "SysvarRent", "eventAuthority", SolanaProtocolPrograms.METEORA_DLMM_ID))));
 
         assertThat(SolanaLpPositionResolver.resolveCorrelationId(view(parsed))).isNull();
     }
@@ -228,10 +230,10 @@ class SolanaLpPositionResolverTest {
     void resolvesRaydiumClmmPositionFromIncreaseLiquidity() {
         // increaseLiquidityV2: [nftOwner==wallet, nftAccount, poolState, protocolPosition, personalPosition, ...]
         Document parsed = new Document("type", "SWAP").append("instructions", List.of(
-                instruction(SolanaProgramIds.RAYDIUM_CLMM, List.of(
+                instruction(SolanaProtocolPrograms.RAYDIUM_CLMM_ID, List.of(
                         WALLET, RAYDIUM_NFT_ACCOUNT, RAYDIUM_POOL_STATE, "protocolPosition",
                         "personalPosition", "tickLower", "tickUpper", "tokenAcc0", "tokenAcc1",
-                        "tokenVault0", "tokenVault1", SolanaProgramIds.TOKEN_PROGRAM))));
+                        "tokenVault0", "tokenVault1", SolanaChain.TOKEN_PROGRAM))));
 
         assertThat(SolanaLpPositionResolver.resolveCorrelationId(view(parsed)))
                 .isEqualTo("lp-position:solana:raydium-clmm:" + RAYDIUM_NFT_ACCOUNT);
@@ -242,10 +244,10 @@ class SolanaLpPositionResolverTest {
     void resolvesRaydiumClmmPositionFromDecreaseLiquidity() {
         // decreaseLiquidityV2: [nftOwner==wallet, nftAccount, personalPosition, poolState, ...]
         Document parsed = new Document("type", "SWAP").append("instructions", List.of(
-                instruction(SolanaProgramIds.RAYDIUM_CLMM, List.of(
+                instruction(SolanaProtocolPrograms.RAYDIUM_CLMM_ID, List.of(
                         WALLET, RAYDIUM_NFT_ACCOUNT, "personalPosition", RAYDIUM_POOL_STATE,
                         "protocolPosition", "tokenVault0", "tokenVault1", "tickLower", "tickUpper",
-                        "recipient0", "recipient1", SolanaProgramIds.TOKEN_PROGRAM))));
+                        "recipient0", "recipient1", SolanaChain.TOKEN_PROGRAM))));
 
         assertThat(SolanaLpPositionResolver.resolveCorrelationId(view(parsed)))
                 .isEqualTo("lp-position:solana:raydium-clmm:" + RAYDIUM_NFT_ACCOUNT);
@@ -256,7 +258,7 @@ class SolanaLpPositionResolverTest {
     void resolvesRaydiumClmmPositionFromOpenPosition() {
         // openPositionV2: [payer==wallet, positionNftOwner==wallet, positionNftMint, positionNftAccount, ...]
         Document parsed = new Document("type", "SWAP").append("instructions", List.of(
-                instruction(SolanaProgramIds.RAYDIUM_CLMM, List.of(
+                instruction(SolanaProtocolPrograms.RAYDIUM_CLMM_ID, List.of(
                         WALLET, WALLET, "positionNftMint", RAYDIUM_NFT_ACCOUNT, "metadata",
                         RAYDIUM_POOL_STATE, "protocolPosition", "tickLower", "tickUpper",
                         "personalPosition", "tokenAcc0", "tokenAcc1"))));
@@ -270,9 +272,9 @@ class SolanaLpPositionResolverTest {
     void ignoresRaydiumClmmClosePositionOnly() {
         // closePosition: [nftOwner==wallet, positionNftMint, positionNftAccount, personalPosition, systemProgram, tokenProgram]
         Document parsed = new Document("type", "CLOSE_POSITION").append("instructions", List.of(
-                instruction(SolanaProgramIds.RAYDIUM_CLMM, List.of(
+                instruction(SolanaProtocolPrograms.RAYDIUM_CLMM_ID, List.of(
                         WALLET, "positionNftMint", RAYDIUM_NFT_ACCOUNT, "personalPosition",
-                        SolanaProgramIds.SYSTEM_PROGRAM, SolanaProgramIds.TOKEN_PROGRAM))));
+                        SolanaChain.SYSTEM_PROGRAM, SolanaChain.TOKEN_PROGRAM))));
 
         assertThat(SolanaLpPositionResolver.resolveCorrelationId(view(parsed))).isNull();
     }
@@ -280,9 +282,9 @@ class SolanaLpPositionResolverTest {
     // --- RC-S-LP-CLOSE: full-position-close detection via position-account rent reclaim ---
 
     private static Document dlmmLiquidityInstruction() {
-        return instruction(SolanaProgramIds.METEORA_DLMM, List.of(
-                POSITION, POOL, SolanaProgramIds.METEORA_DLMM, "userTokenX", "userTokenY",
-                "reserveX", "reserveY", SolanaProgramIds.WSOL_MINT, "binLower", "binUpper", WALLET));
+        return instruction(SolanaProtocolPrograms.METEORA_DLMM_ID, List.of(
+                POSITION, POOL, SolanaProtocolPrograms.METEORA_DLMM_ID, "userTokenX", "userTokenY",
+                "reserveX", "reserveY", SolanaChain.WSOL_MINT, "binLower", "binUpper", WALLET));
     }
 
     @Test
@@ -314,10 +316,10 @@ class SolanaLpPositionResolverTest {
     void detectsRaydiumClmmFullCloseFromNftAccountRentReclaim() {
         Document parsed = new Document("type", "SWAP")
                 .append("instructions", List.of(
-                        instruction(SolanaProgramIds.RAYDIUM_CLMM, List.of(
+                        instruction(SolanaProtocolPrograms.RAYDIUM_CLMM_ID, List.of(
                                 WALLET, RAYDIUM_NFT_ACCOUNT, RAYDIUM_POOL_STATE, "protocolPosition",
                                 "personalPosition", "tickLower", "tickUpper", "tokenAcc0", "tokenAcc1",
-                                "tokenVault0", "tokenVault1", SolanaProgramIds.TOKEN_PROGRAM))))
+                                "tokenVault0", "tokenVault1", SolanaChain.TOKEN_PROGRAM))))
                 .append("accountData", List.of(
                         new Document("account", RAYDIUM_NFT_ACCOUNT).append("nativeBalanceChange", -2_074_080L)));
 
@@ -333,10 +335,10 @@ class SolanaLpPositionResolverTest {
         // addBalanceLiquidity / removeBalanceLiquidity layout:
         // [pool, lpMint, userPoolLp, aVaultLp, bVaultLp, aVault, bVault, aTokenVault, bTokenVault,
         //  aVaultLpMint, bVaultLpMint, user, tokenProgram, vaultProgram] (verified against damm-v1-sdk IDL)
-        return instruction(SolanaProgramIds.METEORA_DYNAMIC_AMM, List.of(
+        return instruction(SolanaProtocolPrograms.METEORA_DYNAMIC_AMM_ID, List.of(
                 DAMM_POOL, "lpMint", DAMM_USER_POOL_LP, "aVaultLp", "bVaultLp", "aVault", "bVault",
                 "aTokenVault", "bTokenVault", "aVaultLpMint", "bVaultLpMint", WALLET,
-                SolanaProgramIds.TOKEN_PROGRAM, SolanaProgramIds.METEORA_VAULT));
+                SolanaChain.TOKEN_PROGRAM, SolanaProtocolPrograms.METEORA_VAULT_ID));
     }
 
     @Test
@@ -363,7 +365,7 @@ class SolanaLpPositionResolverTest {
     @DisplayName("DAMM: resolveLpReceiptMint is null for a non-DAMM (DLMM) tx — no fungible wallet receipt")
     void resolveLpReceiptMintNullForNonDamm() {
         Document parsed = new Document("type", "ADD_LIQUIDITY")
-                .append("instructions", List.of(instruction(SolanaProgramIds.METEORA_DLMM, List.of(
+                .append("instructions", List.of(instruction(SolanaProtocolPrograms.METEORA_DLMM_ID, List.of(
                         "PositionPda11111111111111111111111111111111", "LbPair1111111111111111111111111111111111111",
                         "binArray", "reserveX", "reserveY", "tokenXMint", "tokenYMint", WALLET))));
 
@@ -409,7 +411,7 @@ class SolanaLpPositionResolverTest {
     @DisplayName("DAMM below the liquidity account threshold (e.g. swap/claim) resolves to null")
     void ignoresSmallDammInstructions() {
         Document parsed = new Document("type", "SWAP").append("instructions", List.of(
-                instruction(SolanaProgramIds.METEORA_DYNAMIC_AMM, List.of(
+                instruction(SolanaProtocolPrograms.METEORA_DYNAMIC_AMM_ID, List.of(
                         DAMM_POOL, "userSource", "userDest", "aVault", "bVault"))));
 
         assertThat(SolanaLpPositionResolver.resolveCorrelationId(view(parsed))).isNull();
@@ -419,7 +421,7 @@ class SolanaLpPositionResolverTest {
     @DisplayName("No resolvable position → not a full close (never fabricates closure)")
     void unresolvedPositionIsNotFullClose() {
         Document parsed = new Document("type", "EXTENSION_EXECUTE").append("instructions", List.of(
-                instruction(SolanaProgramIds.HAWKSIGHT, List.of(WALLET, "vault"))));
+                instruction(SolanaProtocolPrograms.HAWKSIGHT_ID, List.of(WALLET, "vault"))));
 
         assertThat(SolanaLpPositionResolver.isFullPositionClose(view(parsed))).isFalse();
     }

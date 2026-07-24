@@ -2,6 +2,7 @@ package com.walletradar.application.normalization.pipeline.solana;
 
 import com.walletradar.domain.common.ConfidenceLevel;
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.common.NetworkStablecoinContracts;
 import com.walletradar.domain.transaction.normalized.ClassificationSource;
 import com.walletradar.domain.transaction.normalized.NormalizedLegRole;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
@@ -11,6 +12,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.application.normalization.pipeline.NormalizedCapabilityFlagStamper;
 import com.walletradar.application.session.application.AccountingUniverseService;
+import com.walletradar.platform.networks.solana.SolanaChain;
 import org.bson.Document;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -180,7 +182,7 @@ public class SolanaNormalizedTransactionBuilder {
         if (feeInLamports > 0) {
             NormalizedTransaction.Flow feeFlow = new NormalizedTransaction.Flow();
             feeFlow.setRole(NormalizedLegRole.FEE);
-            feeFlow.setAssetContract(SolanaProgramIds.WSOL_MINT);
+            feeFlow.setAssetContract(SolanaChain.WSOL_MINT);
             feeFlow.setAssetSymbol(SOL_SYMBOL);
             feeFlow.setQuantityDelta(BigDecimal.valueOf(-feeInLamports).divide(LAMPORTS_PER_SOL));
             flows.add(feeFlow);
@@ -299,11 +301,11 @@ public class SolanaNormalizedTransactionBuilder {
         // is not part of the swap economics). Only when no wSOL token account already captured it.
         // Wallet-scoped fee: when a third party paid the fee it is NOT embedded in the wallet's
         // nativeBalanceChange, so nothing must be added back (walletFeeInLamports() returns 0).
-        if (sawWalletAccount && !netByMint.containsKey(SolanaProgramIds.WSOL_MINT)) {
+        if (sawWalletAccount && !netByMint.containsKey(SolanaChain.WSOL_MINT)) {
             long feeInLamports = view.walletFeeInLamports();
             BigDecimal swapSolDelta = solDelta.add(BigDecimal.valueOf(feeInLamports).divide(LAMPORTS_PER_SOL));
             if (swapSolDelta.abs().compareTo(NATIVE_SOL_DUST_THRESHOLD) >= 0) {
-                netByMint.merge(SolanaProgramIds.WSOL_MINT, swapSolDelta, BigDecimal::add);
+                netByMint.merge(SolanaChain.WSOL_MINT, swapSolDelta, BigDecimal::add);
             }
         }
 
@@ -313,7 +315,7 @@ public class SolanaNormalizedTransactionBuilder {
             if (net.signum() == 0) {
                 continue;
             }
-            boolean isSol = SolanaProgramIds.WSOL_MINT.equals(mint);
+            boolean isSol = SolanaChain.WSOL_MINT.equals(mint);
             BigDecimal threshold = isSol ? NATIVE_SOL_DUST_THRESHOLD : SPL_DUST_THRESHOLD;
             if (net.abs().compareTo(threshold) <= 0 && threshold.signum() > 0) {
                 continue;
@@ -329,7 +331,7 @@ public class SolanaNormalizedTransactionBuilder {
     }
 
     private String resolveMintSymbol(SolanaRawTransactionView view, String mint) {
-        if (SolanaProgramIds.WSOL_MINT.equals(mint)) {
+        if (SolanaChain.WSOL_MINT.equals(mint)) {
             return SOL_SYMBOL;
         }
         for (Document transfer : view.tokenTransfers()) {
@@ -361,7 +363,7 @@ public class SolanaNormalizedTransactionBuilder {
         if (seeded != null && !seeded.isBlank()) {
             return seeded;
         }
-        if (SolanaProgramIds.WSOL_MINT.equals(mint)) {
+        if (SolanaChain.WSOL_MINT.equals(mint)) {
             return SOL_SYMBOL;
         }
         return null;
@@ -474,7 +476,7 @@ public class SolanaNormalizedTransactionBuilder {
                 }
                 NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
                 flow.setRole(NormalizedLegRole.TRANSFER);
-                flow.setAssetContract(SolanaProgramIds.WSOL_MINT);
+                flow.setAssetContract(SolanaChain.WSOL_MINT);
                 flow.setAssetSymbol(SOL_SYMBOL);
                 flow.setQuantityDelta(inboundSol);
                 flow.setCounterpartyAddress(from);
@@ -483,7 +485,7 @@ public class SolanaNormalizedTransactionBuilder {
             } else if (walletAddress.equals(from) && lamports > 0) {
                 NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
                 flow.setRole(NormalizedLegRole.TRANSFER);
-                flow.setAssetContract(SolanaProgramIds.WSOL_MINT);
+                flow.setAssetContract(SolanaChain.WSOL_MINT);
                 flow.setAssetSymbol(SOL_SYMBOL);
                 flow.setQuantityDelta(BigDecimal.valueOf(-lamports).divide(LAMPORTS_PER_SOL));
                 flow.setCounterpartyAddress(to);
@@ -583,7 +585,7 @@ public class SolanaNormalizedTransactionBuilder {
             if (delta.signum() == 0) {
                 continue;
             }
-            boolean stable = SolanaProgramIds.SOLANA_USD_STABLE_MINTS.contains(mint);
+            boolean stable = NetworkStablecoinContracts.forNetwork(NetworkId.SOLANA).contains(mint);
             // A loop's borrowed principal nets ~0 and is fully consumed by the swap; carry only the
             // net collateral change so no phantom stablecoin SELL leg is produced.
             if (loop && stable) {
@@ -666,7 +668,7 @@ public class SolanaNormalizedTransactionBuilder {
             BigDecimal walletSolDelta = solDelta.add(
                     BigDecimal.valueOf(view.walletFeeInLamports()).divide(LAMPORTS_PER_SOL));
             if (walletSolDelta.abs().compareTo(NATIVE_SOL_DUST_THRESHOLD) >= 0) {
-                net.merge(SolanaProgramIds.WSOL_MINT, walletSolDelta, BigDecimal::add);
+                net.merge(SolanaChain.WSOL_MINT, walletSolDelta, BigDecimal::add);
             }
         } else {
             accumulateLendingTransferNet(view, walletAddress, net);
@@ -710,12 +712,12 @@ public class SolanaNormalizedTransactionBuilder {
             }
         }
         if (solDelta.abs().compareTo(NATIVE_SOL_DUST_THRESHOLD) >= 0) {
-            net.merge(SolanaProgramIds.WSOL_MINT, solDelta, BigDecimal::add);
+            net.merge(SolanaChain.WSOL_MINT, solDelta, BigDecimal::add);
         }
     }
 
     private static boolean isLendingValueMint(String mint) {
-        return SolanaProgramIds.WSOL_MINT.equals(mint) || SolanaProgramIds.SOLANA_USD_STABLE_MINTS.contains(mint);
+        return SolanaChain.WSOL_MINT.equals(mint) || NetworkStablecoinContracts.forNetwork(NetworkId.SOLANA).contains(mint);
     }
 
     /**
@@ -733,7 +735,7 @@ public class SolanaNormalizedTransactionBuilder {
                 continue;
             }
             if ((flow.getRole() == NormalizedLegRole.BUY || flow.getRole() == NormalizedLegRole.SELL)
-                    && SolanaProgramIds.SOLANA_USD_STABLE_MINTS.contains(flow.getAssetContract())) {
+                    && NetworkStablecoinContracts.forNetwork(NetworkId.SOLANA).contains(flow.getAssetContract())) {
                 debtMint = flow.getAssetContract();
                 break;
             }
@@ -781,7 +783,7 @@ public class SolanaNormalizedTransactionBuilder {
             if (deposit && walletAddress.equals(from) && lamports > 0) {
                 NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
                 flow.setRole(NormalizedLegRole.TRANSFER);
-                flow.setAssetContract(SolanaProgramIds.WSOL_MINT);
+                flow.setAssetContract(SolanaChain.WSOL_MINT);
                 flow.setAssetSymbol(SOL_SYMBOL);
                 flow.setQuantityDelta(BigDecimal.valueOf(-lamports).divide(LAMPORTS_PER_SOL));
                 flow.setCounterpartyAddress(to);
@@ -789,7 +791,7 @@ public class SolanaNormalizedTransactionBuilder {
             } else if (!deposit && walletAddress.equals(to) && lamports > 0) {
                 NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
                 flow.setRole(NormalizedLegRole.TRANSFER);
-                flow.setAssetContract(SolanaProgramIds.WSOL_MINT);
+                flow.setAssetContract(SolanaChain.WSOL_MINT);
                 flow.setAssetSymbol(SOL_SYMBOL);
                 flow.setQuantityDelta(BigDecimal.valueOf(lamports).divide(LAMPORTS_PER_SOL));
                 flow.setCounterpartyAddress(from);
@@ -839,7 +841,7 @@ public class SolanaNormalizedTransactionBuilder {
      * Meteora-farm program id + leg role/contract), never on a wallet or transaction hash.
      */
     private static void markFarmStakedReceiptLegs(SolanaRawTransactionView view, NormalizedTransaction tx) {
-        if (!view.hasProgramId(SolanaProgramIds.METEORA_FARM) || tx.getFlows() == null) {
+        if (!view.hasProgramId(SolanaProtocolPrograms.METEORA_FARM_ID) || tx.getFlows() == null) {
             return;
         }
         for (NormalizedTransaction.Flow flow : tx.getFlows()) {
@@ -906,7 +908,7 @@ public class SolanaNormalizedTransactionBuilder {
 
         NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
         flow.setRole(role);
-        flow.setAssetContract(SolanaProgramIds.WSOL_MINT);
+        flow.setAssetContract(SolanaChain.WSOL_MINT);
         flow.setAssetSymbol(SOL_SYMBOL);
         BigDecimal qty = BigDecimal.valueOf(lamports).divide(LAMPORTS_PER_SOL);
         flow.setQuantityDelta(negate ? qty.negate() : qty);

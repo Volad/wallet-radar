@@ -3,6 +3,7 @@ package com.walletradar.application.costbasis.application.balance;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.walletradar.platform.networks.ton.TonNetworkProperties;
 import com.walletradar.platform.networks.ton.TonRpcClient;
+import com.walletradar.testsupport.NetworkTestFixtures;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -17,6 +18,11 @@ import static org.mockito.Mockito.lenient;
 
 @ExtendWith(MockitoExtension.class)
 class TonOnChainBalanceProviderTest {
+
+    // Ensures NetworkNativeAssets (nativeIdentity/nativeDecimals/nativeSymbol) is bound before tests run.
+    static {
+        NetworkTestFixtures.registry();
+    }
 
     private static final String OWNER = "UQAbcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRST";
     private static final String USDT_MASTER = "EQCxE6mUtQJKFnGfaROTKOt1lZbDiiX1kCixRv7Nw2Id_sDs";

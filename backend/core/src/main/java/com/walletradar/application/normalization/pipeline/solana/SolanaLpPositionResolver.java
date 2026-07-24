@@ -1,5 +1,6 @@
 package com.walletradar.application.normalization.pipeline.solana;
 
+import com.walletradar.platform.networks.solana.SolanaChain;
 import org.bson.Document;
 
 import java.util.List;
@@ -244,7 +245,7 @@ public final class SolanaLpPositionResolver {
      * source label — never a wallet or vault address.
      */
     private static boolean isHawksightManaged(SolanaRawTransactionView view) {
-        return view.hasProgramId(SolanaProgramIds.HAWKSIGHT)
+        return view.hasProgramId(SolanaProtocolPrograms.HAWKSIGHT_ID)
                 || "HAWKSIGHT".equals(view.heliusSource());
     }
 
@@ -268,7 +269,7 @@ public final class SolanaLpPositionResolver {
         int bestAccountCount = -1;
         for (Document instruction : view.flattenedInstructions()) {
             String programId = instruction.getString("programId");
-            if (programId == null || !SolanaProgramIds.RAYDIUM_CLMM.equals(programId.trim())) {
+            if (programId == null || !SolanaProtocolPrograms.RAYDIUM_CLMM_ID.equals(programId.trim())) {
                 continue;
             }
             List<String> accounts = SolanaRawTransactionView.instructionAccounts(instruction);
@@ -341,7 +342,7 @@ public final class SolanaLpPositionResolver {
         int bestAccountCount = -1;
         for (Document instruction : view.flattenedInstructions()) {
             String programId = instruction.getString("programId");
-            if (programId == null || !SolanaProgramIds.METEORA_DLMM.equals(programId.trim())) {
+            if (programId == null || !SolanaProtocolPrograms.METEORA_DLMM_ID.equals(programId.trim())) {
                 continue;
             }
             List<String> accounts = SolanaRawTransactionView.instructionAccounts(instruction);
@@ -400,7 +401,7 @@ public final class SolanaLpPositionResolver {
         int bestAccountCount = -1;
         for (Document instruction : view.flattenedInstructions()) {
             String programId = instruction.getString("programId");
-            if (programId == null || !SolanaProgramIds.METEORA_DYNAMIC_AMM.equals(programId.trim())) {
+            if (programId == null || !SolanaProtocolPrograms.METEORA_DYNAMIC_AMM_ID.equals(programId.trim())) {
                 continue;
             }
             List<String> accounts = SolanaRawTransactionView.instructionAccounts(instruction);
@@ -451,14 +452,14 @@ public final class SolanaLpPositionResolver {
             return false;
         }
         return switch (account) {
-            case SolanaProgramIds.METEORA_DLMM,
-                    SolanaProgramIds.METEORA_DYNAMIC_AMM,
-                    SolanaProgramIds.SYSTEM_PROGRAM,
-                    SolanaProgramIds.TOKEN_PROGRAM,
-                    SolanaProgramIds.TOKEN_2022_PROGRAM,
-                    SolanaProgramIds.ASSOCIATED_TOKEN_PROGRAM,
-                    SolanaProgramIds.WSOL_MINT -> false;
-            default -> true;
+            // W16: chain-runtime system constants live in SolanaChain (platform)
+            case SolanaChain.SYSTEM_PROGRAM,
+                    SolanaChain.TOKEN_PROGRAM,
+                    SolanaChain.TOKEN_2022_PROGRAM,
+                    SolanaChain.ASSOCIATED_TOKEN_PROGRAM,
+                    SolanaChain.WSOL_MINT -> false;
+            default -> !SolanaProtocolPrograms.METEORA_DLMM_ID.equals(account)
+                    && !SolanaProtocolPrograms.METEORA_DYNAMIC_AMM_ID.equals(account);
         };
     }
 }

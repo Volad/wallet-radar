@@ -2,6 +2,7 @@ package com.walletradar.application.pricing.latest;
 
 import com.walletradar.application.pricing.domain.CanonicalAssetCatalog;
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.common.NetworkNativeAssets;
 import com.walletradar.domain.common.PriceSource;
 import com.walletradar.domain.common.ton.TonAddressCanonicalizer;
 import com.walletradar.platform.networks.ton.price.TonPriceClient;
@@ -43,8 +44,6 @@ public class TonJettonLatestPriceProvider implements LatestPriceProvider {
     private static final Logger log = LoggerFactory.getLogger(TonJettonLatestPriceProvider.class);
 
     private static final String COLLECTION = "on_chain_balances";
-    /** Native TON contract sentinel — mirrors {@code TonOnChainBalanceProvider.NATIVE_TON_CONTRACT}. */
-    private static final String NATIVE_TON_CONTRACT = "TONCOIN";
     private static final String USD_QUOTE = "USD";
     private static final Pattern RAW_ADDRESS = Pattern.compile("^-?\\d+:[0-9a-fA-F]{64}$");
     /** Below Bybit (1) and Dzengi (2): CEX venues win for symbols they cover (e.g. native TON). */
@@ -116,8 +115,8 @@ public class TonJettonLatestPriceProvider implements LatestPriceProvider {
 
     /**
      * Builds canonical symbol → candidate jetton masters from {@code on_chain_balances}
-     * (networkId=TON, positive quantity), skipping native TON and pinned USD stablecoins and
-     * restricting to the wanted symbol set.
+     * (networkId=TON, positive quantity), skipping native TON (descriptor {@code native-identity})
+     * and pinned USD stablecoins and restricting to the wanted symbol set.
      */
     private Map<String, List<MasterQuantity>> collectTonMastersBySymbol(java.util.Set<String> wanted) {
         Query query = Query.query(Criteria.where("networkId").is(NetworkId.TON.name()));
@@ -126,7 +125,7 @@ public class TonJettonLatestPriceProvider implements LatestPriceProvider {
         Map<String, List<MasterQuantity>> result = new LinkedHashMap<>();
         for (Document doc : mongoOperations.find(query, Document.class, COLLECTION)) {
             String master = trimToNull(doc.getString("assetContract"));
-            if (master == null || NATIVE_TON_CONTRACT.equalsIgnoreCase(master)) {
+            if (master == null || master.equalsIgnoreCase(NetworkNativeAssets.nativeIdentity(NetworkId.TON))) {
                 continue;
             }
             String rawSymbol = trimToNull(doc.getString("assetSymbol"));

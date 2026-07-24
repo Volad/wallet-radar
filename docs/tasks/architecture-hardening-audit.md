@@ -302,6 +302,42 @@ W18/W19 as capacity allows. W12 and W16 are the two that most reduce future per-
 
 ---
 
+## Currency review — 2026-07-24
+
+Re-verified every headline finding against the committed `solana-ton-network-support` branch (commit `e5b45e6`). **The plan is current**; waves W12–W19 are still open with one partial building block:
+
+| Wave | Status | Evidence |
+|---|---|---|
+| W12 | **Open** | `SolanaTransactionClassifier` still branches on **33** `SolanaProgramIds.*` constant refs; `SolanaProtocolPrograms` exposes only `programIdsForProtocol` (protocol→IDs), **not** the reverse `programId→{protocol,family,eventTypeHint}` lookup the classifier needs. |
+| W13 | **Open** | `SolanaOnChainBalanceProvider.fetchSplTokens` queries only `SPL_TOKEN_PROGRAM_ID`; Token-2022 holdings never enumerated. |
+| W14 | **Partial** | `domain.common.NetworkNativeAssets` exists (native **symbol** + wrapped-native + native-alias contracts) — reuse it, but it has **no native-identity sentinel** (`NATIVE:SOLANA`/`TONCOIN`) accessor and **no `native-decimals`**; `SolanaOnChainBalanceProvider` still hardcodes `NATIVE_SOL_SYMBOL`/`SOL_DECIMALS=9`. W14 = extend `NetworkNativeAssets` (identity + decimals) and delete per-class copies. |
+| W15 | **Open** | `JupiterLendLivePositionReader` mint/symbol/decimals map still local. |
+| W16 | **Open** | `SolanaBase58` duplicated in `platform.networks.solana` **and** `application.liquiditypools.enrichment.solana`; `SolanaProgramIds` still imported across `costbasis.balance`/`liquiditypools`/`lending`. |
+| W17 | **Open** | Dead staking ternary confirmed (`SolanaTransactionClassifier` lines 271-273 — both arms return `STAKING_DEPOSIT`); god class intact. |
+| W18/W19 | **Open (optional)** | Helius vocab inline; multiple metadata resolver entry points. |
+
+**Execution order (unchanged):** W13 → W12 → W14 → W16 → W15 → W17 → W18/W19. Each wave behavior-preserving unless noted (W13 balance-completeness fix); AVCO-path waves (W12) verified with `--skip-frontend` renorm + `financial-logic-auditor`, off-path waves (W13/W15/W16) with `--backend-only` + tests. **No regression without cause** — W12 lands behind a golden test asserting registry `family/event_type` == the current hardcoded mapping for every Solana program before any constant is deleted.
+
+## Wave completion log — 2026-07-24
+
+All mandatory waves executed and verified on branch `solana-ton-network-support`.
+
+| Wave | Status | Result |
+|---|---|---|
+| **W13** | ✅ Done | `SolanaOnChainBalanceProvider.fetchSplTokens` now enumerates classic SPL **and** Token-2022, merged by mint (a mint is owned by exactly one program → keep-first dedup). Regression test added. `:backend:core:test` green. |
+| **W12** | ✅ Done | `SolanaTransactionClassifier` dispatches off a reverse registry view (`SolanaProtocolPrograms.classify`) instead of `SolanaProgramIds` constants; protocol constants removed; `BUBBLEGUM` added to `protocol-registry.json`. 21-method golden test asserts registry mapping == pre-W12 hardcoded mapping. Flow-shape/economic logic untouched. |
+| **W14** | ✅ Done | `native-identity` + `native-decimals` added to `network-descriptors.yml`; `NetworkNativeAssets.nativeIdentity/nativeDecimals` accessors; per-class `NATIVE:SOLANA`/`TONCOIN`/decimals copies deleted (byte-identical). EVM native handling unchanged. |
+| **W15** | ✅ Done | `JupiterLendLivePositionReader` mints/symbols/decimals now via `NetworkStablecoinContracts.forNetwork(SOLANA)` + `NetworkTokenOverrides` + native accessor; `DEFAULT_JETTON_DECIMALS` fallback retained (documented). |
+| **W16** | ✅ Done | Chain vocabulary moved to `platform.networks.solana.SolanaChain`; `SolanaProgramIds` and the duplicate `SolanaBase58` deleted; balance-provider SPL-program copies deduped. **Latent bug fixed:** `NetworkRegistry.normalizeContract` was lowercasing non-EVM (case-sensitive base58) contracts — now case-preserved, so Solana stable/wSOL matching is correct. `ModuleBoundaryTest` green (2875 tests). |
+| **W17** | ✅ Done | Dead staking ternary removed (`STAKING_DEPOSIT_TYPES` deleted; output unchanged); classifier shrank 944→458 lines via `SolanaWalletNetFlow`/`SolanaFlowShape` extraction (pure refactor + pinning tests). Latent staking-withdraw fallback noted for a future financial-audit item (report-only). |
+
+**Verification:** full `--skip-frontend` renormalization ran clean end-to-end (0 errors; bybit=4406, solana=654, ton=117, linking=570, pricing=6060, costbasis-replay=8674, snapshot=108). Independent `financial-logic-auditor` regression audit returned **no Critical/High/Medium findings**: per-family AVCO/effective cost clean, conservation clean (uncovered=0/shortfall=0 for ETH/SOL/AVAX/BTC/TON), no phantom income/double-count. The `assetLedgerPoints` delta (12360→12419) is a benign correctness gain from the W16 case-preservation fix.
+
+### Optional waves — decisions
+
+- **W18 (Helius vocabulary externalization) — resolved: keep in code.** These `type`/`source` sets are Helius-API enum vocabulary matched 1:1 by the classifier's parse branches (co-located in `SolanaWalletNetFlow`/`SolanaFlowShape` after W17), not chain/registry data that drifts. Externalizing to `helius-vocabulary.json` would split one logical unit across two files and require editing both to add a type — worse maintainability. Section C.3 explicitly permits "keep". No code change.
+- **W19 (metadata resolver facade) — deferred.** Medium risk (equivalence refactor across `JupiterSplTokenMetadataResolver`/`SolanaSplTokenMetadataRegistry`/`SolanaLiveTokenMetadataResolver`/TON resolvers + `TokenMetadataResolutionService`), Low–Medium value, no functional driver, and the resolvers passed the post-renorm audit clean. Deferring avoids needless regression risk (§"No regression without cause"). Revisit when a third non-EVM family is onboarded and the facade earns its keep.
+
 ## Related
 
 - [Hardcoded registry consolidation proposal (W1–W11)](hardcoded-registry-consolidation-proposal.md)

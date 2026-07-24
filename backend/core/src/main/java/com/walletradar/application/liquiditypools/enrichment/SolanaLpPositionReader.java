@@ -6,11 +6,11 @@ import com.walletradar.application.liquiditypools.enrichment.solana.MeteoraDlmmA
 import com.walletradar.application.liquiditypools.enrichment.solana.RaydiumClmmApiClient;
 import com.walletradar.application.liquiditypools.enrichment.solana.RaydiumClmmApiClient.RaydiumPool;
 import com.walletradar.application.liquiditypools.enrichment.solana.RaydiumClmmApiClient.RaydiumToken;
-import com.walletradar.application.liquiditypools.enrichment.solana.SolanaBase58;
 import com.walletradar.application.liquiditypools.enrichment.solana.SolanaLpChainClient;
 import com.walletradar.application.liquiditypools.persistence.LpPositionSnapshot;
 import com.walletradar.application.normalization.pipeline.solana.JupiterSplTokenMetadataResolver;
-import com.walletradar.application.normalization.pipeline.solana.SolanaProgramIds;
+import com.walletradar.application.normalization.pipeline.solana.SolanaProtocolPrograms;
+import com.walletradar.platform.networks.solana.SolanaBase58;
 import com.walletradar.domain.common.NetworkId;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -204,7 +204,7 @@ public class SolanaLpPositionReader implements LpPositionReader {
             return Optional.of(closedSnapshot(context, RAYDIUM_PROTOCOL));
         }
         Optional<byte[]> ppsData = chainClient.findProgramAccountData(
-                SolanaProgramIds.RAYDIUM_CLMM, RAYDIUM_NFT_MINT_OFFSET, nftMint.get(), RAYDIUM_PPS_SLICE_LEN);
+                SolanaProtocolPrograms.RAYDIUM_CLMM_ID, RAYDIUM_NFT_MINT_OFFSET, nftMint.get(), RAYDIUM_PPS_SLICE_LEN);
         if (ppsData.isEmpty() || ppsData.get().length < RAYDIUM_PPS_SLICE_LEN) {
             // PersonalPositionState reclaimed (liquidity fully removed and position closed).
             return Optional.of(closedSnapshot(context, RAYDIUM_PROTOCOL));
