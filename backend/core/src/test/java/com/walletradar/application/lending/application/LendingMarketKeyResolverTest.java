@@ -76,6 +76,48 @@ class LendingMarketKeyResolverTest {
     }
 
     @Test
+    void receiptLessJupiterLendLoopOpenSharesDefaultMarketWithDepositsAndBorrow() {
+        // Jupiter Lend (Solana) is receipt-less (receiptBearingCollateral=false) and exposes ONE vault
+        // position per wallet. LENDING_LOOP_OPEN must NOT be routed to a separate "loop-account" market:
+        // that split the single position into two cycles and the live-collateral true-up then
+        // synthesized the full SOL collateral into each, doubling supplyUsd. All legs share the default
+        // "account-pool" market so the whole vault is one cycle.
+        NormalizedTransaction loopOpen = baseTransaction("solLoop", NormalizedTransactionType.LENDING_LOOP_OPEN);
+        loopOpen.setNetworkId(NetworkId.SOLANA);
+        loopOpen.setProtocolName("Jupiter Lend");
+        loopOpen.setReceiptBearingCollateral(false);
+        loopOpen.setFlows(List.of(
+                flow("SOL", "So11111111111111111111111111111111111111112", "-0.5"),
+                flow("USDT", "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", "210")
+        ));
+
+        NormalizedTransaction deposit = baseTransaction("solDep", NormalizedTransactionType.LENDING_DEPOSIT);
+        deposit.setNetworkId(NetworkId.SOLANA);
+        deposit.setProtocolName("Jupiter Lend");
+        deposit.setReceiptBearingCollateral(false);
+        deposit.setFlows(List.of(flow("SOL", "So11111111111111111111111111111111111111112", "-0.5")));
+
+        String loopKey = resolver.marketAssetFromTransaction(loopOpen, "Jupiter Lend");
+        String depositKey = resolver.marketAssetFromTransaction(deposit, "Jupiter Lend");
+
+        assertThat(loopKey).isEqualTo("account-pool");
+        assertThat(loopKey).isEqualTo(depositKey);
+    }
+
+    @Test
+    void receiptBearingLoopOpenKeepsSeparateLoopAccountMarket() {
+        // EVM (receipt-bearing) loops keep the dedicated loop-account market — no change there.
+        NormalizedTransaction loopOpen = baseTransaction("evmLoop", NormalizedTransactionType.LENDING_LOOP_OPEN);
+        loopOpen.setProtocolName("Fluid");
+        loopOpen.setReceiptBearingCollateral(true);
+        loopOpen.setFlows(List.of(flow("USDC", USDC, "-100")));
+
+        // Fluid requires a contract market asset; with no receipt contract / matched counterparty it
+        // falls back to the loop-account bucket rather than the receipt-less default.
+        assertThat(resolver.marketAssetFromTransaction(loopOpen, "Fluid")).isEqualTo("loop-account");
+    }
+
+    @Test
     void balancePathUsesReceiptContractForEulerSupplyToken() {
         OnChainBalance balance = new OnChainBalance();
         balance.setAssetSymbol("eUSDC-2");

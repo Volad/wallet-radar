@@ -5,6 +5,8 @@ import com.walletradar.application.linking.pipeline.clarification.BridgePairCont
 import com.walletradar.application.linking.pipeline.clarification.BybitTransferContinuityRepairService;
 import com.walletradar.application.linking.pipeline.clarification.CowSwapEthFlowSettlementLinkService;
 import com.walletradar.application.linking.pipeline.clarification.CrossNetworkBridgePairFallbackService;
+import com.walletradar.application.linking.pipeline.clarification.SameNetworkCustodyRoundTripLinkService;
+import com.walletradar.application.linking.pipeline.clarification.SourcelessBridgeInboundReclassificationService;
 import com.walletradar.application.linking.pipeline.clarification.OnChainInternalTransferPairRepairService;
 import com.walletradar.application.linking.pipeline.clarification.InternalTransferPairLinkService;
 import com.walletradar.application.linking.pipeline.clarification.LiFiBridgePairLinkService;
@@ -82,6 +84,10 @@ class LinkingBatchProcessorTest {
                 mock(MultiCounterpartyCorrectionService.class);
         CrossNetworkBridgePairFallbackService crossNetworkBridgePairFallbackService =
                 mock(CrossNetworkBridgePairFallbackService.class);
+        SameNetworkCustodyRoundTripLinkService sameNetworkCustodyRoundTripLinkService =
+                mock(SameNetworkCustodyRoundTripLinkService.class);
+        SourcelessBridgeInboundReclassificationService sourcelessBridgeInboundReclassificationService =
+                mock(SourcelessBridgeInboundReclassificationService.class);
         ProtocolAttributionClassifier protocolAttributionClassifier = mock(ProtocolAttributionClassifier.class);
         AddressPoisoningDetector addressPoisoningDetector = mock(AddressPoisoningDetector.class);
         SpoofTokenDetector spoofTokenDetector = mock(SpoofTokenDetector.class);
@@ -120,6 +126,8 @@ class LinkingBatchProcessorTest {
         when(bybitStreamAuthorityCollapser.suppressCorridorDepositStakeCycles()).thenReturn(44);
         when(protocolAttributionClassifier.classifyProtocolAttribution(25)).thenReturn(32);
         when(crossNetworkBridgePairFallbackService.reconcileOrphanInbounds(25)).thenReturn(20);
+        when(sameNetworkCustodyRoundTripLinkService.reconcileOrphanInbounds(25)).thenReturn(50);
+        when(sourcelessBridgeInboundReclassificationService.reconcile(25)).thenReturn(51);
         when(addressPoisoningDetector.detectAndExclude(25)).thenReturn(25);
         when(spoofTokenDetector.detectAndExclude(25)).thenReturn(35);
         when(scamDisperseClonePhishingTagger.tagPhishingOutbounds(25)).thenReturn(26);
@@ -166,6 +174,8 @@ class LinkingBatchProcessorTest {
                 ownWalletBridgeMistypeCorrectionService,
                 multiCounterpartyCorrectionService,
                 crossNetworkBridgePairFallbackService,
+                sameNetworkCustodyRoundTripLinkService,
+                sourcelessBridgeInboundReclassificationService,
                 turtleVaultBurnRepairService,
                 lendingLoopOpenClosePairLinkService,
                 protocolAttributionClassifier,
@@ -186,7 +196,7 @@ class LinkingBatchProcessorTest {
         AtomicInteger heartbeatCount = new AtomicInteger();
         int processed = processor.processNextBatch(25, heartbeatCount::incrementAndGet);
 
-        assertThat(processed).isEqualTo(1082);
-        assertThat(heartbeatCount).hasValue(45);
+        assertThat(processed).isEqualTo(1183);
+        assertThat(heartbeatCount).hasValue(47);
     }
 }

@@ -2,6 +2,7 @@ package com.walletradar.application.costbasis.application.replay.handler;
 
 import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
 import com.walletradar.application.costbasis.support.LpReceiptSymbolSupport;
+import com.walletradar.application.pricing.domain.CanonicalAssetCatalog;
 import com.walletradar.application.costbasis.application.LpReceiptBasisPoolService;
 import com.walletradar.application.costbasis.application.replay.model.AsyncLifecycleBucket;
 import com.walletradar.application.costbasis.application.replay.state.LpReceiptBasisPoolReplayContext;
@@ -29,8 +30,10 @@ import org.springframework.stereotype.Component;
 import java.math.BigDecimal;
 import java.math.MathContext;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 @Component
@@ -79,6 +82,14 @@ public class PositionScopedLpExitReplayHandler {
         if (!isLpExitType(transaction.getType()) || flow.getQuantityDelta().signum() >= 0) {
             return false;
         }
+        // ADR-081 (C1): the explicitly flagged LP-receipt burn leg (Meteora DAMM MLP — a fungible
+        // receipt whose symbol is confusable across pools and never matches the composite receipt
+        // identity below) is drained by drainMaterializedReceiptMarker as a basis-neutral
+        // REALLOCATE_OUT. Skip it in the main settlement loop so it is not also booked as an UNKNOWN
+        // disposal (which would leave a phantom net-nonzero MLP point / double record).
+        if (Boolean.TRUE.equals(flow.getLpReceipt())) {
+            return true;
+        }
         // Only skip the burned LP receipt leg on true exits. Mint-shaped LP_EXIT rows carry
         // negative underlying deposits that must reach the composite lp: bucket first.
         String receiptIdentity = pendingTransferKeyFactory.lpCompositeReceiptIdentity(transaction);
@@ -106,6 +117,31 @@ public class PositionScopedLpExitReplayHandler {
     }
 
     private SettlementOutcome applySettlement(NormalizedTransaction transaction, ReplayExecutionState replayState) {
+        // R6a partial-burn proportionality: a PARTIAL Balancer V3 BPT burn must release only the
+        // per-asset receipt-pool basis PROPORTIONAL to the BPT actually burned in this tx — mirroring
+        // the proportional LP-RECEIPT marker decrement (reducePartialReceiptMarker). Historically the
+        // per-asset pools drained by returned-underlying quantity, which over-drains a rebalanced
+        // stable-pool exit (returned USDT/USDC can exceed their own pool qty, sweeping the sibling
+        // pool leftover too) and empties the pool while a portion of the BPT is still staked. The
+        // later burn (after the residual BPT is unstaked and re-burned) then finds no basis left and
+        // self-assigns UNKNOWN at face, fabricating a gain. Scale the correlation's per-asset pools
+        // DOWN to the burned fraction before settlement (stashing the residual), let settlement drain
+        // the active fraction, then restore the stashed residual so the later burn draws it as
+        // REALLOCATE_IN. Full closes (burnQty == held) are unaffected (residualFraction == null).
+        BigDecimal residualFraction = partialBurnResidualFraction(transaction, replayState);
+        if (residualFraction == null) {
+            return applySettlementInner(transaction, replayState);
+        }
+        Map<LpReceiptBasisPoolKey, StashedPoolResidual> stashedResidual =
+                reserveResidualPoolBasisForPartialBurn(transaction, replayState, residualFraction);
+        try {
+            return applySettlementInner(transaction, replayState);
+        } finally {
+            restoreReservedResidualPoolBasis(replayState, stashedResidual);
+        }
+    }
+
+    private SettlementOutcome applySettlementInner(NormalizedTransaction transaction, ReplayExecutionState replayState) {
         var bucket = replayState.asyncLifecycleBucket(transaction.getCorrelationId());
         List<IndexedFlow> residualPrincipalInflows = new ArrayList<>();
         List<IndexedFlow> deferredCrossAssetInflows = new ArrayList<>();
@@ -142,13 +178,22 @@ public class PositionScopedLpExitReplayHandler {
                 continue;
             }
             if (flow.getRole() == NormalizedLegRole.LP_FEE_INCOME) {
-                // R1: fee income at LP exit — zero-cost acquisition (income stays implicit in AVCO).
+                // R1/D4: fee income at LP exit — zero-cost acquisition (income stays implicit in AVCO).
                 // Net lane: $0 cost (ZeroCostAcquisitionSupport recognises LP_FEE_CLAIM as zero-net).
-                // Tax lane: FMV at exit time (applied by the replay engine using unit price if available).
+                // Tax lane: FMV at the exit block/timestamp. D4 — the engine books the acquisition
+                // cost that is PASSED here (it does NOT re-read the flow price), so compute FMV =
+                // qty × resolved unit price explicitly; unresolved price falls back to $0 (no
+                // fabrication). This captures the ~$24 ETH + ~$24 USDC of previously-unpriced fee
+                // income exactly once — the split fee legs are the sole fee-income representation
+                // (principal return-of-capital flows through the REALLOCATE_IN legs), so no double count.
+                BigDecimal feeUnitPrice = assetSupport.replayUnitPriceUsd(transaction, flow);
+                BigDecimal feeTaxCostUsd = feeUnitPrice != null
+                        ? flow.getQuantityDelta().abs().multiply(feeUnitPrice, MC)
+                        : BigDecimal.ZERO;
                 flowSupport.applyBuyWithAcquisitionCost(
                         flow,
                         position,
-                        BigDecimal.ZERO,
+                        feeTaxCostUsd,
                         NormalizedTransactionType.LP_FEE_CLAIM
                 );
                 replayState.ledgerPointCollector().record(
@@ -263,6 +308,15 @@ public class PositionScopedLpExitReplayHandler {
             residualPrincipalInflows.add(indexedFlow);
         }
 
+        // D1 (R2 Option-B2): on a closing dual-token / rebalancing exit, carry any un-drained
+        // sibling-pool basis onto the residual principal (return-of-capital) instead of booking it
+        // as a market-priced ACQUIRE (income). Must run after the whole flow loop so every asset has
+        // already drained its own pool.
+        if (touchedLpReceiptPrincipal && !residualPrincipalInflows.isEmpty()) {
+            residualPrincipalInflows = carryResidualPrincipalFromRemainingPools(
+                    transaction, replayState, residualPrincipalInflows);
+        }
+
         if (residualPrincipalInflows.isEmpty() && deferredCrossAssetInflows.isEmpty()) {
             if (bucket.isEmpty()) {
                 replayState.removeAsyncLifecycleBucket(transaction.getCorrelationId());
@@ -359,6 +413,15 @@ public class PositionScopedLpExitReplayHandler {
         if (transaction == null || transaction.getCorrelationId() == null) {
             return false;
         }
+        // RC-S-LP-CLOSE: a terminal exit (position NFT/PDA closed on-chain) drains every residual
+        // per-asset basis pool for the position. Solana concentrated-liquidity positions are
+        // NFT-based with no fungible LP-RECEIPT burn leg, so hasPrincipalCloseEvidence() cannot see
+        // the close; the normalizer instead promotes the terminal remove to LP_EXIT_FINAL. Draining
+        // here zeroes any per-asset residual left by a changed asset ratio (impermanent loss /
+        // rebalancing) and writes it off as realized LP PnL — no phantom "still held" quantities.
+        if (transaction.getType() == NormalizedTransactionType.LP_EXIT_FINAL) {
+            return true;
+        }
         if (hasPrincipalCloseEvidence(transaction)) {
             return true;
         }
@@ -403,6 +466,68 @@ public class PositionScopedLpExitReplayHandler {
         // has assetContract = "SYMBOL:LP-RECEIPT:..." and differs from the lpReceiptPositionKey
         // (assetContract=null). We resolve the active receipt position by checking both key forms
         // so that Balancer V3 BPT pools and NFT-style pools (Uniswap V3, Aerodrome) are both covered.
+        ResolvedReceiptMarker resolved = resolveActiveReceiptMarker(transaction, replayState);
+        if (resolved == null) {
+            return;
+        }
+        IndexedFlow markerFlow = resolved.markerFlow();
+        PositionState receiptPosition = resolved.position();
+        if (receiptPosition.quantity().signum() <= 0) {
+            drainAllLpReceiptPoolsForCorrelation(transaction, replayState);
+            return;
+        }
+
+        // R6a: PARTIAL burn of a fungible Balancer V3 BPT receipt. When the burned quantity is
+        // strictly less than the held receipt quantity, the position is NOT closed — the remainder
+        // stays live (e.g. re-staked into Aura, then burned in a later tx). Reduce the receipt marker
+        // proportionally and DO NOT drain the per-asset pools: applySettlement already scaled the
+        // pools to the burned fraction and restored the still-held residual, so the pools now hold
+        // exactly the un-burned portion's basis, which must survive for the next burn. Only fungible
+        // BPT receipts (real token quantities) qualify; NFT-style receipts are qty=1 and always fall
+        // through to the full close below (unchanged behaviour).
+        if (markerFlow != null
+                && isBalancerV3ReceiptSymbol(markerFlow.flow().getAssetSymbol())
+                && isPartialBurn(markerFlow.flow().getQuantityDelta().abs(), receiptPosition.quantity())) {
+            reducePartialReceiptMarker(transaction, markerFlow, receiptPosition, replayState);
+            return;
+        }
+
+        PositionSnapshot before = flowSupport.snapshot(receiptPosition);
+        receiptPosition.setQuantity(BigDecimal.ZERO);
+        receiptPosition.setTotalCostBasisUsd(BigDecimal.ZERO);
+        receiptPosition.setNetTotalCostBasisUsd(BigDecimal.ZERO);
+        receiptPosition.setUncoveredQuantity(BigDecimal.ZERO);
+        receiptPosition.setPerWalletAvco(null);
+        receiptPosition.setPerWalletNetAvco(null);
+        if (markerFlow != null) {
+            replayState.ledgerPointCollector().record(
+                    transaction,
+                    markerFlow.flow(),
+                    markerFlow.index(),
+                    receiptPosition.assetKey(),
+                    before,
+                    receiptPosition,
+                    AssetLedgerPoint.BasisEffect.REALLOCATE_OUT
+            );
+        }
+        drainAllLpReceiptPoolsForCorrelation(transaction, replayState);
+    }
+
+    /** Resolved active LP-RECEIPT marker position for an exit (shared by drain + partial-burn scaling). */
+    private record ResolvedReceiptMarker(AssetKey key, PositionState position, IndexedFlow markerFlow) {
+    }
+
+    /**
+     * Locates the outbound LP-RECEIPT burn/marker flow and the position that currently holds the
+     * receipt quantity. Balancer V3 BPT pools store the position under an assetKey derived from the
+     * explicit burn flow (assetContract = "SYMBOL:LP-RECEIPT:..."), while NFT-style pools (Uniswap V3,
+     * Aerodrome) key it off the correlationId. Both key forms are probed; the fallback returns the
+     * correlationId-derived position even when its quantity is ≤ 0 so downstream pool drains still run.
+     */
+    private ResolvedReceiptMarker resolveActiveReceiptMarker(
+            NormalizedTransaction transaction,
+            ReplayExecutionState replayState
+    ) {
         IndexedFlow markerFlow = null;
         for (IndexedFlow indexedFlow : flowSupport.indexedFlows(transaction)) {
             NormalizedTransaction.Flow f = indexedFlow.flow();
@@ -412,7 +537,8 @@ public class PositionScopedLpExitReplayHandler {
                     || f.getQuantityDelta().signum() >= 0) {
                 continue;
             }
-            if (AccountingAssetFamilySupport.isLpReceiptSymbol(f.getAssetSymbol())) {
+            if (AccountingAssetFamilySupport.isLpReceiptSymbol(f.getAssetSymbol())
+                    || Boolean.TRUE.equals(f.getLpReceipt())) {
                 markerFlow = indexedFlow;
                 break;
             }
@@ -445,43 +571,233 @@ public class PositionScopedLpExitReplayHandler {
             receiptKey = corrKey != null ? corrKey : flowKey;
             receiptPosition = receiptKey != null ? replayState.position(receiptKey) : null;
         }
-
         if (receiptKey == null || receiptPosition == null) {
+            return null;
+        }
+        return new ResolvedReceiptMarker(receiptKey, receiptPosition, markerFlow);
+    }
+
+    /**
+     * R6a: residual (still-held) fraction {@code 1 − burnFraction} when this exit is a PARTIAL burn of
+     * a fungible Balancer V3 BPT receipt (burned qty strictly less than the held receipt qty), else
+     * {@code null}. Used to scale the per-asset receipt pools down to the burned fraction so a partial
+     * burn returns only its proportional basis and leaves the still-staked portion for a later burn.
+     */
+    private BigDecimal partialBurnResidualFraction(
+            NormalizedTransaction transaction,
+            ReplayExecutionState replayState
+    ) {
+        if (transaction == null || transaction.getCorrelationId() == null) {
+            return null;
+        }
+        ResolvedReceiptMarker resolved = resolveActiveReceiptMarker(transaction, replayState);
+        if (resolved == null || resolved.markerFlow() == null || resolved.position() == null) {
+            return null;
+        }
+        NormalizedTransaction.Flow markerFlow = resolved.markerFlow().flow();
+        if (!isBalancerV3ReceiptSymbol(markerFlow.getAssetSymbol())) {
+            return null;
+        }
+        BigDecimal heldQty = resolved.position().quantity();
+        if (heldQty == null || heldQty.signum() <= 0) {
+            return null;
+        }
+        BigDecimal burnQty = markerFlow.getQuantityDelta().abs();
+        if (!isPartialBurn(burnQty, heldQty)) {
+            return null;
+        }
+        BigDecimal residualFraction = BigDecimal.ONE.subtract(burnQty.divide(heldQty, MC), MC);
+        return residualFraction.signum() > 0 ? residualFraction : null;
+    }
+
+    /** Immutable residual carved out of a receipt pool for the duration of a partial-burn settlement. */
+    private record StashedPoolResidual(
+            BigDecimal qty,
+            BigDecimal basis,
+            BigDecimal netBasis,
+            BigDecimal uncovered
+    ) {
+    }
+
+    /**
+     * R6a: scales every per-asset receipt pool of the exit's correlation DOWN to the burned fraction
+     * ({@code 1 − residualFraction}), returning the carved-out residual so it can be restored after
+     * settlement. Because settlement drains the (scaled) active portion, the correlation's total
+     * REALLOCATE_IN basis for a partial burn equals {@code burnFraction × combinedBasis}, matching the
+     * proportional LP-RECEIPT marker decrement. All lanes (qty, tax, net, uncovered) scale by the same
+     * fraction, so AVCO and the net ≤ tax invariant are preserved.
+     */
+    private Map<LpReceiptBasisPoolKey, StashedPoolResidual> reserveResidualPoolBasisForPartialBurn(
+            NormalizedTransaction transaction,
+            ReplayExecutionState replayState,
+            BigDecimal residualFraction
+    ) {
+        Map<LpReceiptBasisPoolKey, StashedPoolResidual> stashed = new LinkedHashMap<>();
+        LpReceiptBasisPoolReplayContext poolContext = replayState.lpReceiptBasisPoolContext();
+        String corrId = transaction == null ? null : transaction.getCorrelationId();
+        if (poolContext == null || corrId == null
+                || residualFraction == null || residualFraction.signum() <= 0) {
+            return stashed;
+        }
+        for (var entry : poolContext.pools().entrySet()) {
+            LpReceiptBasisPoolKey key = entry.getKey();
+            if (!corrId.equals(key.lpCorrelationId())) {
+                continue;
+            }
+            LpReceiptBasisPool pool = entry.getValue();
+            if (pool == null) {
+                continue;
+            }
+            BigDecimal qty = nullToZero(pool.getQtyHeld());
+            BigDecimal basis = nullToZero(pool.getBasisHeldUsd());
+            BigDecimal net = pool.getNetBasisHeldUsd() != null ? pool.getNetBasisHeldUsd() : basis;
+            BigDecimal uncovered = nullToZero(pool.getUncoveredQtyHeld());
+            if (qty.signum() <= 0 && basis.signum() <= 0 && net.signum() <= 0) {
+                continue;
+            }
+            BigDecimal resQty = qty.multiply(residualFraction, MC);
+            BigDecimal resBasis = basis.multiply(residualFraction, MC);
+            BigDecimal resNet = net.multiply(residualFraction, MC);
+            BigDecimal resUncovered = uncovered.multiply(residualFraction, MC);
+            pool.setQtyHeld(qty.subtract(resQty, MC));
+            pool.setBasisHeldUsd(basis.subtract(resBasis, MC));
+            pool.setNetBasisHeldUsd(net.subtract(resNet, MC));
+            pool.setUncoveredQtyHeld(uncovered.subtract(resUncovered, MC));
+            recomputeReceiptPoolAvco(pool);
+            poolContext.dirtyKeys().add(key);
+            stashed.put(key, new StashedPoolResidual(resQty, resBasis, resNet, resUncovered));
+        }
+        return stashed;
+    }
+
+    /**
+     * R6a: adds the carved-out residual back onto each receipt pool after a partial-burn settlement has
+     * drained the active fraction. The pools then hold exactly the still-held (e.g. re-staked) portion's
+     * basis, which a later burn draws as REALLOCATE_IN instead of self-assigning UNKNOWN at face.
+     */
+    private void restoreReservedResidualPoolBasis(
+            ReplayExecutionState replayState,
+            Map<LpReceiptBasisPoolKey, StashedPoolResidual> stashed
+    ) {
+        if (stashed == null || stashed.isEmpty()) {
             return;
         }
-        if (receiptPosition.quantity().signum() <= 0) {
-            drainAllLpReceiptPoolsForCorrelation(transaction.getCorrelationId(), replayState);
+        LpReceiptBasisPoolReplayContext poolContext = replayState.lpReceiptBasisPoolContext();
+        if (poolContext == null) {
             return;
+        }
+        for (var e : stashed.entrySet()) {
+            LpReceiptBasisPool pool = poolContext.pools().get(e.getKey());
+            if (pool == null) {
+                continue;
+            }
+            StashedPoolResidual r = e.getValue();
+            BigDecimal net = pool.getNetBasisHeldUsd() != null
+                    ? pool.getNetBasisHeldUsd()
+                    : nullToZero(pool.getBasisHeldUsd());
+            pool.setQtyHeld(nullToZero(pool.getQtyHeld()).add(r.qty(), MC));
+            pool.setBasisHeldUsd(nullToZero(pool.getBasisHeldUsd()).add(r.basis(), MC));
+            pool.setNetBasisHeldUsd(net.add(r.netBasis(), MC));
+            pool.setUncoveredQtyHeld(nullToZero(pool.getUncoveredQtyHeld()).add(r.uncovered(), MC));
+            recomputeReceiptPoolAvco(pool);
+            poolContext.dirtyKeys().add(e.getKey());
+        }
+    }
+
+    private void recomputeReceiptPoolAvco(LpReceiptBasisPool pool) {
+        BigDecimal qty = nullToZero(pool.getQtyHeld());
+        BigDecimal basis = nullToZero(pool.getBasisHeldUsd());
+        pool.setAvcoUsd(qty.signum() > 0 && basis.signum() > 0 ? basis.divide(qty, MC) : null);
+    }
+
+    private static BigDecimal nullToZero(BigDecimal value) {
+        return value == null ? BigDecimal.ZERO : value;
+    }
+
+    /** R6a: {@code true} when {@code symbol} is a Balancer V3 fungible BPT LP-RECEIPT symbol. */
+    private boolean isBalancerV3ReceiptSymbol(String symbol) {
+        return symbol != null
+                && AccountingAssetFamilySupport.isLpReceiptSymbol(symbol)
+                && symbol.toUpperCase(java.util.Locale.ROOT).contains(":BALANCERV3:");
+    }
+
+    /**
+     * R6a: {@code true} when {@code burnQty} is strictly (beyond a tiny relative rounding tolerance)
+     * less than {@code positionQty} — i.e. the receipt burn does not close the whole position.
+     */
+    private boolean isPartialBurn(BigDecimal burnQty, BigDecimal positionQty) {
+        if (burnQty == null || positionQty == null || positionQty.signum() <= 0) {
+            return false;
+        }
+        BigDecimal remainder = positionQty.subtract(burnQty, MC);
+        // Tolerance guards against rounding drift accumulated through CARRY_IN/OUT: a burn within
+        // 1e-9 (relative) of the held quantity is treated as a full close, not a partial.
+        BigDecimal tolerance = positionQty.multiply(new BigDecimal("1E-9"), MC);
+        return remainder.compareTo(tolerance) > 0;
+    }
+
+    /**
+     * R6a: reduces a fungible Balancer V3 receipt marker position by the burned quantity on a
+     * partial exit (proportional basis reduction, AVCO unchanged), records the burn as a
+     * basis-neutral {@code REALLOCATE_OUT}, and leaves the per-asset pools untouched so the residual
+     * basis survives for the next burn.
+     */
+    private void reducePartialReceiptMarker(
+            NormalizedTransaction transaction,
+            IndexedFlow markerFlow,
+            PositionState receiptPosition,
+            ReplayExecutionState replayState
+    ) {
+        BigDecimal positionQty = receiptPosition.quantity();
+        BigDecimal burnQty = markerFlow.flow().getQuantityDelta().abs();
+        BigDecimal remainingFraction = BigDecimal.ONE.subtract(burnQty.divide(positionQty, MC), MC);
+        if (remainingFraction.signum() < 0) {
+            remainingFraction = BigDecimal.ZERO;
         }
         PositionSnapshot before = flowSupport.snapshot(receiptPosition);
-        receiptPosition.setQuantity(BigDecimal.ZERO);
-        receiptPosition.setTotalCostBasisUsd(BigDecimal.ZERO);
-        receiptPosition.setNetTotalCostBasisUsd(BigDecimal.ZERO);
-        receiptPosition.setUncoveredQuantity(BigDecimal.ZERO);
-        receiptPosition.setPerWalletAvco(null);
-        receiptPosition.setPerWalletNetAvco(null);
-        if (markerFlow != null) {
-            replayState.ledgerPointCollector().record(
-                    transaction,
-                    markerFlow.flow(),
-                    markerFlow.index(),
-                    receiptPosition.assetKey(),
-                    before,
-                    receiptPosition,
-                    AssetLedgerPoint.BasisEffect.REALLOCATE_OUT
-            );
-        }
-        drainAllLpReceiptPoolsForCorrelation(transaction.getCorrelationId(), replayState);
+        BigDecimal tax = receiptPosition.totalCostBasisUsd() == null
+                ? BigDecimal.ZERO
+                : receiptPosition.totalCostBasisUsd();
+        BigDecimal net = receiptPosition.netTotalCostBasisUsd() == null
+                ? BigDecimal.ZERO
+                : receiptPosition.netTotalCostBasisUsd();
+        BigDecimal uncovered = receiptPosition.uncoveredQuantity() == null
+                ? BigDecimal.ZERO
+                : receiptPosition.uncoveredQuantity();
+        receiptPosition.setQuantity(positionQty.subtract(burnQty, MC));
+        receiptPosition.setTotalCostBasisUsd(tax.multiply(remainingFraction, MC));
+        receiptPosition.setNetTotalCostBasisUsd(net.multiply(remainingFraction, MC));
+        receiptPosition.setUncoveredQuantity(uncovered.multiply(remainingFraction, MC));
+        // Per-unit AVCO is unchanged by a proportional reduction; leave perWalletAvco as-is.
+        replayState.ledgerPointCollector().record(
+                transaction,
+                markerFlow.flow(),
+                markerFlow.index(),
+                receiptPosition.assetKey(),
+                before,
+                receiptPosition,
+                AssetLedgerPoint.BasisEffect.REALLOCATE_OUT
+        );
     }
 
     private void drainAllLpReceiptPoolsForCorrelation(
-            String correlationId,
+            NormalizedTransaction transaction,
             ReplayExecutionState replayState
     ) {
+        String correlationId = transaction == null ? null : transaction.getCorrelationId();
         LpReceiptBasisPoolReplayContext poolContext = replayState.lpReceiptBasisPoolContext();
         if (poolContext == null || correlationId == null) {
             return;
         }
+        // D2 (R3 net-lane carry): sum any basis still held across the correlation's pools BEFORE
+        // zeroing. On a full exit this residual would otherwise be silently destroyed (the audit
+        // measured ≈ −$1,856 net destroyed). Carry it (tax + net, net ≤ tax) onto the exit asset so
+        // the net lane is conserved, THEN zero — ordering matters. D1 already zeroes the pools when
+        // it re-allocates a rebalancing residual, so this path only fires for leftover that the
+        // per-flow settlement did not carry (e.g. peg-cap surplus not fully absorbed).
+        BigDecimal leftoverTax = BigDecimal.ZERO;
+        BigDecimal leftoverNet = BigDecimal.ZERO;
+        List<LpReceiptBasisPoolKey> correlationKeys = new ArrayList<>();
         for (var entry : poolContext.pools().entrySet()) {
             if (!correlationId.equals(entry.getKey().lpCorrelationId())) {
                 continue;
@@ -490,20 +806,100 @@ public class PositionScopedLpExitReplayHandler {
             if (pool == null) {
                 continue;
             }
-            BigDecimal danglingNet = pool.getNetBasisHeldUsd();
-            if (danglingNet != null && danglingNet.signum() != 0) {
-                // R3: dangling net basis (reward-discounted lane) was not carried during per-flow
-                // restore — zero it out here so pools are fully clean after close.
-                // Root cause: peg-cap on stable lane stranded net basis; R2 injects tax excess to
-                // volatile sibling but this catch-all ensures any residual is not silently orphaned.
-                log.debug("R3 drain: zeroing dangling netBasisHeldUsd={} on pool key={}", danglingNet, entry.getKey());
+            correlationKeys.add(entry.getKey());
+            BigDecimal tax = pool.getBasisHeldUsd() == null ? BigDecimal.ZERO : pool.getBasisHeldUsd();
+            BigDecimal net = pool.getNetBasisHeldUsd() == null ? tax : pool.getNetBasisHeldUsd();
+            leftoverTax = leftoverTax.add(tax, MC);
+            leftoverNet = leftoverNet.add(net, MC);
+        }
+        if (leftoverTax.signum() > 0 || leftoverNet.signum() > 0) {
+            carryLeftoverPoolBasisOntoExitAsset(transaction, replayState, leftoverTax, leftoverNet);
+        }
+        for (LpReceiptBasisPoolKey key : correlationKeys) {
+            LpReceiptBasisPool pool = poolContext.pools().get(key);
+            if (pool == null) {
+                continue;
             }
             pool.setQtyHeld(BigDecimal.ZERO);
             pool.setBasisHeldUsd(BigDecimal.ZERO);
             pool.setNetBasisHeldUsd(BigDecimal.ZERO);
             pool.setUncoveredQtyHeld(BigDecimal.ZERO);
-            poolContext.dirtyKeys().add(entry.getKey());
+            poolContext.dirtyKeys().add(key);
         }
+    }
+
+    /**
+     * D2 (R3 net-lane carry): attaches leftover pool basis (tax + net) to the exit asset as a
+     * {@code REALLOCATE_IN} basis adjustment (no new quantity) so the net lane is conserved rather
+     * than destroyed at pool drain. The carry target is a returned principal leg in the exit
+     * transaction — a volatile leg is preferred (it can absorb above-face basis without breaking the
+     * stablecoin peg), falling back to the largest returned principal. When the exit returns no
+     * principal to carry onto (fee-only / receipt-only), the leftover cannot be conserved and is
+     * dropped with a warning (never fabricated onto an unrelated asset).
+     */
+    private void carryLeftoverPoolBasisOntoExitAsset(
+            NormalizedTransaction transaction,
+            ReplayExecutionState replayState,
+            BigDecimal leftoverTax,
+            BigDecimal leftoverNet
+    ) {
+        IndexedFlow target = selectLeftoverCarryTarget(transaction);
+        if (target == null) {
+            log.warn("D2 net-carry: no returned principal to carry leftover LP pool basis onto; "
+                    + "corrId={} tax={} net={}", transaction.getCorrelationId(), leftoverTax, leftoverNet);
+            return;
+        }
+        BigDecimal net = leftoverNet.min(leftoverTax).max(BigDecimal.ZERO);
+        NormalizedTransaction.Flow flow = target.flow();
+        AssetKey assetKey = assetSupport.assetKey(transaction, flow);
+        PositionState position = replayState.position(assetKey);
+        PositionSnapshot before = flowSupport.snapshot(position);
+        // Basis-only adjustment: add carried basis without minting quantity.
+        position.setTotalCostBasisUsd(position.totalCostBasisUsd().add(leftoverTax, MC));
+        position.setNetTotalCostBasisUsd(position.netTotalCostBasisUsd().add(net, MC));
+        flowSupport.recomputePerWalletAvco(position);
+        replayState.ledgerPointCollector().record(
+                transaction,
+                flow,
+                target.index(),
+                position.assetKey(),
+                before,
+                position,
+                AssetLedgerPoint.BasisEffect.REALLOCATE_IN
+        );
+    }
+
+    /**
+     * D2: picks the returned principal leg to receive leftover pool basis — the largest returned
+     * volatile (non-stablecoin) principal, else the largest returned stablecoin principal.
+     */
+    private IndexedFlow selectLeftoverCarryTarget(NormalizedTransaction transaction) {
+        IndexedFlow volatileTarget = null;
+        BigDecimal volatileWeight = BigDecimal.ZERO;
+        IndexedFlow stableTarget = null;
+        BigDecimal stableWeight = BigDecimal.ZERO;
+        for (IndexedFlow indexedFlow : flowSupport.indexedFlows(transaction)) {
+            NormalizedTransaction.Flow flow = indexedFlow.flow();
+            if (flow == null
+                    || flow.getRole() != NormalizedLegRole.TRANSFER
+                    || flow.getQuantityDelta() == null
+                    || flow.getQuantityDelta().signum() <= 0
+                    || Boolean.TRUE.equals(flow.getLpReceipt())
+                    || AccountingAssetFamilySupport.isLpReceiptSymbol(flow.getAssetSymbol())) {
+                continue;
+            }
+            BigDecimal weight = residualWeight(transaction, indexedFlow);
+            if (CanonicalAssetCatalog.isUsdStablecoinBySymbol(flow.getAssetSymbol())) {
+                if (stableTarget == null || weight.compareTo(stableWeight) > 0) {
+                    stableTarget = indexedFlow;
+                    stableWeight = weight;
+                }
+            } else if (volatileTarget == null || weight.compareTo(volatileWeight) > 0) {
+                volatileTarget = indexedFlow;
+                volatileWeight = weight;
+            }
+        }
+        return volatileTarget != null ? volatileTarget : stableTarget;
     }
 
     private boolean shouldIsolateNonPrincipalInflows(
@@ -726,7 +1122,18 @@ public class PositionScopedLpExitReplayHandler {
         // be capped, or the cross-asset basis would be destroyed and a gain fabricated.
         BigDecimal effectiveBasis = totalBasis;
         BigDecimal effectiveNetBasis = totalNetBasis;
-        if (!crossAssetBasisCarried) {
+        if (!crossAssetBasisCarried && isAllStableMultiTokenBalancerExit(transaction)) {
+            // R2 / R6a all-stablecoin per-lane cap: on an all-stable Balancer exit there is NO
+            // volatile absorber, so peg-capping every leg at $1 would strand the above-$1 compounded
+            // basis (destroying ~$5.85 on the R6a boosted stable pool). Because each stablecoin
+            // withdraws its OWN per-asset pool, Σ carried == Σ poolBasis == combinedBasis exactly
+            // when the real pool basis is carried. The returned-qty excess (compounded yield beyond
+            // the pool qty) surfaces as a residual and is booked zero-net downstream, so no basis is
+            // fabricated. Only the net ≤ tax invariant is enforced (below). This intentionally skips
+            // pegCappedStablecoinCarryBasis for this narrow, correlation-gated case.
+            effectiveBasis = totalBasis;
+            effectiveNetBasis = totalNetBasis;
+        } else if (!crossAssetBasisCarried) {
             BigDecimal coveredForCap = totalQty.subtract(totalUncovered, MC);
             effectiveBasis = flowSupport.pegCappedStablecoinCarryBasis(
                     position.assetKey(), coveredForCap, totalBasis);
@@ -753,9 +1160,12 @@ public class PositionScopedLpExitReplayHandler {
         BigDecimal avco = effectiveBasis.signum() > 0 && totalQty.signum() > 0
                 ? effectiveBasis.divide(totalQty, MC)
                 : null;
-        // BB-LP-CMETH-1: 6-arg restore — net lane uses pool's stored netBasisHeldUsd,
-        // not market basis, so sub-market net cost from Bug-B is faithfully carried through LP.
-        flowSupport.restoreToPosition(totalQty, position, effectiveBasis, effectiveNetBasis, totalUncovered, avco);
+        // BB-LP-CMETH-1: net lane uses pool's stored netBasisHeldUsd, not market basis, so
+        // sub-market net cost from Bug-B is faithfully carried through LP.
+        // D3: use the LP-pool restore that does NOT floor the net lane up to peg — flooring the
+        // reward-discounted pooled net up to qty×$1 fabricates net basis above the pool net and
+        // breaks the net ≤ tax invariant (450450 / 2984825 / 72791605).
+        flowSupport.restoreLpReceiptPoolBasis(totalQty, position, effectiveBasis, effectiveNetBasis, totalUncovered, avco);
         replayState.ledgerPointCollector().record(
                 transaction,
                 flow,
@@ -825,10 +1235,224 @@ public class PositionScopedLpExitReplayHandler {
         }
     }
 
+    /**
+     * D1 (R2 Option-B2): dual-token in-range / rebalancing exits return MORE of one asset than its
+     * own LP-receipt pool held (a residual with no same-asset basis) while a sibling pool retains
+     * un-drained basis (the other asset returned LESS than held). The old path booked that residual
+     * as a market-priced {@code ACQUIRE} (income) and let {@code drainAll} destroy the sibling
+     * leftover. Under Option B the combined LP basis is conserved: the residual absorbs the sibling
+     * leftover as {@code REALLOCATE_IN} return-of-capital. Returned stablecoin residuals stay
+     * peg-capped ($1) when a volatile absorber is present; the volatile leg(s) absorb the remainder.
+     *
+     * <p>Protocol-agnostic — keyed only on the residual + remaining pool basis (never a tx hash /
+     * wallet), so it applies uniformly to Uniswap V3, Velodrome/Aerodrome Slipstream and
+     * PancakeSwap V3. Gated on principal-close evidence, so a partial proportional exit (no residual,
+     * pools still open) is untouched. Reconciled with R6a: an all-stable Balancer exit returns each
+     * stable at/under its pool held (no residual), so it never enters this path.</p>
+     *
+     * @return the residual inflows NOT consumed here (unchanged when there is nothing to carry).
+     */
+    private List<IndexedFlow> carryResidualPrincipalFromRemainingPools(
+            NormalizedTransaction transaction,
+            ReplayExecutionState replayState,
+            List<IndexedFlow> residualPrincipalInflows
+    ) {
+        LpReceiptBasisPoolReplayContext poolContext = replayState.lpReceiptBasisPoolContext();
+        String corrId = transaction.getCorrelationId();
+        if (poolContext == null || corrId == null || residualPrincipalInflows.isEmpty()) {
+            return residualPrincipalInflows;
+        }
+        // Only a full/closing exit re-allocates the whole remaining combined basis. A partial exit
+        // with no close evidence keeps un-exited basis in the pool for the next exit.
+        if (!hasPrincipalCloseEvidence(transaction)
+                && transaction.getType() != NormalizedTransactionType.LP_EXIT_FINAL
+                && !replayState.lpReceiptLifecycleClosed(corrId)) {
+            return residualPrincipalInflows;
+        }
+
+        BigDecimal remainingTax = BigDecimal.ZERO;
+        BigDecimal remainingNet = BigDecimal.ZERO;
+        List<LpReceiptBasisPoolKey> poolKeys = new ArrayList<>();
+        for (var entry : poolContext.pools().entrySet()) {
+            if (!corrId.equals(entry.getKey().lpCorrelationId())) {
+                continue;
+            }
+            LpReceiptBasisPool pool = entry.getValue();
+            if (pool == null) {
+                continue;
+            }
+            BigDecimal tax = pool.getBasisHeldUsd() == null ? BigDecimal.ZERO : pool.getBasisHeldUsd();
+            BigDecimal net = pool.getNetBasisHeldUsd() == null ? tax : pool.getNetBasisHeldUsd();
+            remainingTax = remainingTax.add(tax, MC);
+            remainingNet = remainingNet.add(net, MC);
+            poolKeys.add(entry.getKey());
+        }
+        if (remainingTax.signum() <= 0) {
+            return residualPrincipalInflows; // nothing un-drained to carry
+        }
+        // net can never exceed tax at the combined level.
+        if (remainingNet.compareTo(remainingTax) > 0) {
+            remainingNet = remainingTax;
+        }
+
+        List<IndexedFlow> stableResiduals = new ArrayList<>();
+        List<IndexedFlow> volatileResiduals = new ArrayList<>();
+        for (IndexedFlow indexedFlow : residualPrincipalInflows) {
+            if (CanonicalAssetCatalog.isUsdStablecoinBySymbol(indexedFlow.flow().getAssetSymbol())) {
+                stableResiduals.add(indexedFlow);
+            } else {
+                volatileResiduals.add(indexedFlow);
+            }
+        }
+        boolean hasVolatileAbsorber = !volatileResiduals.isEmpty();
+
+        // Phase 1: stablecoin residuals are peg-capped at the $1 face value when a volatile leg is
+        // present to absorb the remainder. Without a volatile absorber they fall into the absorber
+        // group below so the combined basis is conserved (Option B — IL realizes via AVCO on sale).
+        if (hasVolatileAbsorber) {
+            for (IndexedFlow indexedFlow : stableResiduals) {
+                BigDecimal qty = indexedFlow.flow().getQuantityDelta().abs();
+                BigDecimal taxAlloc = qty.min(remainingTax);
+                BigDecimal netAlloc = qty.min(remainingNet).min(taxAlloc);
+                bookResidualReallocateIn(transaction, replayState, indexedFlow, taxAlloc, netAlloc);
+                remainingTax = remainingTax.subtract(taxAlloc, MC).max(BigDecimal.ZERO);
+                remainingNet = remainingNet.subtract(netAlloc, MC).max(BigDecimal.ZERO);
+            }
+        }
+
+        // Phase 2: absorbers take the remainder split proportionally by returned value; the last
+        // absorber takes the exact remainder so Σ carried == combined basis (no rounding leak).
+        List<IndexedFlow> absorbers = hasVolatileAbsorber ? volatileResiduals : stableResiduals;
+        if (!absorbers.isEmpty()) {
+            BigDecimal totalWeight = BigDecimal.ZERO;
+            for (IndexedFlow indexedFlow : absorbers) {
+                totalWeight = totalWeight.add(residualWeight(transaction, indexedFlow), MC);
+            }
+            BigDecimal distributedTax = BigDecimal.ZERO;
+            BigDecimal distributedNet = BigDecimal.ZERO;
+            for (int i = 0; i < absorbers.size(); i++) {
+                IndexedFlow indexedFlow = absorbers.get(i);
+                BigDecimal taxAlloc;
+                BigDecimal netAlloc;
+                if (i == absorbers.size() - 1) {
+                    taxAlloc = remainingTax.subtract(distributedTax, MC).max(BigDecimal.ZERO);
+                    netAlloc = remainingNet.subtract(distributedNet, MC).max(BigDecimal.ZERO);
+                } else {
+                    BigDecimal share = totalWeight.signum() > 0
+                            ? residualWeight(transaction, indexedFlow).divide(totalWeight, MC)
+                            : BigDecimal.ZERO;
+                    taxAlloc = remainingTax.multiply(share, MC);
+                    netAlloc = remainingNet.multiply(share, MC);
+                }
+                netAlloc = netAlloc.min(taxAlloc);
+                bookResidualReallocateIn(transaction, replayState, indexedFlow, taxAlloc, netAlloc);
+                distributedTax = distributedTax.add(taxAlloc, MC);
+                distributedNet = distributedNet.add(netAlloc, MC);
+            }
+        }
+
+        // Combined basis fully re-allocated on close — zero the correlation pools (both lanes).
+        for (LpReceiptBasisPoolKey key : poolKeys) {
+            LpReceiptBasisPool pool = poolContext.pools().get(key);
+            if (pool == null) {
+                continue;
+            }
+            pool.setQtyHeld(BigDecimal.ZERO);
+            pool.setBasisHeldUsd(BigDecimal.ZERO);
+            pool.setNetBasisHeldUsd(BigDecimal.ZERO);
+            pool.setUncoveredQtyHeld(BigDecimal.ZERO);
+            poolContext.dirtyKeys().add(key);
+        }
+        return List.of();
+    }
+
+    /**
+     * D1: books a rebalancing-residual principal leg as {@code REALLOCATE_IN} carrying the supplied
+     * (authoritative) tax/net allocation — never a market-priced ACQUIRE. Skips the tax-lane peg
+     * floor because the allocation is already peg-cap-aware.
+     */
+    private void bookResidualReallocateIn(
+            NormalizedTransaction transaction,
+            ReplayExecutionState replayState,
+            IndexedFlow indexedFlow,
+            BigDecimal taxAlloc,
+            BigDecimal netAlloc
+    ) {
+        NormalizedTransaction.Flow flow = indexedFlow.flow();
+        AssetKey assetKey = assetSupport.assetKey(transaction, flow);
+        PositionState position = replayState.position(assetKey);
+        PositionSnapshot before = flowSupport.snapshot(position);
+        BigDecimal qty = flow.getQuantityDelta().abs();
+        BigDecimal avco = taxAlloc.signum() > 0 && qty.signum() > 0
+                ? taxAlloc.divide(qty, MC)
+                : null;
+        flowSupport.restoreLpReceiptPoolBasis(qty, position, taxAlloc, netAlloc, BigDecimal.ZERO, avco, false);
+        replayState.ledgerPointCollector().record(
+                transaction,
+                flow,
+                indexedFlow.index(),
+                position.assetKey(),
+                before,
+                position,
+                AssetLedgerPoint.BasisEffect.REALLOCATE_IN
+        );
+    }
+
+    /** D1: allocation weight for an absorbing residual — returned USD value when priced, else qty. */
+    private BigDecimal residualWeight(NormalizedTransaction transaction, IndexedFlow indexedFlow) {
+        NormalizedTransaction.Flow flow = indexedFlow.flow();
+        BigDecimal qty = flow.getQuantityDelta().abs();
+        BigDecimal price = assetSupport.replayUnitPriceUsd(transaction, flow);
+        return price != null ? qty.multiply(price, MC) : qty;
+    }
+
     private boolean isLpExitType(NormalizedTransactionType type) {
         return type == NormalizedTransactionType.LP_EXIT
                 || type == NormalizedTransactionType.LP_EXIT_PARTIAL
                 || type == NormalizedTransactionType.LP_EXIT_FINAL;
+    }
+
+    /**
+     * R2 / R6a: {@code true} when this exit is an all-stablecoin, multi-token Balancer V3 exit — i.e.
+     * a Balancer-correlated exit whose directly-returned principal legs (inbound TRANSFER, non
+     * LP-RECEIPT) are ALL USD stablecoins and there are at least two distinct principal legs.
+     *
+     * <p>These exits have no volatile absorber, so the standard $1 peg cap would destroy the
+     * compounded above-$1 basis. When this returns {@code true}, {@code restoreInboundFromLpReceiptPool}
+     * carries the real per-asset pool basis so Σ carried == combinedBasis exactly (no fabrication, no
+     * destruction). Gated tightly on the {@code :balancerv3:} correlation so single-stable continuity
+     * carries and non-Balancer LP exits keep the existing peg-cap behaviour.</p>
+     */
+    private boolean isAllStableMultiTokenBalancerExit(NormalizedTransaction transaction) {
+        if (transaction == null || !isLpExitType(transaction.getType())) {
+            return false;
+        }
+        String corrId = transaction.getCorrelationId();
+        if (corrId == null || !corrId.toLowerCase(java.util.Locale.ROOT).contains(":balancerv3:")) {
+            return false;
+        }
+        if (transaction.getFlows() == null) {
+            return false;
+        }
+        int stablePrincipalLegs = 0;
+        for (NormalizedTransaction.Flow flow : transaction.getFlows()) {
+            if (flow == null
+                    || flow.getRole() != NormalizedLegRole.TRANSFER
+                    || flow.getQuantityDelta() == null
+                    || flow.getQuantityDelta().signum() <= 0) {
+                continue;
+            }
+            if (Boolean.TRUE.equals(flow.getLpReceipt())
+                    || AccountingAssetFamilySupport.isLpReceiptSymbol(flow.getAssetSymbol())) {
+                continue;
+            }
+            // A non-stable directly-returned principal leg disqualifies the all-stable path.
+            if (!CanonicalAssetCatalog.isUsdStablecoinBySymbol(flow.getAssetSymbol())) {
+                return false;
+            }
+            stablePrincipalLegs++;
+        }
+        return stablePrincipalLegs >= 2;
     }
 
     /**
@@ -844,7 +1468,8 @@ public class PositionScopedLpExitReplayHandler {
             if (flow == null || flow.getQuantityDelta() == null || flow.getQuantityDelta().signum() >= 0) {
                 continue;
             }
-            if (AccountingAssetFamilySupport.isLpReceiptSymbol(flow.getAssetSymbol())) {
+            if (AccountingAssetFamilySupport.isLpReceiptSymbol(flow.getAssetSymbol())
+                    || Boolean.TRUE.equals(flow.getLpReceipt())) {
                 return true;
             }
             if (compositeReceiptIdentity != null

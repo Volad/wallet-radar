@@ -40,6 +40,10 @@ public class BackfillJobPlanner implements WalletBackfillPlanner {
 
     private static final int MAX_SEGMENTS = 1000;
 
+    /** See {@link #isSingleSegmentNetwork(String)}: signature/offset-paging networks → one segment. */
+    private static final java.util.Set<NetworkId> SINGLE_SEGMENT_NETWORKS =
+            java.util.EnumSet.of(NetworkId.SOLANA, NetworkId.TON);
+
     private final SyncStatusRepository syncStatusRepository;
     private final BackfillSegmentRepository backfillSegmentRepository;
     private final BackfillProperties backfillProperties;
@@ -288,10 +292,38 @@ public class BackfillJobPlanner implements WalletBackfillPlanner {
     }
 
     private int resolveSegmentCount(String networkId, long totalBlocks) {
+        // Solana and TON adapters ignore the segment's block/slot range and always page the FULL
+        // wallet history newest→oldest per invocation (signature/offset paging;
+        // NetworkAdapter.supportsBlockCheckpointing()==false — see SolanaNetworkAdapter,
+        // HeliusSolanaNetworkAdapter, TonNetworkAdapter). Splitting their window into N segments
+        // therefore yields zero additional coverage yet re-fetches the entire history N× in
+        // parallel, which triggered the Helius HTTP 429 storm during the 2-year resync. Force a
+        // single segment for these networks so the whole window is fetched in exactly one pass.
+        if (isSingleSegmentNetwork(networkId)) {
+            return 1;
+        }
         SegmentPlanningProfile profile = resolveSegmentPlanningProfile(networkId);
         long targetBlocksPerSegment = Math.max(1L, profile.targetBlocksPerSegment());
         long rawCount = (totalBlocks + targetBlocksPerSegment - 1) / targetBlocksPerSegment;
         return (int) Math.max(1L, Math.min(MAX_SEGMENTS, rawCount));
+    }
+
+    /**
+     * Networks whose adapter pages the full history per segment (signature/offset paging, no block
+     * checkpointing) and must therefore be backfilled with exactly one segment. Kept as an explicit
+     * NetworkId set (rather than wiring the {@code List<NetworkAdapter>} into the planner) because it
+     * is a deterministic, self-documenting property of these two non-EVM families; EVM segmentation
+     * is unaffected.
+     */
+    private static boolean isSingleSegmentNetwork(String networkId) {
+        if (networkId == null || networkId.isBlank()) {
+            return false;
+        }
+        try {
+            return SINGLE_SEGMENT_NETWORKS.contains(NetworkId.valueOf(networkId.trim().toUpperCase(Locale.ROOT)));
+        } catch (IllegalArgumentException ex) {
+            return false;
+        }
     }
 
     private SegmentPlanningProfile resolveSegmentPlanningProfile(String networkId) {

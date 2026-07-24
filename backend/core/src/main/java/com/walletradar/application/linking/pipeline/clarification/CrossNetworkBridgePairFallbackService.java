@@ -49,6 +49,16 @@ public class CrossNetworkBridgePairFallbackService {
      */
     private static final Duration CROSS_ASSET_MAX_TIME_DELTA = Duration.ofSeconds(180);
     private static final BigDecimal CROSS_ASSET_MAX_RELATIVE_USD_DIFF = new BigDecimal("0.15");
+    /**
+     * FB-04: peg-neutral stablecoins (USDC/USDT/USDT0/…) are value-equivalent $1 assets across
+     * networks. A cross-network stablecoin bridge pair links inside a tight {@code <=2h} window (per
+     * the linking spec) with OUT strictly before IN, matched by value-equivalence within
+     * {@link #STABLECOIN_MAX_RELATIVE_VALUE_DIFF}. The window is deliberately tighter than the
+     * same-asset 24h lookback so an otherwise-ambiguous cluster of same-symbol stablecoin outbounds
+     * collapses to one unambiguous pair (else the caller abstains).
+     */
+    private static final Duration STABLECOIN_MAX_INBOUND_DELAY = Duration.ofHours(2);
+    private static final BigDecimal STABLECOIN_MAX_RELATIVE_VALUE_DIFF = new BigDecimal("0.05");
     private static final String BRIDGE_MISSING_REASON = "BRIDGE_ON_CHAIN_LEG_NOT_FOUND";
     private static final String CROSSNET_CORR_PREFIX = "bridge:crossnet:";
 
@@ -182,6 +192,16 @@ public class CrossNetworkBridgePairFallbackService {
         if (outboundFamily == null) {
             return false;
         }
+        // FB-04: both principals are peg-neutral stablecoins → treat as value-equivalent $1 assets.
+        // This is the single corridor for stablecoin pairs (same-symbol USDC↔USDC AND cross-symbol
+        // USDT0↔USDC), gated by a tight <=2h window and value-equivalence, and needs no market price
+        // (quantity is a valid $1 proxy) so an unpriced bridge-endpoint inbound still links.
+        if (PegNeutralBridgeAssumptionSupport.isPegNeutral(inboundPrincipal.getAssetSymbol())
+                && PegNeutralBridgeAssumptionSupport.isPegNeutral(outboundPrincipal.get().getAssetSymbol())) {
+            return acceptsPegStablecoinCorridor(
+                    inbound, inboundPrincipal, inboundFamily,
+                    outbound, outboundPrincipal.get(), outboundFamily);
+        }
         // Same-asset corridor keeps precedence with its existing quantity tolerance and 24h window.
         if (Objects.equals(inboundFamily, outboundFamily)) {
             return quantitiesCompatible(
@@ -221,6 +241,64 @@ public class CrossNetworkBridgePairFallbackService {
             return false;
         }
         return relativeUsdDiff(outboundUsd, inboundUsd).compareTo(CROSS_ASSET_MAX_RELATIVE_USD_DIFF) <= 0;
+    }
+
+    /**
+     * FB-04: accept a cross-network orphan bridge pair whose principals are both peg-neutral
+     * stablecoins. Both legs value at ~$1, so the match is value-equivalence within a tight band
+     * ({@link #STABLECOIN_MAX_RELATIVE_VALUE_DIFF}) with OUT strictly before IN inside a {@code <=2h}
+     * window ({@link #STABLECOIN_MAX_INBOUND_DELAY}). No market price is required — quantity is a
+     * valid $1 proxy — which is what lets an unpriced bridge-endpoint inbound (e.g. a stablecoin
+     * arriving on a chain without a live quote) still link. A cross-family pair (USDT0→USDC)
+     * additionally requires a single principal each side so the downstream asset-converting
+     * settlement carry fires symmetrically and stays basis-neutral: the source is peg-neutral, so
+     * {@link BridgeSettlementLinkStamper}'s realize-on-convert flag is {@code false} and no market
+     * SELL/BUY or realized P&L is introduced. Caller uniqueness ({@link #pair} requires exactly one
+     * match) rejects ambiguity; the value band rejects a quantity/value mismatch (e.g. a 37× pair).
+     */
+    private boolean acceptsPegStablecoinCorridor(
+            NormalizedTransaction inbound,
+            NormalizedTransaction.Flow inboundPrincipal,
+            String inboundFamily,
+            NormalizedTransaction outbound,
+            NormalizedTransaction.Flow outboundPrincipal,
+            String outboundFamily
+    ) {
+        if (!outbound.getBlockTimestamp().isBefore(inbound.getBlockTimestamp())) {
+            return false;
+        }
+        if (Duration.between(outbound.getBlockTimestamp(), inbound.getBlockTimestamp())
+                .compareTo(STABLECOIN_MAX_INBOUND_DELAY) > 0) {
+            return false;
+        }
+        if (!Objects.equals(inboundFamily, outboundFamily)
+                && (principalFlowCount(outbound, -1) != 1 || principalFlowCount(inbound, 1) != 1)) {
+            return false;
+        }
+        BigDecimal outboundValue = pegValueUsd(outboundPrincipal);
+        BigDecimal inboundValue = pegValueUsd(inboundPrincipal);
+        if (outboundValue == null || inboundValue == null) {
+            return false;
+        }
+        return relativeUsdDiff(outboundValue, inboundValue)
+                .compareTo(STABLECOIN_MAX_RELATIVE_VALUE_DIFF) <= 0;
+    }
+
+    /**
+     * FB-04: dollar value of a peg-neutral stablecoin principal — the resolved USD value when
+     * present, otherwise the absolute quantity (valid because the asset pegs to $1). Bridge legs are
+     * typically retagged to price-less TRANSFER before linking, so the quantity fallback is the
+     * normal path for the source leg and for unpriced inbound endpoints.
+     */
+    private BigDecimal pegValueUsd(NormalizedTransaction.Flow flow) {
+        BigDecimal usd = resolveFlowUsdValue(flow);
+        if (usd != null) {
+            return usd;
+        }
+        if (flow != null && flow.getQuantityDelta() != null && flow.getQuantityDelta().signum() != 0) {
+            return flow.getQuantityDelta().abs();
+        }
+        return null;
     }
 
     private boolean materializePair(NormalizedTransaction outbound, NormalizedTransaction inbound) {

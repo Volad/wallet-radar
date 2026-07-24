@@ -19,6 +19,18 @@ public final class EvmAbiSupport {
         return HEX.formatHex(hash).substring(0, 8);
     }
 
+    /**
+     * Computes {@code keccak256} over the raw bytes represented by the given hex string
+     * (with or without {@code 0x} prefix) and returns the 32-byte digest as lowercase hex
+     * (no {@code 0x} prefix). Used to derive Solidity mapping storage slots for {@code extsload}
+     * reads (e.g. Uniswap V4 / Pancake Infinity {@code pools[poolId]} state).
+     */
+    public static String keccak256Hex(String hexInput) {
+        byte[] input = HEX.parseHex(cleanHex(hexInput));
+        Keccak.Digest256 digest = new Keccak.Digest256();
+        return HEX.formatHex(digest.digest(input));
+    }
+
     public static String encodeAddress(String address) {
         String cleaned = cleanHex(address);
         return "0".repeat(64 - cleaned.length()) + cleaned;

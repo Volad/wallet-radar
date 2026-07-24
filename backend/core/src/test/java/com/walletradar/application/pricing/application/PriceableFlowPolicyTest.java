@@ -384,6 +384,37 @@ class PriceableFlowPolicyTest {
         assertThat(PriceableFlowPolicy.requiresMarketPrice(tx, flow)).isFalse();
     }
 
+    @Test
+    void lpFeeIncomeInboundRequiresMarketPrice() {
+        // D4: LP exit fee-income legs are received at the exit block and must be market-priced so the
+        // tax lane books fee income at FMV (net lane stays $0). Pre-fix they were 100% unpriced.
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setType(NormalizedTransactionType.LP_EXIT);
+        tx.setCorrelationId("lp-position:base:uniswap:924461");
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.LP_FEE_INCOME);
+        flow.setAssetSymbol("WETH");
+        flow.setQuantityDelta(new BigDecimal("0.01"));
+        tx.setFlows(new java.util.ArrayList<>(java.util.List.of(flow)));
+
+        assertThat(PriceableFlowPolicy.requiresMarketPrice(tx, flow)).isTrue();
+    }
+
+    @Test
+    void lpFeeIncomeUsdcInboundRequiresMarketPrice() {
+        // D4: the USDC fee-income leg is also priced (stablecoin $1 fallback in the resolver).
+        NormalizedTransaction tx = new NormalizedTransaction();
+        tx.setType(NormalizedTransactionType.LP_EXIT_FINAL);
+        tx.setCorrelationId("lp-position:base:uniswap:924461");
+        NormalizedTransaction.Flow flow = new NormalizedTransaction.Flow();
+        flow.setRole(NormalizedLegRole.LP_FEE_INCOME);
+        flow.setAssetSymbol("USDC");
+        flow.setQuantityDelta(new BigDecimal("24"));
+        tx.setFlows(new java.util.ArrayList<>(java.util.List.of(flow)));
+
+        assertThat(PriceableFlowPolicy.requiresMarketPrice(tx, flow)).isTrue();
+    }
+
     private NormalizedTransaction transferIn(String symbol) {
         NormalizedTransaction tx = new NormalizedTransaction();
         tx.setType(NormalizedTransactionType.EXTERNAL_TRANSFER_IN);

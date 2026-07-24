@@ -241,6 +241,27 @@ class SessionLpQueryServiceTest {
         assertThat(position.token0().usd()).isNull();
     }
 
+    @Test
+    void derivesPendlePairFromFourSegmentKeyDroppingWalletSegment() throws Exception {
+        // ADR-081 (C2): the 4-segment key `pendle-lp:{network}:{marketOrSyAddress}:{walletLower}` must
+        // derive its label from the market segment only; the trailing wallet segment is a per-wallet
+        // disambiguator and must never leak into the display label.
+        assertThat(derivePair("pendle-lp:mantle:cmeth-market:0xa0dd"))
+                .isEqualTo("CMETH/MARKET");
+        assertThat(derivePair("pendle-lp:mantle:0xabc123:0xa0dd"))
+                .isEqualTo("0XABC123");
+        // Legacy 3-segment key still works unchanged.
+        assertThat(derivePair("pendle-lp:mantle:pendle-lpt"))
+                .isEqualTo("PENDLE/LPT");
+    }
+
+    private static String derivePair(String correlationId) throws Exception {
+        var method = SessionLpQueryService.class
+                .getDeclaredMethod("derivePairFromCorrelationId", String.class);
+        method.setAccessible(true);
+        return (String) method.invoke(null, correlationId);
+    }
+
     private SessionLpView query(
             List<NormalizedTransaction> txs,
             List<LpReceiptBasisPool> basis,

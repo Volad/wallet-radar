@@ -32,14 +32,23 @@
             <div class="ds-index mono">{{ index + 1 < 10 ? '0' + (index + 1) : index + 1 }}</div>
             <div class="ds-label">{{ wallet.label || '—' }}</div>
             <div class="ds-address mono">{{ wallet.address }}</div>
-            <button type="button" class="ds-nets" (click)="toggleSavedNetworks.emit(wallet.id)">
-              <span class="mono small">All nets</span>
-              <span class="chev" [class.open]="wallet.networksOpen">⌄</span>
-            </button>
+            @if (wallet.domain === 'EVM') {
+              <button type="button" class="ds-nets" (click)="toggleSavedNetworks.emit(wallet.id)">
+                <span class="mono small">All nets</span>
+                <span class="chev" [class.open]="wallet.networksOpen">⌄</span>
+              </button>
+            } @else {
+              <div class="ds-nets ds-nets-fixed">
+                @if (networkIcon(wallet.domain)) {
+                  <span class="network-chip-icon">{{ networkIcon(wallet.domain) }}</span>
+                }
+                <span class="mono small" [style.color]="networkColor(wallet.domain)">{{ networkLabel(wallet.domain) }}</span>
+              </div>
+            }
             <button type="button" class="ds-trash" (click)="removeWallet.emit(wallet.id)" aria-label="Remove wallet">🗑</button>
           </div>
 
-          @if (wallet.networksOpen) {
+          @if (wallet.networksOpen && wallet.domain === 'EVM') {
             <div class="wallet-draft-network-panel">
               <div class="wallet-draft-network-grid">
                 @for (network of networksPresentation; track network.id) {
@@ -69,7 +78,7 @@
           <div></div>
           <div></div>
           <div>Label</div>
-          <div>EVM Address</div>
+          <div>Address</div>
           <div>Networks</div>
           <div></div>
         </div>
@@ -105,7 +114,7 @@
                     type="text"
                     [value]="wallet.address"
                     (input)="updatePendingWalletField.emit({ walletId: wallet.id, field: 'address', value: $any($event.target).value })"
-                    placeholder="0x… EVM address"
+                    placeholder="Wallet address"
                     autocomplete="off"
                     spellcheck="false" />
                   @if (wallet.address.trim().length > 0) {
@@ -114,14 +123,23 @@
                     </span>
                   }
                 </div>
-                <button type="button" class="wallet-draft-networks-toggle" (click)="togglePendingNetworks.emit(wallet.id)">
-                  <span>All networks</span>
-                  <span class="wallet-draft-chevron" [class.open]="wallet.networksOpen">⌄</span>
-                </button>
+                @if (wallet.domain === 'EVM' || wallet.domain === 'UNKNOWN') {
+                  <button type="button" class="wallet-draft-networks-toggle" (click)="togglePendingNetworks.emit(wallet.id)">
+                    <span>All networks</span>
+                    <span class="wallet-draft-chevron" [class.open]="wallet.networksOpen">⌄</span>
+                  </button>
+                } @else {
+                  <div class="wallet-draft-networks-fixed">
+                    @if (networkIcon(wallet.domain)) {
+                      <span class="network-chip-icon">{{ networkIcon(wallet.domain) }}</span>
+                    }
+                    <span [style.color]="networkColor(wallet.domain)">{{ networkLabel(wallet.domain) }}</span>
+                  </div>
+                }
                 <button type="button" class="wallet-draft-remove" (click)="removeWallet.emit(wallet.id)" aria-label="Remove wallet">🗑</button>
               </div>
 
-              @if (wallet.networksOpen) {
+              @if (wallet.networksOpen && wallet.domain === 'EVM') {
                 <div class="wallet-draft-network-panel">
                   <div class="wallet-draft-network-grid">
                     @for (network of networksPresentation; track network.id) {
@@ -174,4 +192,3 @@
     </div>
   }
 </section>
-

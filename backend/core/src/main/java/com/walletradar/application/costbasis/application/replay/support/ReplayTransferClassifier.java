@@ -63,6 +63,34 @@ public class ReplayTransferClassifier {
         return transaction != null && transaction.getSource() == NormalizedTransactionSource.BYBIT;
     }
 
+    /**
+     * Finding 2 — a same-network custody/parking round-trip leg linked by
+     * {@code SameNetworkCustodyRoundTripLinkService} (shared {@code bridge:custody-roundtrip:}
+     * correlation, {@code continuityCandidate=true}, principals demoted to price-less TRANSFER).
+     *
+     * <p>These legs are pooled into one cross-family basis envelope and redistributed by return-time
+     * market value, so they must NOT flow through the per-family bridge continuity queue (which
+     * restores each family's carried-out basis independently and breaks conservation when the vault
+     * rebalances the returned composition). This predicate routes them to the dedicated envelope path
+     * instead. Deterministic; keyed only on the generalized correlation prefix, never a tx hash.
+     */
+    public boolean isCustodyRoundTripContinuityTransfer(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        if (transaction == null
+                || flow == null
+                || !Boolean.TRUE.equals(transaction.getContinuityCandidate())
+                || flow.getRole() != NormalizedLegRole.TRANSFER
+                || flow.getQuantityDelta() == null
+                || flow.getQuantityDelta().signum() == 0) {
+            return false;
+        }
+        String correlationId = transaction.getCorrelationId();
+        return correlationId != null
+                && correlationId.startsWith(CorrelationContract.BRIDGE_CUSTODY_ROUNDTRIP_PREFIX);
+    }
+
     public boolean isLinkedBridgeContinuityTransfer(
             NormalizedTransaction transaction,
             NormalizedTransaction.Flow flow

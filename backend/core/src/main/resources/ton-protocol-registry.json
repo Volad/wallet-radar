@@ -1,0 +1,15 @@
+{
+  "description": "TON protocol registry (WS-2). Mirrors the protocol-registry.json intent for TON: proxy-TON (pTON) masters net to native TON so they never surface as a phantom held jetton; DeFi vault/router addresses drive counterparty protocol labels and stake/unstake classification. Keyed by TON address in ANY canonical form (raw workchain 0:hex, or friendly EQ/UQ) — TonAddressCanonicalizer expands each configured key to its equivalent forms, so a lookup by the toncenter raw form resolves a friendly-configured entry and vice versa. TON addresses are case-sensitive and are never lowercased.",
+  "proxyTonMasters": {
+    "0:671963027F7F85659AB55B821671688601CDCF1EE674FC7FBBB1A776A18D34A3": {
+      "protocol": "Ston.fi",
+      "note": "pTON v2 proxy-TON master"
+    },
+    "0:8CDC1D7640AD5EE326527FC1AD0514F468B30DC84B0173F0E155F451B4E11F7C": {
+      "protocol": "Ston.fi",
+      "note": "pTON v1 proxy-TON master"
+    }
+  },
+  "protocols_note": "DeFi vault/router addresses go under 'protocols' keyed by TON address. family=STAKING vaults classify wallet<->vault jetton moves as STAKING_DEPOSIT/WITHDRAW; family=DEX routers label swap counterparties. Affluent (affGOLDm staking) is mechanism-ready: add its confirmed vault master under 'protocols' with family STAKING once verified — it has no occurrences in the current dataset so no address is fabricated.",
+  "protocols": {}
+}

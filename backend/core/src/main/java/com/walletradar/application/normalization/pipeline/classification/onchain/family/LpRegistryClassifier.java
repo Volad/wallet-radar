@@ -16,6 +16,7 @@ import com.walletradar.application.normalization.pipeline.classification.lp.LpCl
 import com.walletradar.application.normalization.pipeline.classification.lp.PendleLpCorrelationSupport;
 import com.walletradar.application.normalization.pipeline.classification.support.BlockScoutNativeSettlementClarificationSupport;
 import com.walletradar.application.normalization.pipeline.classification.support.CalldataDecodingSupport;
+import com.walletradar.application.normalization.pipeline.classification.support.DexGaugePoolResolver;
 import com.walletradar.application.normalization.pipeline.classification.support.LpExitFeeClarificationTrigger;
 import com.walletradar.application.normalization.pipeline.classification.support.LpPositionCorrelationSupport;
 import com.walletradar.application.normalization.pipeline.classification.support.LpPositionLifecycleSupport;
@@ -59,6 +60,13 @@ public class LpRegistryClassifier implements OnChainFamilyClassifier {
     private final NativeAssetSymbolResolver nativeAssetSymbolResolver;
     private final LpStakingWrapperResolver lpStakingWrapperResolver;
     private final LpV4ExitFeeDecomposer lpV4ExitFeeDecomposer;
+    /**
+     * On-chain gauge grammar resolver used to key a Velodrome/Aerodrome-style <b>v2 (fungible)
+     * gauge</b> STAKE/UNSTAKE on its staked AMM LP token instead of a mis-mapped Slipstream NFPM.
+     * May be {@code null} in lightweight (test) wiring where no EVM RPC is available; the v2-gauge
+     * resolution path then no-ops and the legacy vault-fallback correlation is used.
+     */
+    private final DexGaugePoolResolver dexGaugePoolResolver;
 
     // C1 (R7): (networkId, min(tokenX,tokenY), max(tokenX,tokenY), binStep) → pairAddress.
     // Populated at startup by scanning all LFJ_LB_PAIR entries in the registry.
@@ -68,12 +76,14 @@ public class LpRegistryClassifier implements OnChainFamilyClassifier {
             ProtocolRegistryService protocolRegistryService,
             NativeAssetSymbolResolver nativeAssetSymbolResolver,
             LpStakingWrapperResolver lpStakingWrapperResolver,
-            LpV4ExitFeeDecomposer lpV4ExitFeeDecomposer
+            LpV4ExitFeeDecomposer lpV4ExitFeeDecomposer,
+            DexGaugePoolResolver dexGaugePoolResolver
     ) {
         this.protocolRegistryService = protocolRegistryService;
         this.nativeAssetSymbolResolver = nativeAssetSymbolResolver;
         this.lpStakingWrapperResolver = lpStakingWrapperResolver;
         this.lpV4ExitFeeDecomposer = lpV4ExitFeeDecomposer;
+        this.dexGaugePoolResolver = dexGaugePoolResolver;
     }
 
     /**
@@ -137,6 +147,10 @@ public class LpRegistryClassifier implements OnChainFamilyClassifier {
             // R6a: Balancer V3 Vault classification is handled here, not in the semantic layer.
             if (sh == ProtocolRegistrySpecialHandlerType.BALANCER_V3_VAULT) {
                 return classifyBalancerV3VaultTx(context, entry.get());
+            }
+            // R6a: Aura Booster deposit/withdraw of a Balancer BPT — LP_POSITION_STAKE/UNSTAKE.
+            if (sh == ProtocolRegistrySpecialHandlerType.AURA_BOOSTER) {
+                return classifyAuraBoosterTx(context, entry.get());
             }
             // R7: LFJ Liquidity Book pair-level LP (direct pair interaction).
             if (sh == ProtocolRegistrySpecialHandlerType.LFJ_LB_PAIR) {
@@ -286,10 +300,19 @@ public class LpRegistryClassifier implements OnChainFamilyClassifier {
         String balancerV3CorrelationId = receiptCorrelationId == null
                 ? resolveBalancerV3PoolCorrelationId(context, entry)
                 : null;
+        // Velodrome/Aerodrome v2 (fungible) gauge STAKE/UNSTAKE: key on the on-chain staked AMM LP
+        // token (gauge.pool()) instead of the mis-mapped Slipstream NFPM, so the pair resolves to a
+        // real two-sided AMM pool rather than an unresolvable ":vault" tokenId. General to all v2
+        // gauges (grammar-driven, no address hardcoding); CL/Slipstream gauges keep the NFPM path.
+        String v2GaugeCorrelationId = (receiptCorrelationId == null && balancerV3CorrelationId == null)
+                ? resolveV2GaugeStakedCorrelationId(context, entry, type)
+                : null;
         String correlationId = receiptCorrelationId != null
                 ? receiptCorrelationId
                 : balancerV3CorrelationId != null
                 ? balancerV3CorrelationId
+                : v2GaugeCorrelationId != null
+                ? v2GaugeCorrelationId
                 : resolveVaultFallbackCorrelationId(context, entry, type);
         // R4: for V4/Infinity exits, pre-compute fee fractions via the V4 decomposer so the
         // materializer can split principal vs LP_FEE_INCOME without visiting liquiditypools.enrichment.
@@ -304,9 +327,11 @@ public class LpRegistryClassifier implements OnChainFamilyClassifier {
         // is set), pass the BPT-pool correlation ID to the materializer so it can rewrite raw BPT
         // flows to canonical LP-RECEIPT legs. For all other cases keep receiptCorrelationId so that
         // PancakeSwap/Uniswap V3 NFT positions and vault-fallback paths are unaffected.
-        String flowsCorrelationId = (receiptCorrelationId == null && balancerV3CorrelationId != null)
+        String flowsCorrelationId = receiptCorrelationId != null
+                ? receiptCorrelationId
+                : balancerV3CorrelationId != null
                 ? balancerV3CorrelationId
-                : receiptCorrelationId;
+                : v2GaugeCorrelationId;
         List<NormalizedTransaction.Flow> flows = LpClassificationFlowSupport.flows(
                 context.view(),
                 context.movementLegs(),
@@ -406,6 +431,48 @@ public class LpRegistryClassifier implements OnChainFamilyClassifier {
             return "lp-position:" + networkId + ":" + canonicalContract + ":vault";
         }
         return null;
+    }
+
+    /**
+     * Velodrome/Aerodrome-style <b>v2 (fungible) gauge</b> STAKE/UNSTAKE identity. When the tx target
+     * is a DEX {@code STAKE_CONTRACT} gauge that exposes {@code pool()} but not {@code nft()} (v2 AMM
+     * gauge grammar), the staked receipt is the AMM LP token {@code gauge.pool()} — an ERC-20 pair —
+     * not a Slipstream NFT position. Keying on that staked LP token lets {@code FungiblePoolReader}
+     * resolve a real {@code token0/token1} pair, instead of the mis-mapped NFPM {@code :vault}
+     * correlation that leaves the position as "Unknown pair".
+     *
+     * <p>The correlation carries the gauge as a fifth segment
+     * ({@code lp-position:<net>:<stakedLpToken>:vault:<gauge>}) so the read path can value the
+     * position from the gauge's staked balance ({@code gauge.balanceOf(wallet)}); the position
+     * identity remains keyed on the staked LP token (segment 2), which is stable across
+     * entry/exit and gauge migrations. Returns {@code null} for CL/Slipstream gauges (which expose
+     * {@code nft()}) and when RPC resolution is unavailable, so the legacy NFPM/vault path applies.
+     */
+    private String resolveV2GaugeStakedCorrelationId(
+            OnChainClassificationContext context,
+            ProtocolRegistryEntry entry,
+            NormalizedTransactionType type
+    ) {
+        if (dexGaugePoolResolver == null
+                || !LpPositionLifecycleSupport.isDexStakeContract(entry)
+                || !LpPositionCorrelationSupport.supportsLpPositionCorrelation(type)) {
+            return null;
+        }
+        String gauge = entry.contractAddress();
+        if (gauge == null || gauge.isBlank()) {
+            return null;
+        }
+        Optional<String> stakedLpToken =
+                dexGaugePoolResolver.resolveFungibleGaugeStakedLpToken(context.view().networkId(), gauge);
+        if (stakedLpToken.isEmpty()) {
+            return null;
+        }
+        String networkId = context.view().networkId() == null
+                ? "unknown"
+                : context.view().networkId().name().toLowerCase(Locale.ROOT);
+        return "lp-position:" + networkId + ":"
+                + stakedLpToken.get().toLowerCase(Locale.ROOT) + ":vault:"
+                + gauge.toLowerCase(Locale.ROOT);
     }
 
     private List<String> pendingClarificationReasons(
@@ -592,6 +659,113 @@ public class LpRegistryClassifier implements OnChainFamilyClassifier {
                 List.of(),
                 correlationId
         ));
+    }
+
+    /**
+     * R6a: Aura Finance Booster/BoosterLite deposit/withdraw handler.
+     *
+     * <p>{@code deposit(pid, amount, stake)} on the Aura Booster stakes a Balancer BPT into a reward
+     * pool and mints the Aura deposit-vault receipt token to the wallet; {@code withdraw} burns it.
+     * This is a continuation of the same LP position (basis-neutral CARRY/REALLOCATE), NOT a
+     * disposal — booking the BPT out-leg as a lending/disposal severs BPT basis continuity and
+     * fabricates phantom basis at the later burn.</p>
+     *
+     * <p>Direction is derived purely from movement legs (no calldata/selector dependence):</p>
+     * <ul>
+     *   <li>deposit-vault receipt inbound + BPT outbound → {@code LP_POSITION_STAKE}.</li>
+     *   <li>deposit-vault receipt outbound + BPT inbound → {@code LP_POSITION_UNSTAKE}.</li>
+     * </ul>
+     *
+     * <p>The BPT-pool correlation ({@code lp-position:<net>:balancerv3:<poolAddress>}) is resolved
+     * from the Aura deposit-vault receipt entry's {@code underlyingPositionManager}, so the stake
+     * shares the same basis pool as the JOIN/BURN txs. Returns {@code Optional.empty()} when no
+     * BPT / deposit-vault movement pair is present (e.g. a pure {@code getReward} claim), letting
+     * the reward-route / fallback path handle it.</p>
+     */
+    private Optional<ClassificationDecision> classifyAuraBoosterTx(
+            OnChainClassificationContext context,
+            ProtocolRegistryEntry entry
+    ) {
+        String bptPoolAddr = null;
+        boolean bptIsInbound = false;
+        boolean depositVaultIsInbound = false;
+        boolean depositVaultFound = false;
+        String underlyingPool = null;
+
+        for (RawLeg leg : context.movementLegs()) {
+            if (leg == null || leg.fee() || leg.assetContract() == null || leg.quantityDelta() == null) {
+                continue;
+            }
+            Optional<ProtocolRegistryEntry> legEntry =
+                    protocolRegistryService.lookup(context.view().networkId(), leg.assetContract());
+            if (legEntry.isEmpty()) {
+                continue;
+            }
+            ProtocolRegistryEntry pe = legEntry.get();
+            // Aura deposit-vault receipt token (STAKE_CONTRACT whose underlyingPositionManager is a
+            // registered Balancer V3 BPT pool).
+            if (pe.role() == ProtocolRegistryRole.STAKE_CONTRACT
+                    && "Aura".equalsIgnoreCase(pe.protocolName())
+                    && !depositVaultFound) {
+                String pool = pe.underlyingPositionManager();
+                if (pool != null && !pool.isBlank() && isBalancerV3Pool(context, pool)) {
+                    depositVaultFound = true;
+                    depositVaultIsInbound = leg.quantityDelta().signum() > 0;
+                    underlyingPool = pool.toLowerCase(java.util.Locale.ROOT);
+                }
+            }
+            // Balancer V3 BPT pool token.
+            if ("V3".equalsIgnoreCase(pe.protocolVersion())
+                    && "Balancer".equalsIgnoreCase(pe.protocolName())
+                    && pe.role() == ProtocolRegistryRole.POOL
+                    && bptPoolAddr == null) {
+                bptPoolAddr = leg.assetContract().toLowerCase(java.util.Locale.ROOT);
+                bptIsInbound = leg.quantityDelta().signum() > 0;
+            }
+        }
+
+        if (!depositVaultFound || bptPoolAddr == null || underlyingPool == null) {
+            // No BPT<->deposit-vault movement pair — not an LP stake/unstake (e.g. pure getReward).
+            return Optional.empty();
+        }
+
+        // deposit-vault inbound + BPT outbound → STAKE; deposit-vault outbound + BPT inbound → UNSTAKE.
+        NormalizedTransactionType type = (depositVaultIsInbound && !bptIsInbound)
+                ? NormalizedTransactionType.LP_POSITION_STAKE
+                : (!depositVaultIsInbound && bptIsInbound)
+                ? NormalizedTransactionType.LP_POSITION_UNSTAKE
+                : (depositVaultIsInbound
+                        ? NormalizedTransactionType.LP_POSITION_STAKE
+                        : NormalizedTransactionType.LP_POSITION_UNSTAKE);
+
+        String networkStr = context.view().networkId() == null
+                ? "unknown"
+                : context.view().networkId().name().toLowerCase(java.util.Locale.ROOT);
+        String correlationId = "lp-position:" + networkStr + ":balancerv3:" + underlyingPool;
+
+        List<NormalizedTransaction.Flow> flows = LpClassificationFlowSupport.flows(
+                context.view(), context.movementLegs(), type, correlationId, null);
+
+        return Optional.of(RegistryDecisionSupport.registryResult(
+                context.view(), entry, type,
+                OnChainClassificationSupport.initialStatus(context.view(), type, entry.confidence()),
+                flows, List.of(), correlationId));
+    }
+
+    /**
+     * R6a: {@code true} when {@code poolAddress} resolves to a registered Balancer V3 {@code POOL}
+     * entry on the transaction's network.
+     */
+    private boolean isBalancerV3Pool(OnChainClassificationContext context, String poolAddress) {
+        Optional<ProtocolRegistryEntry> poolEntry =
+                protocolRegistryService.lookup(context.view().networkId(), poolAddress);
+        if (poolEntry.isEmpty()) {
+            return false;
+        }
+        ProtocolRegistryEntry pe = poolEntry.get();
+        return "Balancer".equalsIgnoreCase(pe.protocolName())
+                && "V3".equalsIgnoreCase(pe.protocolVersion())
+                && pe.role() == ProtocolRegistryRole.POOL;
     }
 
     /**

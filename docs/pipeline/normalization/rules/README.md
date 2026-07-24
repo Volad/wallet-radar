@@ -11,6 +11,28 @@ Explicit rule documents for classification + clarification. Runtime code must no
 2. **`backend/src/main/resources/protocols/*.json`** — protocol runtime profile (selectors, hints)
 3. **`docs/pipeline/normalization/rules/protocols/*.md`** — human rules (evidence, correlation, fallbacks)
 
+## Post-normalization boundary invariant (venue- and network-neutral)
+
+After normalization, downstream read/query code must be **both venue-agnostic and network-agnostic**.
+Network specifics are resolved once, at normalization time, and stamped as **semantic capability
+flags** on the normalized record (primitive/enum only — never a resolver/registry type). Read paths
+consume the flags; they never call `NetworkAddressFormat.isEvm(...)`, compare `NetworkId` members, or
+match a network name embedded in a string such as `lp-position:solana:`.
+
+- **`receiptBearingCollateral`** — lending collateral is a fungible on-chain receipt token (EVM
+  aTokens/cTokens) vs receipt-less (Jupiter Lend on Solana, TON). Consumed by `LendingCycleBuilder`.
+- **`lpConcentrated`** — concentrated-liquidity LP position with residual-tolerant, snapshot-driven
+  closure (terminal `LP_EXIT`, never `LP_EXIT_FINAL`) — currently Solana DLMM/CLMM. Consumed by
+  `SessionLpQueryService` / `LpPositionRefreshService` (and carried onto `LpPositionSnapshot`).
+- **`custodialOffChain`** — external custody destination (ADR-072).
+
+The single place network specifics are allowed is the normalization builders (EVM / Solana / TON) and
+single-network ingestion/enrichment adapters. Enforced by
+`ModuleDependencyArchTest.post_normalization_read_query_packages_must_not_depend_on_NetworkAddressFormat`
+(sibling to the ADR-052 venue rule) and the `NetworkBranchGuardTest` source scan. See
+[ADR-074](../../../adr/ADR-074-network-agnostic-post-normalization-invariant.md) (generalizes
+[ADR-052](../../../adr/ADR-052-venue-capability-spi-walletref-normalization-boundary-invariant.md)).
+
 ## Rule Source Hierarchy
 
 1. [Product context](../../../overview/01-product-context.md), [Domain glossary](../../../overview/02-domain-glossary.md), [Architecture](../../../overview/03-architecture.md), [Cost basis](../../cost-basis/01-overview.md), accepted [ADRs](../../../adr/INDEX.md)
@@ -32,6 +54,8 @@ Explicit rule documents for classification + clarification. Runtime code must no
 - [Staking](families/staking.md)
 - [Trading](families/trading.md)
 - [Transfer](families/transfer.md)
+- [Solana](families/solana.md)
+- [TON](families/ton.md)
 - [Default](families/default.md)
 - [Cross-cutting owners](cross-cutting-owners.md)
 

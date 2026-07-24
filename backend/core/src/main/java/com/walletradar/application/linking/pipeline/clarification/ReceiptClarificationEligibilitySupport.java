@@ -56,6 +56,8 @@ public final class ReceiptClarificationEligibilitySupport {
             ClassificationReasonCode.NATIVE_SETTLEMENT_TRANSFER_EVIDENCE_REQUIRED.code();
     private static final String LP_POSITION_CORRELATION_REQUIRED =
             ClassificationReasonCode.LP_POSITION_CORRELATION_REQUIRED.code();
+    private static final String LP_FEE_SPLIT_EVIDENCE_REQUIRED =
+            ClassificationReasonCode.LP_FEE_SPLIT_EVIDENCE_REQUIRED.code();
     private static final String GPV2_SETTLEMENT_SELECTOR = "0x13d79a0b";
     private static final String ROUTED_AGGREGATOR_OUTBOUND_ONLY = ClassificationReasonCode.ROUTED_AGGREGATOR_OUTBOUND_ONLY.code();
 
@@ -88,6 +90,8 @@ public final class ReceiptClarificationEligibilitySupport {
                 isNativeSettlementTransferRecoveryCandidate(normalizedTransaction, reasons, view);
         boolean lpPositionCorrelationCandidate =
                 isLpPositionCorrelationCandidate(normalizedTransaction, reasons, view);
+        boolean lpFeeSplitEvidenceRecoveryCandidate =
+                isLpFeeSplitEvidenceRecoveryCandidate(normalizedTransaction, reasons, view);
         boolean multicallMissingTransferCandidate =
                 isMulticallWithMissingNativeValueTransferEvidence(normalizedTransaction, view);
         if (normalizedTransaction.getStatus() != NormalizedTransactionStatus.NEEDS_REVIEW
@@ -100,6 +104,7 @@ public final class ReceiptClarificationEligibilitySupport {
                 && !eulerPendingClarificationCandidate
                 && !nativeSettlementTransferRecoveryCandidate
                 && !lpPositionCorrelationCandidate
+                && !lpFeeSplitEvidenceRecoveryCandidate
                 && !multicallMissingTransferCandidate) {
             return false;
         }
@@ -142,6 +147,9 @@ public final class ReceiptClarificationEligibilitySupport {
             return true;
         }
         if (lpPositionCorrelationCandidate) {
+            return true;
+        }
+        if (lpFeeSplitEvidenceRecoveryCandidate) {
             return true;
         }
         if (multicallMissingTransferCandidate) {
@@ -346,6 +354,36 @@ public final class ReceiptClarificationEligibilitySupport {
                 && reasons.contains(ClassificationReasonCode.CLARIFICATION_ATTEMPTS_EXHAUSTED.code())
                 && (normalizedTransaction.getFullReceiptClarificationAttempts() == null
                 || normalizedTransaction.getFullReceiptClarificationAttempts() == 0);
+    }
+
+    /**
+     * R1: a V3/Slipstream (or V4/Infinity) CL exit routed to PENDING_CLARIFICATION by
+     * {@code LpExitFeeClarificationTrigger} so that the full receipt (with
+     * {@code DecreaseLiquidity}/{@code Collect} — or {@code ModifyLiquidity} — event logs) is
+     * fetched and persisted, enabling the principal-vs-fee split on the reclassification pass.
+     *
+     * <p>Not restricted by sync method: the fee-split evidence gap affects Etherscan- and
+     * BlockScout-synced networks alike (the explorer token-transfer API never returns the pool's
+     * {@code DecreaseLiquidity}/{@code Collect} logs). Guarded on {@code hasFullReceiptClarificationEvidence}
+     * so it is idempotent and never re-fetches an already-clarified row.</p>
+     */
+    private static boolean isLpFeeSplitEvidenceRecoveryCandidate(
+            NormalizedTransaction normalizedTransaction,
+            List<String> reasons,
+            OnChainRawTransactionView view
+    ) {
+        return normalizedTransaction != null
+                && view != null
+                && normalizedTransaction.getStatus() == NormalizedTransactionStatus.PENDING_CLARIFICATION
+                && isLpExitFamily(normalizedTransaction.getType())
+                && reasons.contains(LP_FEE_SPLIT_EVIDENCE_REQUIRED)
+                && !view.hasFullReceiptClarificationEvidence();
+    }
+
+    private static boolean isLpExitFamily(NormalizedTransactionType type) {
+        return type == NormalizedTransactionType.LP_EXIT
+                || type == NormalizedTransactionType.LP_EXIT_PARTIAL
+                || type == NormalizedTransactionType.LP_EXIT_FINAL;
     }
 
     private static boolean isGmxDerivativeRequest(NormalizedTransaction normalizedTransaction) {

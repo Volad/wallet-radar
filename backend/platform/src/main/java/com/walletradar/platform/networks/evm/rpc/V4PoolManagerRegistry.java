@@ -12,8 +12,8 @@ import java.util.Map;
 /**
  * Registry of Uniswap V4 / Pancake Infinity CL PoolManager contract addresses per network.
  *
- * <p>PoolManager is the single contract whose {@code getSlot0(bytes32)} view returns the current
- * pool price. Addresses are configured in {@code application.yml} under
+ * <p>PoolManager is the single contract whose {@code extsload(bytes32)} storage read exposes the
+ * current pool price ({@code slot0}). Addresses are configured in {@code application.yml} under
  * {@code walletradar.v4.pool-manager-by-network} and fall back to known canonical defaults for
  * well-known networks.
  *

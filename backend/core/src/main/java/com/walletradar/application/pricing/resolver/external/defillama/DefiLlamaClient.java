@@ -39,7 +39,7 @@ public class DefiLlamaClient {
         if (chainSlug == null || contractAddress == null || contractAddress.isBlank()) {
             return Optional.empty();
         }
-        String coinKey = chainSlug + ":" + contractAddress.trim().toLowerCase(Locale.ROOT);
+        String coinKey = chainSlug + ":" + normalizeContractAddress(networkId, contractAddress);
         try {
             JsonNode body = webClient.get()
                     .uri("/prices/current/{coin}?searchWidth=4h", coinKey)
@@ -63,7 +63,7 @@ public class DefiLlamaClient {
         if (chainSlug == null || contractAddress == null || contractAddress.isBlank() || at == null) {
             return Optional.empty();
         }
-        String coinKey = chainSlug + ":" + contractAddress.trim().toLowerCase(Locale.ROOT);
+        String coinKey = chainSlug + ":" + normalizeContractAddress(networkId, contractAddress);
         long epochSeconds = at.getEpochSecond();
         try {
             JsonNode body = webClient.get()
@@ -98,6 +98,18 @@ public class DefiLlamaClient {
     }
 
     /**
+     * Normalizes a contract/mint address for use in a DefiLlama coin key.
+     * EVM addresses are lowercased; Solana base58 mint pubkeys are kept as-is.
+     */
+    private static String normalizeContractAddress(NetworkId networkId, String contractAddress) {
+        String trimmed = contractAddress.trim();
+        if (networkId == NetworkId.SOLANA) {
+            return trimmed;
+        }
+        return trimmed.toLowerCase(Locale.ROOT);
+    }
+
+    /**
      * Maps WalletRadar {@link NetworkId} to the DefiLlama chain slug used in coin keys.
      */
     public static Optional<String> chainSlug(NetworkId networkId) {
@@ -118,6 +130,8 @@ public class DefiLlamaClient {
             case UNICHAIN -> "unichain";
             case ZKSYNC -> "era";
             case PLASMA -> "plasma";
+            case SOLANA -> "solana";
+            case TON -> "ton";
             default -> null;
         };
         return Optional.ofNullable(slug);

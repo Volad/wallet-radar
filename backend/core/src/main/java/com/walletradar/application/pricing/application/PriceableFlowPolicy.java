@@ -48,6 +48,14 @@ public final class PriceableFlowPolicy {
                 || CanonicalAssetCatalog.isPricingSkipped(flow.getAssetSymbol())) {
             return false;
         }
+        // D1 (ADR-054 §9): a principal TRANSFER leg on a cross-canonical staking/vault identity
+        // change must be priced. Both the disposed leg and the acquired receipt (e.g. mETH received
+        // when staking ETH on Bybit) enter the pricing chain so replay books a real cost basis
+        // instead of silently admitting a $0-basis acquisition that strips the underlying family's
+        // cost basis. Reuses the ADR-054 identity registry — no symbol/contract hardcoding.
+        if (isCrossCanonicalStakingPrincipal(transaction, flow)) {
+            return true;
+        }
         // Cycle/15 R5 F3: pegged-native TRANSFER pricing is venue-specific — evaluate BEFORE
         // isContinuityPrincipal, which would otherwise skip FA-001-linked Bybit corridor deposits.
         if (flow.getRole() == NormalizedLegRole.TRANSFER
@@ -82,9 +90,44 @@ public final class PriceableFlowPolicy {
                 && isLendingLoopPrincipalInflowType(transaction.getType())) {
             return true;
         }
+        // D4: LP exit fee-income legs (the R1 split off Collect − DecreaseLiquidity) are received at
+        // the exit block, so they need a market quote to book fee income at FMV in the tax lane
+        // (net lane stays $0 — zero-cost). Without this they land 100% unpriced (valueUsd=0) and the
+        // ~$24 ETH + ~$24 USDC of fee income is dropped. Pricing here does not double-count: the
+        // fee legs are the sole fee-income representation (principal is carried as return-of-capital).
+        if (flow.getRole() == NormalizedLegRole.LP_FEE_INCOME) {
+            return true;
+        }
         return flow.getRole() == NormalizedLegRole.FEE
                 || flow.getRole() == NormalizedLegRole.BUY
                 || flow.getRole() == NormalizedLegRole.SELL;
+    }
+
+    /**
+     * D1: {@code true} when {@code flow} is an economically significant ({@code quantityDelta}
+     * signum ≠ 0) principal {@code TRANSFER} leg of a cross-canonical staking/vault identity-change
+     * transaction (e.g. ETH → mETH).
+     *
+     * <p>Cross-canonical identity is decided at normalization time by the ADR-054 accounting C1/C2
+     * registry and persisted on the row as {@link NormalizedTransaction#getCrossCanonicalStakingConversion()}.
+     * The pricing layer reads that pre-stamped domain flag rather than importing the accounting
+     * registry (which the module boundary forbids) or re-deriving identity from pricing-domain
+     * canonical symbols (which diverges for same-family receipts such as mETH → cmETH). A same-family
+     * carry is never flagged, so it stays a continuity-carry leg rather than being force-priced.</p>
+     */
+    public static boolean isCrossCanonicalStakingPrincipal(
+            NormalizedTransaction transaction,
+            NormalizedTransaction.Flow flow
+    ) {
+        if (transaction == null || flow == null) {
+            return false;
+        }
+        if (!Boolean.TRUE.equals(transaction.getCrossCanonicalStakingConversion())) {
+            return false;
+        }
+        return flow.getRole() == NormalizedLegRole.TRANSFER
+                && flow.getQuantityDelta() != null
+                && flow.getQuantityDelta().signum() != 0;
     }
 
     public static boolean isContinuityPrincipal(

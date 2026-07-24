@@ -137,6 +137,36 @@ public class ReplayFlowSupport {
         genericFlowReplayEngine.restoreToPosition(carry, position);
     }
 
+    /**
+     * D3: LP-receipt pool basis restore that does not floor the net lane up to peg (preserves the
+     * reward-discounted pooled net and the {@code net ≤ tax} invariant). See
+     * {@link GenericFlowReplayEngine#restoreLpReceiptPoolBasis}.
+     */
+    public void restoreLpReceiptPoolBasis(
+            BigDecimal quantity,
+            PositionState position,
+            BigDecimal cost,
+            BigDecimal netCost,
+            BigDecimal uncoveredQuantity,
+            BigDecimal avco
+    ) {
+        genericFlowReplayEngine.restoreLpReceiptPoolBasis(quantity, position, cost, netCost, uncoveredQuantity, avco);
+    }
+
+    /** D1: authoritative-allocation LP restore (skips the tax-lane peg floor). */
+    public void restoreLpReceiptPoolBasis(
+            BigDecimal quantity,
+            PositionState position,
+            BigDecimal cost,
+            BigDecimal netCost,
+            BigDecimal uncoveredQuantity,
+            BigDecimal avco,
+            boolean applyTaxPegFloor
+    ) {
+        genericFlowReplayEngine.restoreLpReceiptPoolBasis(
+                quantity, position, cost, netCost, uncoveredQuantity, avco, applyTaxPegFloor);
+    }
+
     public void applyUnknownTransfer(NormalizedTransaction.Flow flow, PositionState position) {
         genericFlowReplayEngine.applyUnknownTransfer(flow, position);
     }
@@ -318,6 +348,8 @@ public class ReplayFlowSupport {
         flow.setInferenceReason(original.getInferenceReason());
         flow.setConfidence(original.getConfidence());
         flow.setLogIndex(original.getLogIndex());
+        // ADR-081 (C1): a transfer-shaped view of an LP-receipt leg is still an LP receipt.
+        flow.setLpReceipt(original.getLpReceipt());
         return flow;
     }
 
@@ -339,6 +371,8 @@ public class ReplayFlowSupport {
         copy.setAvcoAtTimeOfSale(original.getAvcoAtTimeOfSale());
         copy.setRealisedPnlUsd(original.getRealisedPnlUsd());
         copy.setLogIndex(original.getLogIndex());
+        // ADR-081 (C1): a split copy of an LP-receipt leg is still an LP receipt.
+        copy.setLpReceipt(original.getLpReceipt());
         return copy;
     }
 
@@ -379,6 +413,17 @@ public class ReplayFlowSupport {
         copy.setConfirmedAt(transaction.getConfirmedAt());
         copy.setClientId(transaction.getClientId());
         copy.setExternalCapitalBoundary(transaction.getExternalCapitalBoundary());
+        // WS-8 (ADR-074): preserve the network-neutral capability flags through the replay
+        // copy so they survive the AvcoReplayService.saveAll(updatedTransactions) write-back
+        // (same contract as externalCapitalBoundary above / acquisitionFeeUsd in the flow copy).
+        copy.setReceiptBearingCollateral(transaction.getReceiptBearingCollateral());
+        copy.setLpConcentrated(transaction.getLpConcentrated());
+        // ADR-072/ADR-079: preserve the off-chain custody flag so it survives the replay
+        // AvcoReplayService.saveAll(updatedTransactions) write-back (same contract as the flags above).
+        copy.setCustodialOffChain(transaction.getCustodialOffChain());
+        // D1 (ADR-054 §9): preserve the cross-canonical staking flag so it survives the replay
+        // AvcoReplayService.saveAll(updatedTransactions) write-back (same contract as the flags above).
+        copy.setCrossCanonicalStakingConversion(transaction.getCrossCanonicalStakingConversion());
         copy.setMissingDataReasons(transaction.getMissingDataReasons() == null
                 ? List.of()
                 : new ArrayList<>(transaction.getMissingDataReasons()));
@@ -405,6 +450,9 @@ public class ReplayFlowSupport {
                 // ADR-051: preserve buy-side fee signal through the replay copy so it survives
                 // the AvcoReplayService.saveAll(updatedTransactions) write-back.
                 flowCopy.setAcquisitionFeeUsd(flow.getAcquisitionFeeUsd());
+                // ADR-081 (C1): preserve the LP-receipt flag through the replay write-back copy so a
+                // CONFIRMED Meteora DAMM MLP receipt keeps its FAMILY:LP_RECEIPT stamp on re-runs.
+                flowCopy.setLpReceipt(flow.getLpReceipt());
                 copy.getFlows().add(flowCopy);
             }
         }

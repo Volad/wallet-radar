@@ -97,10 +97,14 @@ Single-tx; no continuity. See [linking](../pipeline/linking/02-rules-and-repairs
 All non-FEE legs priceable; SWAP_DERIVED if single canonical asset. See [pricing resolver chain](../pipeline/pricing/02-resolver-chain.md).
 
 #### Replay / AVCO
-GenericFlowReplayEngine BUY/SELL. See [replay handlers](../pipeline/replay/02-handlers.md).
+GenericFlowReplayEngine BUY/SELL. **Intra-cluster cross-canonical SWAP** (both principals in one
+staking cluster, e.g. cmETH↔ETH, cmETH↔PT-cmETH, SOL↔mSOL) routes to `CLUSTER_CARRY` and carries basis
+with **PnL = 0** (ADR-083) — realize is kept only for cluster↔non-cluster / cross-cluster swaps.
+See [replay handlers](../pipeline/replay/02-handlers.md).
 
 #### Ledger output
-Typical `BasisEffect` + `LifecycleKind`: ACQUIRE/DISPOSE SPOT. See [ledger points](ledger-points-and-basis-effects.md).
+Typical `BasisEffect` + `LifecycleKind`: ACQUIRE/DISPOSE SPOT; `REALLOCATE_OUT`/`REALLOCATE_IN` for an
+intra-cluster cluster-carry SWAP (ADR-083). See [ledger points](ledger-points-and-basis-effects.md).
 
 ### STAKING_DEPOSIT {#staking-deposit}
 
@@ -119,10 +123,13 @@ Custody continuity if correlated. See [linking](../pipeline/linking/02-rules-and
 Deposit leg priced. See [pricing resolver chain](../pipeline/pricing/02-resolver-chain.md).
 
 #### Replay / AVCO
-Custody handler or generic BUY. See [replay handlers](../pipeline/replay/02-handlers.md).
+Custody handler or generic BUY. **Intra-cluster cross-canonical deposit** (ETH→mETH, AVAX→sAVAX,
+SOL→mSOL) routes to `CLUSTER_CARRY` and carries basis with **PnL = 0** (ADR-083), superseding the
+former ADR-054 §2 realize-at-market. See [replay handlers](../pipeline/replay/02-handlers.md).
 
 #### Ledger output
-Typical `BasisEffect` + `LifecycleKind`: CARRY_OUT/CARRY_IN or ACQUIRE CUSTODY. See [ledger points](ledger-points-and-basis-effects.md).
+Typical `BasisEffect` + `LifecycleKind`: CARRY_OUT/CARRY_IN or ACQUIRE CUSTODY;
+`REALLOCATE_OUT`/`REALLOCATE_IN` for an intra-cluster cluster-carry deposit (ADR-083). See [ledger points](ledger-points-and-basis-effects.md).
 
 ### STAKING_WITHDRAW_REQUEST {#staking-withdraw-request}
 

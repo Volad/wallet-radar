@@ -102,7 +102,7 @@ final class LendingFactualApyCalculator {
         if (Duration.between(input.startTimestamp(), input.endTimestamp()).compareTo(MIN_EXPOSURE_WINDOW) < 0) {
             return SHORT_EXPOSURE_WINDOW;
         }
-        boolean hasSupplyDenominator = input.openingDepositByAsset().values().stream().anyMatch(value -> value.signum() > 0);
+        boolean hasSupplyDenominator = hasPositive(input.timeWeightedSupplyPrincipalByAsset());
         boolean hasBorrowDenominator = input.borrowedByAsset().values().stream().anyMatch(value -> value.signum() > 0);
         if (!hasSupplyDenominator && !hasBorrowDenominator) {
             return "MISSING_TIME_WEIGHTED_DENOMINATOR";
@@ -127,23 +127,28 @@ final class LendingFactualApyCalculator {
 
     private static Map<String, BigDecimal> factualSupplyAprByAsset(Input input, BigDecimal seconds) {
         Map<String, BigDecimal> result = new LinkedHashMap<>();
-        for (Map.Entry<String, BigDecimal> entry : input.openingDepositByAsset().entrySet()) {
+        // Iterate the exposure map (time-weighted average principal), NOT the first deposit: income
+        // accrues on the whole outstanding principal, so the denominator must be time-weighted.
+        for (Map.Entry<String, BigDecimal> entry : input.timeWeightedSupplyPrincipalByAsset().entrySet()) {
             String asset = entry.getKey();
-            BigDecimal openingSupplyQty = entry.getValue();
-            if (openingSupplyQty == null || openingSupplyQty.signum() <= 0) {
+            BigDecimal exposureQty = entry.getValue();
+            if (exposureQty == null || exposureQty.signum() <= 0) {
                 continue;
             }
+            // Income cost-basis uses TOTAL principal deposited over the cycle (sum of all deposits),
+            // never the first deposit nor the time-weighted average.
+            BigDecimal totalPrincipalQty = input.totalSupplyPrincipalByAsset().getOrDefault(asset, exposureQty);
             BigDecimal withdrawYieldQty = input.withdrawYieldByAsset().getOrDefault(asset, BigDecimal.ZERO);
             BigDecimal income;
             if (positive(input.internalReceiptMovementByAsset().get(asset))) {
                 BigDecimal principalOutCash = input.principalOutCashByAsset().getOrDefault(asset, BigDecimal.ZERO);
-                income = principalOutCash.subtract(openingSupplyQty, MC);
+                income = principalOutCash.subtract(totalPrincipalQty, MC);
             } else if (withdrawYieldQty.signum() > 0) {
                 income = withdrawYieldQty;
             } else {
                 continue;
             }
-            result.put(asset, apr(income, openingSupplyQty, seconds));
+            result.put(asset, apr(income, exposureQty, seconds));
         }
         return result;
     }
@@ -171,7 +176,12 @@ final class LendingFactualApyCalculator {
             if (accrual.signum() == 0) {
                 continue;
             }
-            result.put(asset, apr(accrual, borrowedQty, seconds));
+            // Denominator = time-weighted average outstanding borrow, falling back to total-ever-borrowed
+            // when the timeline is unavailable so nothing regresses to null.
+            BigDecimal exposureQty = positive(input.timeWeightedBorrowPrincipalByAsset().get(asset))
+                    ? input.timeWeightedBorrowPrincipalByAsset().get(asset)
+                    : borrowedQty;
+            result.put(asset, apr(accrual, exposureQty, seconds));
         }
         return result;
     }
@@ -184,7 +194,7 @@ final class LendingFactualApyCalculator {
         if (!supplyApr.isEmpty() || !borrowApr.isEmpty()) {
             return "ESTIMATED";
         }
-        boolean hasSupplyExposure = input.openingDepositByAsset().values().stream().anyMatch(value -> value.signum() > 0);
+        boolean hasSupplyExposure = hasPositive(input.timeWeightedSupplyPrincipalByAsset());
         if (hasSupplyExposure) {
             return "UNAVAILABLE";
         }
@@ -199,11 +209,15 @@ final class LendingFactualApyCalculator {
         if (!"UNAVAILABLE".equals(apyPrecision)) {
             return null;
         }
-        boolean hasSupplyExposure = input.openingDepositByAsset().values().stream().anyMatch(value -> value.signum() > 0);
+        boolean hasSupplyExposure = hasPositive(input.timeWeightedSupplyPrincipalByAsset());
         if (hasSupplyExposure && supplyApr.isEmpty()) {
             return NO_YIELD_FLOW_EVIDENCE;
         }
         return null;
+    }
+
+    private static boolean hasPositive(Map<String, BigDecimal> source) {
+        return source != null && source.values().stream().anyMatch(value -> value != null && value.signum() > 0);
     }
 
     private static BigDecimal apr(BigDecimal income, BigDecimal exposure, BigDecimal seconds) {
@@ -254,14 +268,30 @@ final class LendingFactualApyCalculator {
         return value != null && value.signum() > 0;
     }
 
+    /**
+     * @param timeWeightedSupplyPrincipalByAsset time-weighted average supply principal over [start, end]
+     *                                            — the APR/APY <em>exposure denominator</em> for supply
+     *                                            (income accrues on the whole outstanding principal, so
+     *                                            the first deposit alone would overstate the rate).
+     * @param totalSupplyPrincipalByAsset         total principal deposited over the cycle (sum of every
+     *                                            deposit) — the income <em>cost-basis</em> for the
+     *                                            internal-receipt-movement branch, never the denominator.
+     * @param timeWeightedBorrowPrincipalByAsset  time-weighted average outstanding borrow over [start, end]
+     *                                            — the borrow APR exposure denominator (falls back to
+     *                                            {@code borrowedByAsset} when the timeline is empty).
+     * @param borrowedByAsset                     total-ever-borrowed per asset — drives borrow iteration
+     *                                            and the accrual (interest) numerator.
+     */
     record Input(
             String status,
             Instant startTimestamp,
             Instant endTimestamp,
-            Map<String, BigDecimal> openingDepositByAsset,
+            Map<String, BigDecimal> timeWeightedSupplyPrincipalByAsset,
+            Map<String, BigDecimal> totalSupplyPrincipalByAsset,
             Map<String, BigDecimal> withdrawYieldByAsset,
             Map<String, BigDecimal> principalOutCashByAsset,
             Map<String, BigDecimal> internalReceiptMovementByAsset,
+            Map<String, BigDecimal> timeWeightedBorrowPrincipalByAsset,
             Map<String, BigDecimal> borrowedByAsset,
             Map<String, BigDecimal> repaidByAsset,
             Map<String, BigDecimal> currentDebtByAsset,

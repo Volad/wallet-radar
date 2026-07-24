@@ -141,6 +141,16 @@ public class UnmatchedBridgeInboundPricingFallbackService {
                 pairedMoveBasisSkipped++;
                 continue;
             }
+            if (hasLinkedContinuityInbound(outbound)) {
+                // B2a: a cross-asset custody round-trip (weETH+ETH vault deposit → withdrawal) is a
+                // linked bridge continuity pair whose dominant-flow families differ, so
+                // supportsPlainMoveBasis() (single dominant-flow check) does not recognise it. Its
+                // principal legs still carry basis per family through the bridge continuity queue at
+                // replay, so the OUT must NOT be demoted to a market SELL — that would strand the
+                // parked basis and re-create the very destruction this linking fixes.
+                pairedMoveBasisSkipped++;
+                continue;
+            }
             if (hasSupplementalMoveBasisLinkage(outbound)) {
                 // Supplemental LI.FI source anchored to a shared destination: replay carries basis via
                 // LINKED:<sourceHash> on the destination IN leg. Repricing here oscillates with LiFi
@@ -176,6 +186,31 @@ public class UnmatchedBridgeInboundPricingFallbackService {
      */
     private boolean hasPairedMoveBasisInbound(NormalizedTransaction outbound) {
         return loadPairedMoveBasisInbound(outbound) != null;
+    }
+
+    /**
+     * B2a: {@code true} when this {@code BRIDGE_OUT} is one leg of a linked bridge continuity pair —
+     * a sibling {@code BRIDGE_IN} shares its {@code correlationId} and both are
+     * {@code continuityCandidate=true}. Such pairs carry basis per family through the bridge
+     * continuity queue at replay regardless of whether their dominant flows share an asset family
+     * (cross-asset custody round-trips do not), so the OUT must never be repriced/demoted here.
+     */
+    private boolean hasLinkedContinuityInbound(NormalizedTransaction outbound) {
+        if (outbound == null
+                || outbound.getCorrelationId() == null
+                || outbound.getCorrelationId().isBlank()
+                || !Boolean.TRUE.equals(outbound.getContinuityCandidate())) {
+            return false;
+        }
+        Query query = Query.query(new Criteria().andOperator(
+                Criteria.where("correlationId").is(outbound.getCorrelationId()),
+                Criteria.where("_id").ne(outbound.getId()),
+                Criteria.where("type").is(NormalizedTransactionType.BRIDGE_IN),
+                Criteria.where("continuityCandidate").is(true)
+        ));
+        query.fields().include("_id");
+        query.limit(1);
+        return mongoOperations.findOne(query, NormalizedTransaction.class) != null;
     }
 
     private boolean hasSupplementalMoveBasisLinkage(NormalizedTransaction outbound) {

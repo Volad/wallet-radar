@@ -5,6 +5,7 @@ import com.walletradar.domain.transaction.normalized.NormalizedTransactionStatus
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.application.normalization.pipeline.onchain.OnChainRawTransactionView;
+import com.walletradar.domain.common.NetworkId;
 import org.bson.Document;
 import org.junit.jupiter.api.Test;
 
@@ -92,6 +93,7 @@ class ClarificationPolicyServiceTest {
     void receiptEligibilityUsesCentralizedAllowlistContract() {
         ClarificationPolicyService service = new ClarificationPolicyService();
         NormalizedTransaction normalizedTransaction = new NormalizedTransaction()
+                .setNetworkId(NetworkId.BASE)
                 .setType(NormalizedTransactionType.UNKNOWN)
                 .setStatus(NormalizedTransactionStatus.NEEDS_REVIEW)
                 .setMissingDataReasons(List.of(ClassificationReasonCode.CLASSIFICATION_FAILED.code()));
@@ -103,9 +105,35 @@ class ClarificationPolicyServiceTest {
     }
 
     @Test
+    void receiptEligibilityRejectsNonEvmSolanaAndTonReviewRows() {
+        ClarificationPolicyService service = new ClarificationPolicyService();
+
+        NormalizedTransaction solanaReview = new NormalizedTransaction()
+                .setNetworkId(NetworkId.SOLANA)
+                .setType(NormalizedTransactionType.UNKNOWN)
+                .setStatus(NormalizedTransactionStatus.NEEDS_REVIEW)
+                .setMissingDataReasons(List.of(ClassificationReasonCode.CLASSIFICATION_FAILED.code()));
+        NormalizedTransaction tonPendingClarification = new NormalizedTransaction()
+                .setNetworkId(NetworkId.TON)
+                .setType(NormalizedTransactionType.UNKNOWN)
+                .setStatus(NormalizedTransactionStatus.PENDING_CLARIFICATION)
+                .setMissingDataReasons(List.of(ClassificationReasonCode.CLASSIFICATION_FAILED.code()));
+
+        assertThat(service.isReceiptClarificationEligible(
+                solanaReview,
+                OnChainRawTransactionView.wrap(reviewTailRaw())
+        )).isFalse();
+        assertThat(service.isReceiptClarificationEligible(
+                tonPendingClarification,
+                OnChainRawTransactionView.wrap(reviewTailRaw())
+        )).isFalse();
+    }
+
+    @Test
     void receiptEligibilityKeepsEulerBatchRowsRetryableWhenOnlyReceiptLogsPersisted() {
         ClarificationPolicyService service = new ClarificationPolicyService();
         NormalizedTransaction normalizedTransaction = new NormalizedTransaction()
+                .setNetworkId(NetworkId.AVALANCHE)
                 .setType(NormalizedTransactionType.UNKNOWN)
                 .setStatus(NormalizedTransactionStatus.NEEDS_REVIEW)
                 .setProtocolName("Euler")

@@ -180,6 +180,15 @@ export interface TokenPosition {
   readonly realizedPnlUsd: number;
   /** ADR-062 break-even (effective-cost) per unit; null when no covered qty. */
   readonly breakEvenUsd: number | null;
+  /**
+   * ADR-062 §5 "Average cost" = family-level weighted market cost basis ÷ ETH-equivalent covered quantity
+   * (parity with the move-basis page header). Equals `avcoUsd` for a single-wallet family; null when unusable.
+   */
+  readonly averageCostUsd: number | null;
+  /** ADR-062 deviation guard: coveredQuantity / quantity in [0,1]; null when quantity is zero. */
+  readonly coveredRatio: number | null;
+  /** ADR-062 deviation guard: true when a $0 break-even is a low-coverage artifact (suppress display). */
+  readonly breakEvenSuppressed: boolean;
   /** ADR-062: realized profit beyond remaining basis (>0 means already past break-even). */
   readonly lockedSurplusUsd: number;
   /** ADR-062: zero-basis income (yield/rewards/funding) booked to this family's cluster; informational. */

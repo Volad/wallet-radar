@@ -122,6 +122,84 @@ class IdempotentNormalizedTransactionStoreTest {
                 .isEqualByComparingTo("0.228");
     }
 
+    @Test
+    @DisplayName("ADR-081 C1: confirmed merge restores lpReceipt onto an existing CONFIRMED MLP flow")
+    void confirmedMergeRestoresLpReceiptFlagOnMlpFlow() {
+        IdempotentNormalizedTransactionStore store = new IdempotentNormalizedTransactionStore(repository, emptyProviders());
+
+        // Existing CONFIRMED Solana DAMM row was written before lpReceipt existed / after a copy cycle
+        // dropped it: correlation preserved, MLP flow present, but lpReceipt absent (null).
+        NormalizedTransaction existing = normalized("sol-damm-1", Instant.parse("2026-03-19T10:00:00Z"));
+        existing.setNetworkId(NetworkId.SOLANA);
+        existing.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        NormalizedTransaction.Flow existingMlp = new NormalizedTransaction.Flow();
+        existingMlp.setRole(com.walletradar.domain.transaction.normalized.NormalizedLegRole.TRANSFER);
+        existingMlp.setAssetSymbol("MLP");
+        existingMlp.setAssetContract("6fymg7doag2taxdmp7nhnvhbkqxsorodzmdxnrmzwftf");
+        existingMlp.setQuantityDelta(new java.math.BigDecimal("0.3096"));
+        existing.setFlows(new java.util.ArrayList<>(java.util.List.of(existingMlp)));
+
+        // Candidate is a fresh re-normalization: the DAMM resolver re-derived lpReceipt=true.
+        NormalizedTransaction candidate = normalized("sol-damm-1", Instant.parse("2026-03-19T11:00:00Z"));
+        candidate.setNetworkId(NetworkId.SOLANA);
+        candidate.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        NormalizedTransaction.Flow candidateMlp = new NormalizedTransaction.Flow();
+        candidateMlp.setRole(com.walletradar.domain.transaction.normalized.NormalizedLegRole.TRANSFER);
+        candidateMlp.setAssetSymbol("MLP");
+        candidateMlp.setAssetContract("6fymg7doag2taxdmp7nhnvhbkqxsorodzmdxnrmzwftf");
+        candidateMlp.setQuantityDelta(new java.math.BigDecimal("0.3096"));
+        candidateMlp.setLpReceipt(Boolean.TRUE);
+        candidate.setFlows(java.util.List.of(candidateMlp));
+
+        when(repository.findById("sol-damm-1")).thenReturn(Optional.of(existing));
+        when(repository.save(org.mockito.ArgumentMatchers.any())).thenAnswer(inv -> inv.getArgument(0));
+
+        store.upsert(candidate);
+
+        ArgumentCaptor<NormalizedTransaction> savedCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
+        verify(repository).save(savedCaptor.capture());
+        NormalizedTransaction.Flow savedMlp = savedCaptor.getValue().getFlows().stream()
+                .filter(f -> "MLP".equals(f.getAssetSymbol())).findFirst().orElseThrow();
+        assertThat(savedMlp.getLpReceipt())
+                .as("lpReceipt must refresh on a CONFIRMED MLP flow from the candidate")
+                .isTrue();
+    }
+
+    @Test
+    @DisplayName("WS-8: confirmed merge propagates capability flags from candidate (survives re-normalization)")
+    void confirmedMergePropagatesWs8CapabilityFlagsFromCandidate() {
+        IdempotentNormalizedTransactionStore store = new IdempotentNormalizedTransactionStore(repository, emptyProviders());
+
+        // Existing CONFIRMED row was written before the flags were re-derived (both null) — the
+        // signature seen in prod for Solana rows: correlation preserved, capability flags absent.
+        NormalizedTransaction existing = normalized("sol-lp-1", Instant.parse("2026-03-19T10:00:00Z"));
+        existing.setNetworkId(NetworkId.SOLANA);
+        existing.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        existing.setReceiptBearingCollateral(null);
+        existing.setLpConcentrated(null);
+
+        // Candidate is a fresh re-normalization: the ingestion-plane stamper already set the flags.
+        NormalizedTransaction candidate = normalized("sol-lp-1", Instant.parse("2026-03-19T11:00:00Z"));
+        candidate.setNetworkId(NetworkId.SOLANA);
+        candidate.setStatus(NormalizedTransactionStatus.CONFIRMED);
+        candidate.setReceiptBearingCollateral(false);
+        candidate.setLpConcentrated(true);
+
+        when(repository.findById("sol-lp-1")).thenReturn(Optional.of(existing));
+        when(repository.save(org.mockito.ArgumentMatchers.any())).thenAnswer(inv -> inv.getArgument(0));
+
+        store.upsert(candidate);
+
+        ArgumentCaptor<NormalizedTransaction> savedCaptor = ArgumentCaptor.forClass(NormalizedTransaction.class);
+        verify(repository).save(savedCaptor.capture());
+        assertThat(savedCaptor.getValue().getReceiptBearingCollateral())
+                .as("receiptBearingCollateral must refresh on a CONFIRMED row from the candidate")
+                .isFalse();
+        assertThat(savedCaptor.getValue().getLpConcentrated())
+                .as("lpConcentrated must refresh on a CONFIRMED row from the candidate")
+                .isTrue();
+    }
+
     private static NormalizedTransaction normalized(String id, Instant createdAt) {
         NormalizedTransaction normalizedTransaction = new NormalizedTransaction();
         normalizedTransaction.setId(id);

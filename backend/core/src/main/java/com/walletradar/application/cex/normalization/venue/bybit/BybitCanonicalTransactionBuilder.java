@@ -1,5 +1,6 @@
 package com.walletradar.application.cex.normalization.venue.bybit;
 
+import com.walletradar.application.costbasis.support.AccountingAssetClassificationSupport;
 import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
 import com.walletradar.domain.common.Decimal128Support;
 import com.walletradar.domain.common.NetworkAddressFormat;
@@ -473,7 +474,17 @@ public class BybitCanonicalTransactionBuilder {
                 && flow.getQuantityDelta().signum() > 0
                 && (transaction.getType() == NormalizedTransactionType.INTERNAL_TRANSFER
                 || transaction.getType() == NormalizedTransactionType.EXTERNAL_TRANSFER_IN));
-        if (hasBuyOrSell || hasPeggedNativeTransfer) {
+        // D1 (ADR-054 §9): a cross-canonical staking/vault identity change (e.g. ETH → mETH) disposes
+        // one canonical asset and acquires a distinct one on TRANSFER legs. It must enter the pricing
+        // chain so both principal legs receive a market quote; otherwise the acquired receipt lands
+        // $0-basis and strips the disposed family's cost basis. Stamp the venue-neutral flag once here
+        // via the ADR-054 accounting identity registry (single source of truth, no symbol hardcode).
+        boolean crossCanonicalStaking =
+                AccountingAssetClassificationSupport.isCrossCanonicalStakingVaultConversion(transaction);
+        if (crossCanonicalStaking) {
+            transaction.setCrossCanonicalStakingConversion(Boolean.TRUE);
+        }
+        if (hasBuyOrSell || hasPeggedNativeTransfer || crossCanonicalStaking) {
             transaction.setStatus(NormalizedTransactionStatus.PENDING_PRICE);
             return;
         }

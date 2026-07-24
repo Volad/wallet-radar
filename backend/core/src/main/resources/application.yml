@@ -72,6 +72,15 @@ walletradar:
           version: "v3"
     health-factor:
       refresh-interval-ms: 600000
+    # Jupiter Lend Borrow API (WS-3): live SOL collateral / USDT debt / HF for receipt-less Solana
+    # lending. api-key => keyed host api.jup.ag; blank => no-key lite-api.jup.ag. Background-only.
+    jupiter:
+      enabled: true
+      api-key: ${JUPITER_API_KEY:}
+      base-url: ${JUPITER_LEND_BASE_URL:}
+      market: main
+      timeout-ms: 5000
+      min-request-interval-ms: 250
   liquidity-pools:
     enabled: true
     refresh-interval-ms: 3600000
@@ -79,6 +88,11 @@ walletradar:
     depth-interval-ms: 21600000  # pool liquidity histogram cache TTL (6h); position TVL/fees still refresh on demand
     stale-multiplier: 2
     dust-threshold-usd: 10
+    solana:
+      enabled: true
+      meteora-base-url: https://dlmm.datapi.meteora.ag
+      raydium-base-url: https://api-v3.raydium.io
+      timeout-ms: 8000
   ingestion:
     # Backfill window counted back from the current head.
     # Defaults are calibrated from live chain data with a small safety margin.
@@ -177,10 +191,12 @@ walletradar:
           enabled: true
           base-url: https://rpc.ankr.com/multichain/${ANKR_API_KEY:}
         urls:
-          - https://rpc.ankr.com/optimism/${ANKR_API_KEY:}
-          - https://lb.drpc.live/optimism/${DRPC_API_KEY:}
+          # Public endpoints first: the Ankr key's plan does not grant the standalone Optimism path
+          # (returns 403 Forbidden), which otherwise pollutes the round-robin rotation and makes
+          # on-chain eth_call reads (LP pair / gauge resolution, balances) intermittently fail.
           - https://mainnet.optimism.io
           - https://optimism.drpc.org
+          - https://lb.drpc.live/optimism/${DRPC_API_KEY:}
         batch-block-size: 1000
         window-blocks: 34000000    # measured ~2y span as of 2026-03-09, rounded +5%
         avg-block-time-seconds: 2.0
@@ -337,18 +353,60 @@ walletradar:
         batch-block-size: 1000
         window-blocks: 43000000    # measured ~2y span as of 2026-03-09, rounded +5%
         avg-block-time-seconds: 1.0
+      # Primary acquisition = Helius Enhanced Transactions REST (see walletradar.ingestion.solana.helius).
+      # network.SOLANA.urls only feeds the JSON-RPC fallback adapter's endpoint rotator
+      # (getSignaturesForAddress); when unset it falls back to solanaDefaultRpcEndpointRotator.
       SOLANA:
         syncMethod: RPC
-        fullIndex: false
+        fullIndex: true
+        # 2-year backfill window. Measured block time ≈ 0.41 s/block (slot 428200176→433700175
+        # spans 26d). Without this override SOLANA inherited backfill.window-blocks=5.5M ≈ 26 days.
+        # 2y = 63.1M s / 0.41 ≈ 154M blocks, +7% safety.
+        window-blocks: 165000000
+        avg-block-time-seconds: 0.41
         urls:
-          - https://api.mainnet-beta.solana.com
+          - ${SOLANA_HELIUS_RPC_URL:https://api.mainnet-beta.solana.com}
+      # Acquisition = TON Center v3 (see walletradar.ingestion.ton). TON is excluded from both the
+      # EVM and Solana endpoint rotators, so it has no network.TON.urls — the adapter uses ton.base-url.
       TON:
         syncMethod: RPC
-        fullIndex: false
-        urls: []
+        fullIndex: true
+        # 2-year backfill window. Measured block time ≈ 0.41 s/block (seqno 75026830→80526829
+        # spans 25.9d). Without this override TON inherited backfill.window-blocks=5.5M ≈ 26 days.
+        # 2y = 63.1M s / 0.41 ≈ 154M blocks, +7% safety.
+        window-blocks: 165000000
+        avg-block-time-seconds: 0.41
     solana:
       # Max signatures per getSignaturesForAddress call (1-1000). Rate/batch limit.
       signatures-limit: 1000
+      helius:
+        # Client-side request-rate gate spacing ALL Helius traffic (Enhanced REST + RPC ATA path).
+        # 250 ms => <=4 req/s, keeping the single-segment 2-year backfill burst under Helius limits.
+        min-request-interval-millis: ${SOLANA_HELIUS_MIN_REQUEST_INTERVAL_MS:250}
+        # Helius Enhanced Transactions REST API endpoints.
+        # Option A: standalone API key — URLs derived automatically from standard Helius endpoints.
+        api-key: ${SOLANA_HELIUS_RPC_API_KEY:}
+        # Option B: explicit full URLs (override api-key derivation when set).
+        parse-transactions-url: ${SOLANA_HELIUS_PARSE_TRANSACTIONS_URL:}
+        # Template: replace {address} with the wallet address.
+        parse-transactions-history-url: ${SOLANA_HELIUS_PARSE_TRANSACTIONS_HISTORY_URL:}
+    ton:
+      base-url: ${TON_API_BASE_URL:https://toncenter.com/api/v3}
+      api-key: ${TONCENTER_API_KEY:${TON_API_KEY:}}
+      page-size: 100
+      # /jetton/transfers is flaky on the free tier (spurious count=0 / timeouts on
+      # consecutive identical calls). Retry on timeout / 5xx / empty before giving up.
+      jetton-fetch-max-attempts: 3
+      jetton-fetch-backoff-millis: 300
+      # Live jetton-master metadata resolution (WS-7): descriptor override → token_metadata_cache →
+      # this live resolver (write-through). Free tier is ~1 rps, so a dedicated client-side throttle
+      # spaces requests to avoid a ban during the first full renormalization.
+      metadata:
+        enabled: ${TON_METADATA_ENABLED:true}
+        base-url: ${TON_API_BASE_URL:https://toncenter.com/api/v3}
+        api-key: ${TONCENTER_API_KEY:${TON_API_KEY:}}
+        timeout-ms: ${TON_METADATA_TIMEOUT_MS:10000}
+        min-request-interval-ms: ${TON_METADATA_MIN_REQUEST_INTERVAL_MS:1000}
     # RPC retry: exponential backoff ± jitter. Defaults: base-delay-ms=1000, jitter-factor=0.2, max-attempts=5
     retry:
       base-delay-ms: 2000
@@ -464,6 +522,28 @@ walletradar:
       divergence-tolerance-pct: 0.05
       stale-after-ms: 5400000
       registry-prune-ttl-days: 7
+    # Free-tier Jupiter (Solana) SPL metadata resolution + SPL USD pricing (ADR-068).
+    # api-key => keyed host api.jup.ag with x-api-key header; blank => no-key lite-api.jup.ag.
+    jupiter:
+      enabled: true
+      api-key: ${JUPITER_API_KEY:}
+      # Explicit URL overrides (blank => derived from api-key presence). token-url must contain {mint}.
+      price-url: ${JUPITER_PRICE_URL:}
+      token-url: ${JUPITER_TOKEN_URL:}
+      timeout-ms: ${JUPITER_TIMEOUT_MS:5000}
+      # Client-side request-rate gate spacing all Jupiter traffic (metadata + price).
+      min-request-interval-ms: ${JUPITER_MIN_REQUEST_INTERVAL_MS:250}
+      # Price v3 caps at 50 mint ids per request.
+      max-ids-per-request: 50
+      cache-max-size: 10000
+      cache-ttl-hours: 24
+    # Free-tier STON.fi (TON) jetton USD marks (ADR-068 / WS-6). Fallback current-mark source for
+    # TON jettons (STON, XAUt, other DEX-listed jettons) via the public /v1/assets feed.
+    ton:
+      enabled: ${TON_PRICE_ENABLED:true}
+      base-url: ${TON_PRICE_BASE_URL:https://api.ston.fi/v1}
+      timeout-ms: ${TON_PRICE_TIMEOUT_MS:10000}
+      min-request-interval-ms: ${TON_PRICE_MIN_REQUEST_INTERVAL_MS:250}
     enabled: true
     bridge-out:
       upstream-lookback-hours: 24

@@ -97,7 +97,7 @@ class CanonicalAssetCatalogTest {
     @Test
     void pricingSkippedLowCapSymbolsAreMarkedSkippedAndHaveNoCoinGeckoId() {
         // Cycle/9 S5: known low-cap / delisted symbols with no resolvable historical USD source.
-        for (String symbol : new String[] {"PAWS", "AURA", "EUL", "AGLD", "WLKN", "CUDIS", "TON"}) {
+        for (String symbol : new String[] {"PAWS", "AURA", "EUL", "AGLD", "WLKN", "CUDIS"}) {
             assertThat(CanonicalAssetCatalog.isPricingSkipped(symbol))
                     .as("expected %s to be pricing-skipped", symbol)
                     .isTrue();
@@ -105,6 +105,13 @@ class CanonicalAssetCatalogTest {
                     .as("expected no CoinGecko id for %s", symbol)
                     .isEmpty();
         }
+    }
+
+    @Test
+    void tonIsPriceableViaCoinGeckoAndNotSkipped() {
+        // PR3 / RC-T1.5: TON pricing re-enabled (native TON + jetton inbound legs must be priceable).
+        assertThat(CanonicalAssetCatalog.isPricingSkipped("TON")).isFalse();
+        assertThat(CanonicalAssetCatalog.coinGeckoId("TON")).contains("the-open-network");
     }
 
     @Test
@@ -213,5 +220,36 @@ class CanonicalAssetCatalogTest {
     @Test
     void xrpResolvesCanonicalPricingIdentity() {
         assertThat(CanonicalAssetCatalog.coinGeckoId("XRP")).contains("ripple");
+    }
+
+    @Test
+    void wrappedSolCanonicalisesToNativeSol() {
+        // WS-6 (B4): wSOL is price-identical to native SOL — canonicalise so a wSOL swap leg is not a
+        // distinct asset and does not trip the SwapDerivedPriceResolver circular guard.
+        assertThat(CanonicalAssetCatalog.canonicalMarketSymbol("wSOL")).isEqualTo("SOL");
+        assertThat(CanonicalAssetCatalog.sameCanonicalSymbol("wSOL", "SOL")).isTrue();
+    }
+
+    @Test
+    void xStockJettonsCanonicaliseToEquityUnderlyingAndAreEquityBacked() {
+        // WS-6 (B4): xStock TON jettons map to their equity ticker (identity only, no hardcoded price)
+        // and are flagged equity-backed so the tracked registry stamps EQUITY kind.
+        assertThat(CanonicalAssetCatalog.canonicalMarketSymbol("AMZNx")).isEqualTo("AMZN");
+        assertThat(CanonicalAssetCatalog.canonicalMarketSymbol("MSTRx")).isEqualTo("MSTR");
+        assertThat(CanonicalAssetCatalog.isEquityBacked("AMZNx")).isTrue();
+        assertThat(CanonicalAssetCatalog.isEquityBacked("MSTRx")).isTrue();
+        assertThat(CanonicalAssetCatalog.isEquityBacked("MSTR")).isTrue();
+        // Ordinary crypto is not equity-backed.
+        assertThat(CanonicalAssetCatalog.isEquityBacked("SOL")).isFalse();
+        assertThat(CanonicalAssetCatalog.isEquityBacked("STON")).isFalse();
+    }
+
+    @Test
+    void tonGoldJettonCanonicalisesToXautWithExternalFallback() {
+        // WS-6 (B4): XAUt0 (TON tokenised gold) → canonical XAUT with a CoinGecko fallback for the
+        // historical/external chain; current marks come from the TON jetton price provider.
+        assertThat(CanonicalAssetCatalog.canonicalMarketSymbol("XAUT0")).isEqualTo("XAUT");
+        assertThat(CanonicalAssetCatalog.coinGeckoId("XAUT0")).contains("tether-gold");
+        assertThat(CanonicalAssetCatalog.isEquityBacked("XAUT0")).isFalse();
     }
 }

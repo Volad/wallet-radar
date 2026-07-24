@@ -18,8 +18,25 @@ public class LpOnChainEnrichmentService {
     private final List<LpSnapshotEnricher> enrichers;
     private final LpPositionSnapshotService snapshotService;
 
+    /**
+     * True when at least one reader opts in to enriching this (typically closed) context. Used by the
+     * refresh service to allow a closed position — e.g. a closed Solana Meteora position whose pair
+     * can still be resolved from the captured LbPair pool — through the otherwise open-only refresh.
+     */
+    public boolean supportsClosed(LpPositionContext context) {
+        return context != null && readers.stream().anyMatch(reader -> reader.supports(context));
+    }
+
     public EnrichmentResult enrich(LpPositionContext context) {
-        if (context == null || context.closed()) {
+        if (context == null) {
+            return EnrichmentResult.empty();
+        }
+        // A closed context is normally a no-op, but readers may opt in to a closed context (e.g. the
+        // Solana Meteora reader resolves the token pair of a closed position from the shared LbPair
+        // pool it captured at normalization). Each reader gates on context.closed() in its own
+        // supports(), so delegating here is safe: only readers that explicitly support the closed
+        // context run, and everything else falls through to the empty result below.
+        if (context.closed() && readers.stream().noneMatch(reader -> reader.supports(context))) {
             return EnrichmentResult.empty();
         }
         String lastError = null;

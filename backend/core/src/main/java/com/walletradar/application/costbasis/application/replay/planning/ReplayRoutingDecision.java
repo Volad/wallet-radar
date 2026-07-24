@@ -12,8 +12,8 @@ public record ReplayRoutingDecision(
         return new ReplayRoutingDecision(route, LiquidStakingFlowSelection.empty(), SimpleFamilyCustodySelection.empty());
     }
 
-    public static ReplayRoutingDecision liquidStaking(LiquidStakingFlowSelection selection) {
-        return new ReplayRoutingDecision(ReplayRoute.LIQUID_STAKING, selection, SimpleFamilyCustodySelection.empty());
+    public static ReplayRoutingDecision clusterCarry(LiquidStakingFlowSelection selection) {
+        return new ReplayRoutingDecision(ReplayRoute.CLUSTER_CARRY, selection, SimpleFamilyCustodySelection.empty());
     }
 
     public static ReplayRoutingDecision familyEquivalentCustody(SimpleFamilyCustodySelection selection) {

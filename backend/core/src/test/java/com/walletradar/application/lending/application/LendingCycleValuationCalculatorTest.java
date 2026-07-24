@@ -43,6 +43,38 @@ class LendingCycleValuationCalculatorTest {
     }
 
     @Test
+    void openCycleUsesLiveOutstandingBorrowWhenProvided() {
+        // Receipt-less Solana loop: deposited $990 of SOL, borrowed $210 principal, live debt has
+        // accrued to $233 and current SOL collateral is $421. Running PnL must subtract the live
+        // debt (233), not the 210 principal, so the accrued borrow interest is captured.
+        LendingCycleValuationCalculator.Input input = new LendingCycleValuationCalculator.Input(
+                "OPEN",
+                new BigDecimal("990.87"),      // principalInUsd
+                new BigDecimal("200.59"),      // principalOutUsd (a withdraw)
+                new BigDecimal("210"),         // borrowedUsd (principal)
+                BigDecimal.ZERO,               // repaidUsd
+                BigDecimal.ZERO,               // rewardsUsd
+                BigDecimal.ZERO,               // feesUsd
+                BigDecimal.ZERO,               // gasUsd
+                new BigDecimal("421.02"),      // currentUsdValue (live SOL collateral)
+                new BigDecimal("233.39"),      // liveOutstandingBorrowUsd (incl. accrued interest)
+                null,
+                "UNAVAILABLE",
+                false,
+                false,
+                false,
+                false
+        );
+
+        LendingTotalValuationView result = LendingCycleValuationCalculator.calculate(input);
+
+        // totalUsdPnl = 200.59 + 210 - 990.87 = -580.28
+        assertThat(result.totalUsdPnl().doubleValue()).isCloseTo(-580.28, within(0.01));
+        // unrealized = -580.28 + 421.02 - 233.39 = -392.65 (uses live 233, not 210 principal)
+        assertThat(result.unrealizedTotalUsdPnl().doubleValue()).isCloseTo(-392.65, within(0.01));
+    }
+
+    @Test
     void closedCycleDoesNotSubtractOutstandingBorrow() {
         LendingTotalValuationView result = LendingCycleValuationCalculator.calculate(new LendingCycleValuationCalculator.Input(
                 "CLOSED",
@@ -53,6 +85,7 @@ class LendingCycleValuationCalculatorTest {
                 BigDecimal.ZERO,
                 BigDecimal.ZERO,
                 BigDecimal.ZERO,
+                null,
                 null,
                 null,
                 "UNAVAILABLE",
@@ -83,6 +116,7 @@ class LendingCycleValuationCalculatorTest {
                 feesUsd,
                 feesUsd,
                 currentUsdValue,
+                null,
                 null,
                 "UNAVAILABLE",
                 false,

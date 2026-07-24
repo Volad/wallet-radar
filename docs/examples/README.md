@@ -19,6 +19,7 @@
 | [Linking](linking-examples.md) | Correlation, continuity repair |
 | [Pricing](pricing-examples.md) | USD resolution paths |
 | [AVCO / replay](avco-replay-examples.md) | Ledger points, realised PnL |
+| [Effective cost / break-even](effective-cost-breakeven-examples.md) | Balance AVCO vs Effective cost, held rewards free |
 | [Move basis carry](move-basis-carry-examples.md) | CARRY_OUT → CARRY_IN |
 | [LP cycle](lp-cycle-example.md) | Entry → fee claim → exit |
 | [Lending cycle](lending-cycle-example.md) | Deposit → borrow → repay → withdraw |

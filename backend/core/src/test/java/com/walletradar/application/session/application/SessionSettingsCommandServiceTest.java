@@ -52,6 +52,8 @@ class SessionSettingsCommandServiceTest {
     private BackfillSegmentRepository backfillSegmentRepository;
     @Mock
     private IntegrationSyncStatusService integrationSyncStatusService;
+    @Mock
+    private com.walletradar.application.linking.pipeline.clarification.ExternalCustodyDestinationRegistry externalCustodyDestinationRegistry;
 
     private SessionSettingsCommandService sessionSettingsCommandService;
 
@@ -66,7 +68,8 @@ class SessionSettingsCommandServiceTest {
                 dzengiApiClient,
                 backfillSegmentRepository,
                 integrationSyncStatusService,
-                new ObjectMapper()
+                new ObjectMapper(),
+                externalCustodyDestinationRegistry
         );
     }
 
@@ -86,6 +89,7 @@ class SessionSettingsCommandServiceTest {
                         "#22d3ee",
                         List.of(NetworkId.SOLANA)
                 )),
+                List.of(),
                 List.of(),
                 List.of(),
                 true,
@@ -142,6 +146,7 @@ class SessionSettingsCommandServiceTest {
                         null
                 )),
                 List.of(),
+                List.of(),
                 Boolean.FALSE,
                 Boolean.FALSE
         );
@@ -191,6 +196,7 @@ class SessionSettingsCommandServiceTest {
                         null
                 )),
                 List.of(),
+                List.of(),
                 null,
                 null
         );
@@ -235,6 +241,7 @@ class SessionSettingsCommandServiceTest {
                         null
                 )),
                 List.of(),
+                List.of(),
                 null,
                 null
         );
@@ -262,6 +269,7 @@ class SessionSettingsCommandServiceTest {
                         "Paradex deposit",
                         List.of(NetworkId.ETHEREUM)
                 )),
+                List.of(),
                 Boolean.TRUE,
                 Boolean.TRUE
         );

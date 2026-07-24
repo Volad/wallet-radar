@@ -3,9 +3,11 @@ package com.walletradar.application.lending.application;
 import com.walletradar.application.costbasis.domain.AssetLedgerPoint;
 import com.walletradar.application.costbasis.domain.OnChainBalance;
 import com.walletradar.application.costbasis.support.AccountingAssetIdentitySupport;
+import com.walletradar.application.costbasis.support.WalletAddressReadScope;
 import com.walletradar.application.lending.persistence.LendingGroupRefreshState;
 import com.walletradar.application.lending.persistence.LendingGroupRefreshStateRepository;
 import com.walletradar.application.lending.persistence.LendingHealthFactorSnapshot;
+import com.walletradar.application.lending.persistence.LendingLivePositionSnapshot;
 import com.walletradar.application.lending.persistence.LendingMarketRateSnapshot;
 import com.walletradar.application.pricing.domain.CanonicalAssetCatalog;
 import com.walletradar.domain.common.NetworkId;
@@ -47,6 +49,11 @@ class LendingCycleBuilder {
     // Marker suffix for BORROW positions reconstructed from cycle accounting (no live debt-token
     // balance on chain). Used to bubble the synthesized debt up into group borrowUsd/positions.
     private static final String SYNTHETIC_BORROW_ID_SUFFIX = ":synthetic-borrow";
+    // Marker suffix for SUPPLY (collateral) positions reconstructed from cycle accounting on
+    // receipt-less networks (Solana/TON) that expose no on-chain supply-receipt-token balance.
+    // Jupiter Lend / Kamino loops deposit SOL as collateral without minting a fungible receipt we
+    // can snapshot, so the collateral (and therefore health factor + net exposure) was invisible.
+    private static final String SYNTHETIC_SUPPLY_ID_SUFFIX = ":synthetic-supply";
     private static final String ACCOUNTING_ESTIMATE_SOURCE = "ACCOUNTING_ESTIMATE";
     private static final Duration LOOP_GROUP_WINDOW = Duration.ofHours(24);
     private static final Duration HISTORICAL_STABLE_PRICE_WINDOW = Duration.ofHours(36);
@@ -66,6 +73,7 @@ class LendingCycleBuilder {
     private final LendingMarketMetricEstimator metricEstimator;
     private final LendingMarketRateSnapshotService marketRateSnapshotService;
     private final LendingHealthFactorSnapshotService healthFactorSnapshotService;
+    private final LendingLivePositionSnapshotService livePositionSnapshotService;
     private final LendingGroupRefreshStateRepository lendingGroupRefreshStateRepository;
     private final LendingMarketKeyResolver marketKeyResolver;
     private final LendingReceiptIdentityService receiptIdentityService;
@@ -337,7 +345,24 @@ class LendingCycleBuilder {
     }
 
     private static String normalizeAddress(String address) {
-        return address == null ? "" : address.trim().toLowerCase(Locale.ROOT);
+        // Family-aware: EVM/CEX lowercased (legacy), Solana case-preserved, TON preferred member ref.
+        // Blind lowercasing corrupted base58 Solana/TON addresses; keeping them intact keeps lending
+        // group ids stable and aligned with the dashboard / move-basis read scopes.
+        return WalletAddressReadScope.normalize(address);
+    }
+
+    /**
+     * True when any event's lending collateral is receipt-less — the normalized-row capability flag
+     * ({@link NormalizedTransaction#getReceiptBearingCollateral()}) is stamped {@code false} for
+     * networks whose lending protocols expose no fungible receipt token that we snapshot as an
+     * {@code on_chain_balance} (Solana, TON). For such rows a live lending position cannot be inferred
+     * from {@code marketHasOpenPosition}, so the cycle open/close state must be derived from the
+     * accounting {@link CycleState} instead. WS-8: reads the stamped capability rather than
+     * re-deriving {@code NetworkAddressFormat.isEvm(networkId)} on the consumption plane (ADR-073).
+     */
+    private static boolean isReceiptLessLendingNetwork(List<LendingHistoryEntryView> events) {
+        return events.stream()
+                .anyMatch(event -> Boolean.FALSE.equals(event.receiptBearingCollateral()));
     }
 
     private static String nullToEmpty(String value) {
@@ -399,6 +424,9 @@ class LendingCycleBuilder {
         private BigDecimal supplyUsd = BigDecimal.ZERO;
         private BigDecimal borrowUsd = BigDecimal.ZERO;
         private BigDecimal closedEarnedUsd = BigDecimal.ZERO;
+        // Current prices captured from history ingestion, reused when valuing accounting-derived
+        // (synthesized) collateral on receipt-less networks at live market value.
+        private Map<String, BigDecimal> currentPrices = Map.of();
 
         private GroupAccumulator(String sessionId, GroupKey key) {
             this.sessionId = sessionId;
@@ -580,7 +608,7 @@ class LendingCycleBuilder {
                     underlyingSymbol,
                     side
             );
-            if (snapshot.isPresent() && LendingMarketRateStatus.PROTOCOL_SNAPSHOT.equals(snapshot.get().getRateStatus())) {
+            if (snapshot.isPresent() && isLiveRateStatus(snapshot.get().getRateStatus())) {
                 LendingMarketRateSnapshot value = snapshot.get();
                 BigDecimal protocolSideApy = "BORROW".equals(side) ? value.getBorrowApyPct() : value.getSupplyApyPct();
                 BigDecimal netProtocolApy = "BORROW".equals(side) ? value.getNetBorrowApyPct() : value.getNetSupplyApyPct();
@@ -602,6 +630,14 @@ class LendingCycleBuilder {
                 );
             }
             return fallbackRateMetric(side, fallback);
+        }
+
+        // A live protocol rate is either an on-chain read (Aave, PROTOCOL_SNAPSHOT) or the venue's own
+        // rate API (Jupiter Lend, API_SNAPSHOT). Both are authoritative live rates, so both drive the
+        // protocol supply/borrow APY (and therefore Net APY); only estimates fall back.
+        private static boolean isLiveRateStatus(String rateStatus) {
+            return LendingMarketRateStatus.PROTOCOL_SNAPSHOT.equals(rateStatus)
+                    || LendingMarketRateStatus.API_SNAPSHOT.equals(rateStatus);
         }
 
         private PositionRateMetric fallbackRateMetric(
@@ -633,6 +669,9 @@ class LendingCycleBuilder {
                 Map<String, NavigableMap<Instant, BigDecimal>> historicalPrices,
                 String marketKey
         ) {
+            if (prices != null && !prices.isEmpty()) {
+                this.currentPrices = prices;
+            }
             List<HistoryAmount> amounts = historyAmounts(transaction, prices, historicalPrices);
             for (int index = 0; index < amounts.size(); index++) {
                 HistoryAmount amount = amounts.get(index);
@@ -653,7 +692,8 @@ class LendingCycleBuilder {
                         index == 0 ? amount.feeUsd() : BigDecimal.ZERO,
                         index == 0 ? amount.feeQuantityByAsset() : Map.of(),
                         loopId(transaction),
-                        amount.withdrawYieldByAsset()
+                        amount.withdrawYieldByAsset(),
+                        transaction.getReceiptBearingCollateral()
                 ));
                 if (index != 0) {
                     continue;
@@ -715,7 +755,8 @@ class LendingCycleBuilder {
                         BigDecimal.ZERO,
                         Map.of(),
                         exit.loopId(),
-                        Map.of()
+                        Map.of(),
+                        exit.receiptBearingCollateral()
                 ));
             }
             history.addAll(additions);
@@ -787,6 +828,12 @@ class LendingCycleBuilder {
             List<LendingPositionView> livePositions = sortedPositions(positions);
             List<LendingHistoryEntryView> cycleHistory = cycleBuildingHistory();
             List<LendingCycleView> cycles = buildCycles(livePositions, cycleHistory);
+            // Receipt-less networks (Solana/TON) expose no on-chain receipt-token balance to mark the
+            // group open, so an open Jupiter Lend / Kamino loop would otherwise be classified CLOSED
+            // and hidden. Promote the group to OPEN when any reconstructed cycle is still open there.
+            if (!open && isReceiptLessLendingNetwork(cycleHistory)) {
+                open = cycles.stream().anyMatch(cycle -> "OPEN".equals(cycle.status()));
+            }
             // Bubble reconstructed outstanding-debt BORROW positions (no live debt-token balance)
             // up to the group so borrowUsd, net exposure, and summary totals include them.
             List<LendingPositionView> synthesizedBorrows = cycles.stream()
@@ -798,9 +845,21 @@ class LendingCycleBuilder {
                     .map(position -> zeroIfNull(position.valueUsd()))
                     .reduce(BigDecimal.ZERO, (left, right) -> left.add(right, MC));
             borrowUsd = borrowUsd.add(synthesizedBorrowUsd, MC);
-            List<LendingPositionView> groupPositions = synthesizedBorrows.isEmpty()
+            // Symmetric to synthesized borrows: bubble reconstructed collateral SUPPLY positions (no
+            // live receipt-token balance on Solana/TON) into supplyUsd, net exposure, and totals.
+            List<LendingPositionView> synthesizedSupplies = cycles.stream()
+                    .filter(cycle -> "OPEN".equals(cycle.status()))
+                    .flatMap(cycle -> cycle.positions().stream())
+                    .filter(LendingCycleBuilder::isSynthesizedSupply)
+                    .toList();
+            BigDecimal synthesizedSupplyUsd = synthesizedSupplies.stream()
+                    .map(position -> zeroIfNull(position.valueUsd()))
+                    .reduce(BigDecimal.ZERO, (left, right) -> left.add(right, MC));
+            supplyUsd = supplyUsd.add(synthesizedSupplyUsd, MC);
+            List<LendingPositionView> synthesizedPositions = concatenate(synthesizedBorrows, synthesizedSupplies);
+            List<LendingPositionView> groupPositions = synthesizedPositions.isEmpty()
                     ? livePositions
-                    : sortedPositions(concatenate(positions, synthesizedBorrows));
+                    : sortedPositions(concatenate(positions, synthesizedPositions));
             HealthMetricSnapshot healthMetric = resolveHealthMetric(estimator);
             List<LendingHistoryEntryView> sortedHistory = cycles.stream()
                     .flatMap(cycle -> cycle.events().stream())
@@ -918,7 +977,8 @@ class LendingCycleBuilder {
                     event.feeUsd(),
                     event.feeQuantityByAsset(),
                     event.loopId(),
-                    event.withdrawYieldByAsset()
+                    event.withdrawYieldByAsset(),
+                    event.receiptBearingCollateral()
             );
         }
 
@@ -1012,7 +1072,14 @@ class LendingCycleBuilder {
 
             if (!currentEvents.isEmpty()) {
                 String cycleId = marketKey.toLowerCase(Locale.ROOT) + ":cycle-" + cycleIndex;
-                String status = marketHasOpenPosition ? "OPEN" : "CLOSED";
+                // On EVM an on-chain receipt-token balance (marketHasOpenPosition) is the source of
+                // truth for a live supply/borrow position. Solana/TON lending protocols (e.g. Jupiter
+                // Lend) expose no fungible receipt token that we snapshot as an on_chain_balance, so a
+                // genuinely open loop would always read as CLOSED and be hidden by the default
+                // "hide closed" UI filter. For those receipt-less networks, fall back to the
+                // accounting state (remaining supply/debt) so open loops with unrepaid debt stay OPEN.
+                boolean accountingOpen = isReceiptLessLendingNetwork(currentEvents) && !cycleState.isFlat();
+                String status = (marketHasOpenPosition || accountingOpen) ? "OPEN" : "CLOSED";
                 if ("CLOSED".equals(status) && cycleState.isFlat()) {
                     deltas.markCycleClosedEconomically();
                 }
@@ -1101,11 +1168,12 @@ class LendingCycleBuilder {
                     borrowUsd
             );
             Instant lastRefreshedAt = resolveLastRefreshedAt();
+            // WS-3: no hardcoded protocol gate — any protocol with a fresh LIVE_PROTOCOL snapshot
+            // (Aave EVM, Jupiter Lend Solana, …) uses it; others fall back to the accounting estimate.
             if (healthFactorSnapshotService == null
                     || borrowUsd == null
                     || borrowUsd.signum() <= 0
-                    || key.protocol() == null
-                    || !key.protocol().trim().toUpperCase(Locale.ROOT).startsWith("AAVE")) {
+                    || key.protocol() == null) {
                 return new HealthMetricSnapshot(
                         fallback.healthFactor(),
                         fallback.healthLabel(),
@@ -1233,7 +1301,8 @@ class LendingCycleBuilder {
                     event.feeUsd(),
                     event.feeQuantityByAsset(),
                     event.loopId(),
-                    event.withdrawYieldByAsset()
+                    event.withdrawYieldByAsset(),
+                    event.receiptBearingCollateral()
             );
         }
 
@@ -1465,16 +1534,27 @@ class LendingCycleBuilder {
             LendingHistoryEntryView close = "CLOSED".equals(status) && !events.isEmpty()
                     ? events.stream().filter(this::isClosingEvent).reduce((first, second) -> second).orElse(events.get(events.size() - 1))
                     : null;
-            BigDecimal unrealizedUsd = cyclePositions.stream()
+            // Build display positions FIRST: the synthesized outstanding borrow (trued-up to the live
+            // debt) and — on receipt-less Solana/TON — the reconstructed collateral SUPPLY. Valuation
+            // must use these, otherwise the current collateral/debt value is silently zero when the
+            // network exposes no live receipt-token balance, producing a bogus large "running PnL"
+            // (e.g. −$790 that ignored the ~$421 SOL collateral entirely).
+            List<LendingPositionView> displayPositions = withSynthesizedOutstandingBorrows(
+                    cycleId, marketKey, status, cyclePositions, deltas);
+            displayPositions = withSynthesizedOutstandingSupply(
+                    cycleId, marketKey, status, displayPositions, deltas);
+            BigDecimal unrealizedUsd = displayPositions.stream()
                     .filter(position -> "SUPPLY".equals(position.side()))
                     .map(LendingPositionView::valueUsd)
                     .reduce(BigDecimal.ZERO, (left, right) -> left.add(right, MC));
-            LendingPnlBreakdownView pnlBreakdown = pnlBreakdown(status, cyclePositions, deltas);
-            LendingTotalValuationView totalValuation = totalValuation(status, unrealizedUsd, pnlBreakdown, deltas);
-            LendingPnlAssetBreakdownView pnlAssetBreakdown = pnlAssetBreakdown(status, cyclePositions, deltas, totalValuation);
-            // Include synthesized outstanding borrows when inferring current debt for factual APY.
-            List<LendingPositionView> displayPositions = withSynthesizedOutstandingBorrows(
-                    cycleId, marketKey, status, cyclePositions, deltas);
+            BigDecimal liveOutstandingBorrowUsd = displayPositions.stream()
+                    .filter(position -> "BORROW".equals(position.side()))
+                    .map(LendingPositionView::valueUsd)
+                    .reduce(BigDecimal.ZERO, (left, right) -> left.add(right, MC));
+            LendingPnlBreakdownView pnlBreakdown = pnlBreakdown(status, displayPositions, deltas);
+            LendingTotalValuationView totalValuation = totalValuation(
+                    status, unrealizedUsd, liveOutstandingBorrowUsd, pnlBreakdown, deltas);
+            LendingPnlAssetBreakdownView pnlAssetBreakdown = pnlAssetBreakdown(status, displayPositions, deltas, totalValuation);
             LendingFactualApyView factualApy = factualApy(status, start, close, totalValuation, displayPositions, deltas);
             List<String> largePnlReasons = largePnlReasons(status, pnlBreakdown, totalValuation, pnlAssetBreakdown, deltas);
             String primaryLargePnlReason = largePnlReasons.isEmpty() ? null : largePnlReasons.get(0);
@@ -1544,11 +1624,20 @@ class LendingCycleBuilder {
             Map<String, BigDecimal> repaid = deltas.repaidByAsset();
             Map<String, BigDecimal> borrowedUsd = deltas.borrowedUsdByAsset();
             Map<String, BigDecimal> repaidUsd = deltas.repaidUsdByAsset();
+            // WS-3 single-authority: when the live reader has a fresh debt snapshot, true up the
+            // synthesized debt to the on-chain outstanding amount (e.g. 233.39 USDT incl. accrued
+            // interest instead of the 210 borrow principal). Absent a fresh snapshot the reader is
+            // treated as unreachable and the accounting borrowed−repaid figure remains the fallback.
+            Map<String, BigDecimal> liveDebtByAsset = liveDebtByAsset();
             List<LendingPositionView> synthesized = new ArrayList<>();
             for (Map.Entry<String, BigDecimal> entry : borrowed.entrySet()) {
                 String asset = entry.getKey();
                 BigDecimal outstandingQty = zeroIfNull(entry.getValue())
                         .subtract(repaid.getOrDefault(asset, BigDecimal.ZERO), MC);
+                BigDecimal liveQty = liveDebtByAsset.get(asset);
+                if (liveQty != null && liveQty.signum() > 0) {
+                    outstandingQty = liveQty;
+                }
                 if (outstandingQty.compareTo(CYCLE_DUST_TOLERANCE) <= 0) {
                     continue;
                 }
@@ -1585,17 +1674,28 @@ class LendingCycleBuilder {
                 BigDecimal borrowedUsd,
                 BigDecimal repaidUsd
         ) {
-            BigDecimal outstandingUsd = borrowedUsd.subtract(repaidUsd, MC);
+            // Prefer marking the outstanding debt at the current market price so a live-trued-up
+            // quantity (e.g. 233.39 USDT incl. accrued interest) is valued consistently — for a USD
+            // stable this pins to the outstanding quantity. Fall back to net borrowed−repaid basis,
+            // then to the borrow-time unit price applied to the remaining quantity.
+            BigDecimal currentPrice = resolvePrice(currentPrices, asset);
+            BigDecimal outstandingUsd;
             String metricStatus;
-            if (outstandingUsd.signum() > 0) {
+            if (currentPrice != null && currentPrice.signum() > 0) {
+                outstandingUsd = outstandingQty.multiply(currentPrice, MC);
                 metricStatus = ACCOUNTING_ESTIMATE_SOURCE;
-            } else if (borrowedQty.signum() > 0 && borrowedUsd.signum() > 0) {
-                // Fall back to the borrow-time unit price applied to the outstanding quantity.
-                outstandingUsd = outstandingQty.multiply(borrowedUsd.divide(borrowedQty, MC), MC);
-                metricStatus = LendingMarketRateStatus.FALLBACK_ESTIMATE;
             } else {
-                outstandingUsd = BigDecimal.ZERO;
-                metricStatus = LendingMarketRateStatus.FALLBACK_ESTIMATE;
+                BigDecimal netBorrowedUsd = borrowedUsd.subtract(repaidUsd, MC);
+                if (netBorrowedUsd.signum() > 0) {
+                    outstandingUsd = netBorrowedUsd;
+                    metricStatus = ACCOUNTING_ESTIMATE_SOURCE;
+                } else if (borrowedQty.signum() > 0 && borrowedUsd.signum() > 0) {
+                    outstandingUsd = outstandingQty.multiply(borrowedUsd.divide(borrowedQty, MC), MC);
+                    metricStatus = LendingMarketRateStatus.FALLBACK_ESTIMATE;
+                } else {
+                    outstandingUsd = BigDecimal.ZERO;
+                    metricStatus = LendingMarketRateStatus.FALLBACK_ESTIMATE;
+                }
             }
             LendingMarketMetricEstimator.MetricSnapshot fallback = metricEstimator.estimate(
                     key.protocol(),
@@ -1621,6 +1721,208 @@ class LendingCycleBuilder {
                     null,
                     outstandingQty,
                     BigDecimal.ZERO,
+                    outstandingUsd,
+                    BigDecimal.ZERO,
+                    rateMetric.aliasApyPct(),
+                    metricStatus,
+                    ACCOUNTING_ESTIMATE_SOURCE,
+                    rateMetric.protocolSupplyApyPct(),
+                    rateMetric.protocolBorrowApyPct(),
+                    rateMetric.rewardAprPct(),
+                    rateMetric.netProtocolApyPct(),
+                    rateMetric.protocolApyStatus(),
+                    rateMetric.protocolApySource(),
+                    rateMetric.protocolApyCapturedAt(),
+                    rateMetric.protocolApyStale(),
+                    rateMetric.rewardAprStatus(),
+                    rateMetric.rewardAprUnavailableReason(),
+                    rateMetric.apyConvention()
+            );
+        }
+
+        /**
+         * Reconstruct SUPPLY (collateral) positions for outstanding supply (deposited − withdrawn)
+         * that is NOT backed by a live on-chain supply-receipt-token balance. Receipt-less networks
+         * (Solana/TON) — e.g. Jupiter Lend and Kamino — deposit collateral without minting a fungible
+         * receipt we can snapshot as an on_chain_balance, so the only evidence of open collateral is
+         * the cycle's deposit/withdraw accounting. Without this, a loop shows borrow but no collateral,
+         * driving supplyUsd=0, a bogus 0.0 health factor ("Liquidation risk"), and wrong net exposure.
+         *
+         * <p>Strictly guarded to non-EVM networks so EVM protocols (which DO surface aToken/cToken
+         * supply balances) are never double-counted, and skips any asset that already has a live
+         * SUPPLY position in this cycle.
+         */
+        private List<LendingPositionView> withSynthesizedOutstandingSupply(
+                String cycleId,
+                String marketKey,
+                String status,
+                List<LendingPositionView> cyclePositions,
+                DeltaAccumulator deltas
+        ) {
+            if (!"OPEN".equals(status)) {
+                return cyclePositions;
+            }
+            // EVM supply is represented by a live receipt-token balance; synthesizing there would
+            // double-count. Only receipt-less networks need the accounting-derived collateral.
+            if (!isReceiptLessLendingNetwork(history)) {
+                return cyclePositions;
+            }
+            Map<String, BigDecimal> supplied = deltas.principalInByAsset();
+            if (supplied.isEmpty()) {
+                return cyclePositions;
+            }
+            Map<String, BigDecimal> withdrawn = deltas.principalOutByAsset();
+            Map<String, BigDecimal> suppliedUsd = deltas.principalInUsdByAsset();
+            Map<String, BigDecimal> withdrawnUsd = deltas.principalOutCashUsdByAsset();
+            // WS-3 single-authority: when the live reader has a fresh collateral snapshot, it trues
+            // up the synthesized collateral to the on-chain amount (e.g. 5.42 SOL instead of the
+            // deltas-derived ~10 SOL that double-counts loop redeposits). Absent a fresh snapshot the
+            // reader is treated as unreachable and the deltas figure remains a clearly-stale fallback.
+            Map<String, BigDecimal> liveCollateralByAsset = liveCollateralByAsset();
+            List<LendingPositionView> synthesized = new ArrayList<>();
+            for (Map.Entry<String, BigDecimal> entry : supplied.entrySet()) {
+                String asset = entry.getKey();
+                // Net deposited principal (deposits − withdrawals). Includes loop redeposits, so on a
+                // leveraged loop this is the whole collateral the wallet moved in. The accrued supply
+                // yield is (live collateral − this principal), NOT the whole live collateral.
+                BigDecimal accountingNetQty = zeroIfNull(entry.getValue())
+                        .subtract(withdrawn.getOrDefault(asset, BigDecimal.ZERO), MC);
+                BigDecimal outstandingQty = accountingNetQty;
+                BigDecimal liveQty = liveCollateralByAsset.get(asset);
+                if (liveQty != null && liveQty.signum() > 0) {
+                    outstandingQty = liveQty;
+                }
+                if (outstandingQty.compareTo(CYCLE_DUST_TOLERANCE) <= 0) {
+                    continue;
+                }
+                if (hasLiveSupplyPosition(cyclePositions, asset)) {
+                    continue;
+                }
+                synthesized.add(synthesizedSupplyPosition(
+                        cycleId, marketKey, asset, outstandingQty,
+                        accountingNetQty.max(BigDecimal.ZERO),
+                        zeroIfNull(entry.getValue()),
+                        suppliedUsd.getOrDefault(asset, BigDecimal.ZERO),
+                        withdrawnUsd.getOrDefault(asset, BigDecimal.ZERO)));
+            }
+            if (synthesized.isEmpty()) {
+                return cyclePositions;
+            }
+            List<LendingPositionView> combined = new ArrayList<>(cyclePositions);
+            combined.addAll(synthesized);
+            return List.copyOf(combined);
+        }
+
+        /**
+         * WS-3: fresh live collateral quantities keyed by cycle-state asset, or empty when no fresh
+         * live snapshot exists (reader unreachable/stale → keep the guarded deltas-derived fallback).
+         */
+        private Map<String, BigDecimal> liveCollateralByAsset() {
+            return liveLegsByAsset(LendingLivePositionSnapshot::getCollateral);
+        }
+
+        /**
+         * WS-3: fresh live outstanding-debt quantities keyed by cycle-state asset (incl. accrued
+         * interest, e.g. 233.39 USDT rather than the 210 borrow principal), or empty when no fresh
+         * live snapshot exists. Symmetric to {@link #liveCollateralByAsset()} so the displayed borrow
+         * and the group borrowUsd / health factor all reflect the same single-authority live debt.
+         */
+        private Map<String, BigDecimal> liveDebtByAsset() {
+            return liveLegsByAsset(LendingLivePositionSnapshot::getDebt);
+        }
+
+        private Map<String, BigDecimal> liveLegsByAsset(
+                java.util.function.Function<LendingLivePositionSnapshot, List<LendingLivePositionSnapshot.Leg>> legs
+        ) {
+            if (livePositionSnapshotService == null
+                    || key.protocol() == null
+                    || key.networkId() == null
+                    || key.walletAddress() == null) {
+                return Map.of();
+            }
+            return livePositionSnapshotService.latestFresh(
+                            sessionId, key.protocol(), key.networkId().name(), key.walletAddress())
+                    .map(snapshot -> {
+                        Map<String, BigDecimal> byAsset = new LinkedHashMap<>();
+                        List<LendingLivePositionSnapshot.Leg> legList = legs.apply(snapshot);
+                        if (legList != null) {
+                            for (LendingLivePositionSnapshot.Leg leg : legList) {
+                                if (leg.getAssetSymbol() == null || leg.getQuantity() == null) {
+                                    continue;
+                                }
+                                byAsset.merge(cycleStateAsset(leg.getAssetSymbol()), leg.getQuantity(), BigDecimal::add);
+                            }
+                        }
+                        return byAsset;
+                    })
+                    .orElse(Map.of());
+        }
+
+        private boolean hasLiveSupplyPosition(List<LendingPositionView> cyclePositions, String asset) {
+            return cyclePositions.stream()
+                    .filter(position -> "SUPPLY".equals(position.side()))
+                    .filter(position -> zeroIfNull(position.quantity()).compareTo(CYCLE_DUST_TOLERANCE) > 0)
+                    .anyMatch(position -> Objects.equals(cycleStateAsset(position.underlyingSymbol()), asset));
+        }
+
+        private LendingPositionView synthesizedSupplyPosition(
+                String cycleId,
+                String marketKey,
+                String asset,
+                BigDecimal outstandingQty,
+                BigDecimal principalQty,
+                BigDecimal suppliedQty,
+                BigDecimal suppliedUsd,
+                BigDecimal withdrawnUsd
+        ) {
+            // Prefer marking the outstanding collateral at the current market price so the health
+            // factor and net exposure reflect live value; fall back to net deposit basis, then to
+            // deposit-time unit price applied to the remaining quantity.
+            BigDecimal currentPrice = resolvePrice(currentPrices, asset);
+            BigDecimal outstandingUsd;
+            String metricStatus;
+            if (currentPrice != null && currentPrice.signum() > 0) {
+                outstandingUsd = outstandingQty.multiply(currentPrice, MC);
+                metricStatus = ACCOUNTING_ESTIMATE_SOURCE;
+            } else {
+                BigDecimal netSuppliedUsd = suppliedUsd.subtract(withdrawnUsd, MC);
+                if (netSuppliedUsd.signum() > 0) {
+                    outstandingUsd = netSuppliedUsd;
+                    metricStatus = ACCOUNTING_ESTIMATE_SOURCE;
+                } else if (suppliedQty.signum() > 0 && suppliedUsd.signum() > 0) {
+                    outstandingUsd = outstandingQty.multiply(suppliedUsd.divide(suppliedQty, MC), MC);
+                    metricStatus = LendingMarketRateStatus.FALLBACK_ESTIMATE;
+                } else {
+                    outstandingUsd = BigDecimal.ZERO;
+                    metricStatus = LendingMarketRateStatus.FALLBACK_ESTIMATE;
+                }
+            }
+            LendingMarketMetricEstimator.MetricSnapshot fallback = metricEstimator.estimate(
+                    key.protocol(),
+                    "SUPPLY",
+                    asset,
+                    supplyUsd,
+                    borrowUsd
+            );
+            PositionRateMetric rateMetric = positionRateMetric(
+                    key.protocol(),
+                    key.networkId(),
+                    marketKey,
+                    "SUPPLY",
+                    asset,
+                    fallback
+            );
+            return new LendingPositionView(
+                    cycleId + ":supply:" + asset.toLowerCase(Locale.ROOT) + SYNTHETIC_SUPPLY_ID_SUFFIX,
+                    marketKey,
+                    "SUPPLY",
+                    asset,
+                    asset,
+                    null,
+                    outstandingQty,
+                    // Principal (net deposited) portion; supply yield = quantity − coveredQuantity, so
+                    // only the accrued amount (not the whole leveraged collateral) drives factual APR.
+                    principalQty.min(outstandingQty),
                     outstandingUsd,
                     BigDecimal.ZERO,
                     rateMetric.aliasApyPct(),
@@ -1667,10 +1969,12 @@ class LendingCycleBuilder {
                     status,
                     startTimestamp,
                     endTimestamp,
-                    deltas.openingDepositByAsset(),
+                    deltas.timeWeightedSupplyPrincipalByAsset(startTimestamp, endTimestamp),
+                    deltas.principalInByAsset(),
                     yieldEvidence,
                     deltas.principalOutCashByAsset(),
                     deltas.internalReceiptMovementByAsset(),
+                    deltas.timeWeightedBorrowPrincipalByAsset(startTimestamp, endTimestamp),
                     deltas.borrowedByAsset(),
                     deltas.repaidByAsset(),
                     currentDebtByAsset,
@@ -1713,6 +2017,7 @@ class LendingCycleBuilder {
         private LendingTotalValuationView totalValuation(
                 String status,
                 BigDecimal currentUsdValue,
+                BigDecimal liveOutstandingBorrowUsd,
                 LendingPnlBreakdownView yieldOnlyPnl,
                 DeltaAccumulator deltas
         ) {
@@ -1726,6 +2031,7 @@ class LendingCycleBuilder {
                     deltas.feesUsd(),
                     deltas.feesUsd(),
                     currentUsdValue,
+                    liveOutstandingBorrowUsd,
                     yieldOnlyPnl.netPnlUsd(),
                     yieldOnlyPnl.precision(),
                     deltas.hasWrapperOrShareExposure(),
@@ -2467,7 +2773,8 @@ class LendingCycleBuilder {
                     event.feeUsd(),
                     event.feeQuantityByAsset(),
                     event.loopId(),
-                    event.withdrawYieldByAsset()
+                    event.withdrawYieldByAsset(),
+                    event.receiptBearingCollateral()
             );
         }
 
@@ -3050,6 +3357,10 @@ class LendingCycleBuilder {
         }
     }
 
+    /** A single signed principal delta on the cycle timeline (asset, when it happened, +/- quantity). */
+    private record PrincipalTimelinePoint(String asset, Instant timestamp, BigDecimal signedQuantity) {
+    }
+
     private static final class DeltaAccumulator {
         private final Map<String, BigDecimal> principalInByAsset = new LinkedHashMap<>();
         private final Map<String, BigDecimal> openingDepositByAsset = new LinkedHashMap<>();
@@ -3075,6 +3386,12 @@ class LendingCycleBuilder {
         private final Map<String, BigDecimal> gasUsdByAsset = new LinkedHashMap<>();
         private final Set<String> usdMissingValuationAssets = new LinkedHashSet<>();
         private final Map<String, List<LendingObservedFlowView>> observedFlowsByAsset = new LinkedHashMap<>();
+        // Chronological signed principal deltas (deposits +, principal reductions -) per SUPPLY asset,
+        // and (borrows +, repays -) per BORROW asset. Integrated over the cycle window to derive the
+        // time-weighted average principal used as the factual-APR exposure denominator. Order is NOT
+        // assumed here (sorted defensively at read time by block timestamp).
+        private final List<PrincipalTimelinePoint> supplyPrincipalTimeline = new ArrayList<>();
+        private final List<PrincipalTimelinePoint> borrowPrincipalTimeline = new ArrayList<>();
         private boolean hasShareOrVaultAsset;
         private boolean hasFluidLogOperateEvidence;
         private boolean hasWstUsrExposure;
@@ -3140,6 +3457,7 @@ class LendingCycleBuilder {
                 case "LENDING_DEPOSIT", "VAULT_DEPOSIT", "LENDING_LOOP_OPEN" -> {
                     add(principalInByAsset, asset, quantity);
                     openingDepositByAsset.putIfAbsent(asset, quantity);
+                    recordSupplyPrincipalPoint(event, asset, quantity);
                     add(netCashDeltaByAsset, asset, quantity.negate());
                     addObservedFlow(event, asset, quantity.negate());
                     principalInUsd = principalInUsd.add(valueUsd, MC);
@@ -3147,6 +3465,7 @@ class LendingCycleBuilder {
                 }
                 case "BORROW" -> {
                     add(borrowedByAsset, asset, quantity);
+                    recordBorrowPrincipalPoint(event, asset, quantity);
                     add(netCashDeltaByAsset, asset, quantity);
                     addObservedFlow(event, asset, quantity);
                     borrowedUsd = borrowedUsd.add(valueUsd, MC);
@@ -3156,6 +3475,7 @@ class LendingCycleBuilder {
                     if (aggregateRepay) {
                         addObservedFlow(event, asset, quantity.negate());
                         add(repaidByAsset, asset, quantity);
+                        recordBorrowPrincipalPoint(event, asset, quantity.negate());
                         add(netCashDeltaByAsset, asset, quantity.negate());
                         repaidUsd = repaidUsd.add(valueUsd, MC);
                         addUsd(repaidUsdByAsset, asset, valueUsd);
@@ -3171,6 +3491,7 @@ class LendingCycleBuilder {
                     }
                     add(withdrawnByAsset, asset, quantity);
                     add(principalOutByAsset, asset, quantity);
+                    recordSupplyPrincipalPoint(event, asset, quantity.negate());
                     add(netCashDeltaByAsset, asset, quantity);
                     addObservedFlow(event, asset, quantity);
                     principalOutUsd = principalOutUsd.add(valueUsd, MC);
@@ -3523,6 +3844,113 @@ class LendingCycleBuilder {
             return canonical;
         }
 
+        private void recordSupplyPrincipalPoint(LendingHistoryEntryView event, String asset, BigDecimal signedQuantity) {
+            recordPrincipalPoint(supplyPrincipalTimeline, event, asset, signedQuantity);
+        }
+
+        private void recordBorrowPrincipalPoint(LendingHistoryEntryView event, String asset, BigDecimal signedQuantity) {
+            recordPrincipalPoint(borrowPrincipalTimeline, event, asset, signedQuantity);
+        }
+
+        private void recordPrincipalPoint(
+                List<PrincipalTimelinePoint> timeline,
+                LendingHistoryEntryView event,
+                String asset,
+                BigDecimal signedQuantity
+        ) {
+            if (event == null || event.blockTimestamp() == null || signedQuantity == null || signedQuantity.signum() == 0) {
+                return;
+            }
+            timeline.add(new PrincipalTimelinePoint(cycleStateAsset(asset), event.blockTimestamp(), signedQuantity));
+        }
+
+        /**
+         * Time-weighted average supply principal per asset over {@code [start, end]}: the running
+         * principal balance integrated across chronological segments and divided by the total duration.
+         * This is the factual-APR exposure denominator — income accrues on the whole outstanding
+         * principal, not the first deposit. Falls back to the total deposited principal when the
+         * timeline is empty or the duration is non-positive so nothing regresses to null.
+         */
+        private Map<String, BigDecimal> timeWeightedSupplyPrincipalByAsset(Instant start, Instant end) {
+            return timeWeightedPrincipal(supplyPrincipalTimeline, principalInByAsset(), start, end);
+        }
+
+        /**
+         * Time-weighted average outstanding borrow per asset over {@code [start, end]}. Falls back to the
+         * total-ever-borrowed when the timeline is empty or the duration is non-positive.
+         */
+        private Map<String, BigDecimal> timeWeightedBorrowPrincipalByAsset(Instant start, Instant end) {
+            return timeWeightedPrincipal(borrowPrincipalTimeline, borrowedByAsset(), start, end);
+        }
+
+        private Map<String, BigDecimal> timeWeightedPrincipal(
+                List<PrincipalTimelinePoint> timeline,
+                Map<String, BigDecimal> fallbackTotals,
+                Instant start,
+                Instant end
+        ) {
+            if (start == null || end == null || !end.isAfter(start) || timeline.isEmpty()) {
+                return fallbackTotals;
+            }
+            BigDecimal totalSeconds = BigDecimal.valueOf(Duration.between(start, end).toSeconds());
+            if (totalSeconds.signum() <= 0) {
+                return fallbackTotals;
+            }
+            Map<String, List<PrincipalTimelinePoint>> byAsset = new LinkedHashMap<>();
+            for (PrincipalTimelinePoint point : timeline) {
+                byAsset.computeIfAbsent(point.asset(), ignored -> new ArrayList<>()).add(point);
+            }
+            Map<String, BigDecimal> result = new LinkedHashMap<>();
+            for (Map.Entry<String, List<PrincipalTimelinePoint>> entry : byAsset.entrySet()) {
+                List<PrincipalTimelinePoint> points = new ArrayList<>(entry.getValue());
+                // Sort defensively by timestamp; do not assume accumulation order.
+                points.sort(Comparator.comparing(PrincipalTimelinePoint::timestamp));
+                BigDecimal running = BigDecimal.ZERO;
+                BigDecimal weightedSum = BigDecimal.ZERO;
+                Instant cursor = start;
+                for (PrincipalTimelinePoint point : points) {
+                    Instant clamped = clamp(point.timestamp(), start, end);
+                    if (clamped.isAfter(cursor)) {
+                        long segmentSeconds = Duration.between(cursor, clamped).toSeconds();
+                        if (segmentSeconds > 0 && running.signum() != 0) {
+                            weightedSum = weightedSum.add(running.multiply(BigDecimal.valueOf(segmentSeconds), MC), MC);
+                        }
+                        cursor = clamped;
+                    }
+                    running = running.add(point.signedQuantity(), MC);
+                }
+                if (end.isAfter(cursor)) {
+                    long segmentSeconds = Duration.between(cursor, end).toSeconds();
+                    if (segmentSeconds > 0 && running.signum() != 0) {
+                        weightedSum = weightedSum.add(running.multiply(BigDecimal.valueOf(segmentSeconds), MC), MC);
+                    }
+                }
+                BigDecimal average = weightedSum.divide(totalSeconds, MC);
+                if (average.signum() > 0) {
+                    result.put(entry.getKey(), average);
+                } else if (fallbackTotals.containsKey(entry.getKey())) {
+                    // A fully-exited asset time-weights to zero over the window; keep the total so the
+                    // yield-flow evidence branch can still attribute income to it.
+                    result.put(entry.getKey(), fallbackTotals.get(entry.getKey()));
+                }
+            }
+            // Preserve any fallback assets that never produced a timeline point (defensive).
+            for (Map.Entry<String, BigDecimal> total : fallbackTotals.entrySet()) {
+                result.putIfAbsent(total.getKey(), total.getValue());
+            }
+            return result;
+        }
+
+        private static Instant clamp(Instant value, Instant start, Instant end) {
+            if (value == null || value.isBefore(start)) {
+                return start;
+            }
+            if (value.isAfter(end)) {
+                return end;
+            }
+            return value;
+        }
+
         private Set<String> allAssets() {
             LinkedHashSet<String> assets = new LinkedHashSet<>();
             assets.addAll(principalInByAsset.keySet());
@@ -3628,6 +4056,10 @@ class LendingCycleBuilder {
 
     private static boolean isSynthesizedBorrow(LendingPositionView position) {
         return position != null && position.id() != null && position.id().endsWith(SYNTHETIC_BORROW_ID_SUFFIX);
+    }
+
+    private static boolean isSynthesizedSupply(LendingPositionView position) {
+        return position != null && position.id() != null && position.id().endsWith(SYNTHETIC_SUPPLY_ID_SUFFIX);
     }
 
 }

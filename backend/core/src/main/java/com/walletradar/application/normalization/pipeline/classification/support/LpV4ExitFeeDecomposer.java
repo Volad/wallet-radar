@@ -10,38 +10,49 @@ import org.springframework.stereotype.Component;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.math.RoundingMode;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
 /**
  * R4 — Uniswap V4 / Pancake Infinity CL LP exit fee/principal split.
  *
- * <p>Decodes the {@code ModifyLiquidity} event from persisted logs, derives the principal amounts
- * using concentrated-liquidity tick math ({@link LpClMathSupport}), and maps fee fractions to
- * ERC-20 token contract addresses. The result is the same shape as
- * {@link LpExitFeeDecomposer#feeFractionsForContracts}: a map from token contract (lowercase hex)
- * to the fee fraction of the received quantity that is fee income rather than principal return.
+ * <p>V4 does <b>not</b> emit a V3-style {@code Collect} event; {@code ModifyLiquidity} carries no
+ * token amounts and {@code feesAccrued} is only a {@code modifyLiquidity} return value (never in
+ * logs). So principal must be <i>derived</i> from concentrated-liquidity tick math, and the fee is
+ * the residual of the received amount over the derived principal. Refs: Uniswap {@code v4-core}
+ * {@code IPoolManager.ModifyLiquidity} / {@code PoolManager.modifyLiquidity}
+ * ({@code callerDelta = principalDelta + feesAccrued}), and {@code StateLibrary.getSlot0}.
  *
  * <h3>Algorithm</h3>
  * <ol>
- *   <li>Decode {@code ModifyLiquidity} log: poolId (topic1), tickLower/tickUpper/liquidityDelta (data).</li>
- *   <li>For <b>out-of-range</b> positions: all principal is in one token → compute without RPC.</li>
- *   <li>For <b>in-range</b>: fetch {@code sqrtPriceX96} via {@link V4PoolStateLookupService} (Mongo cache
- *       → archive RPC). If unavailable, fall back to {@code fee = 0} (no fabrication).</li>
- *   <li>Conservation-safe clamp: {@code principal = min(computedPrincipal, received)},
- *       {@code fee = max(received − computedPrincipal, 0)} — prevents fabricating principal basis
- *       when tick-math overshoots due to rounding.</li>
- *   <li>Map ERC-20 Transfer amounts to token contracts, compute fee fraction per contract.</li>
+ *   <li>Decode {@code ModifyLiquidity}: poolId (topic1), tickLower/tickUpper/liquidityDelta (data).
+ *       Only exits ({@code liquidityDelta < 0}) are handled.</li>
+ *   <li>Gather the wallet's received principal+fee amounts per pool token. ERC-20 legs come from
+ *       {@code Transfer} logs; the <b>native-ETH</b> leg (V4 settles native ETH, currency0 = the
+ *       zero address) comes from internal transfers and is keyed by the canonical wrapped-native
+ *       (WETH↔ETH identity) so the materializer can split the native flow.</li>
+ *   <li>Determine token0/token1 by V4 currency ordering (currency0 &lt; currency1 by address;
+ *       native ETH sorts first as the zero address), then map the computed
+ *       {@code (amount0, amount1)} to the received tokens by that ordering — never by raw magnitude
+ *       (raw magnitudes across different-decimal tokens are not comparable).</li>
+ *   <li><b>Dual-token (in-range):</b> fetch {@code sqrtPriceX96} at the exit block via
+ *       {@link V4PoolStateLookupService} (Mongo write-once cache → archive RPC). If unavailable,
+ *       fall back to {@code fee = 0} (flag {@code V4_FEE_SPLIT_UNRESOLVED}) — never fabricate income.</li>
+ *   <li><b>Single-token (out-of-range):</b> principal is computable from {@code liquidityDelta} +
+ *       ticks alone (no price needed); pick the degenerate slot whose amount is the largest that
+ *       does not exceed the received amount.</li>
+ *   <li>Conservation-safe clamp per token: {@code principal = min(computedPrincipal, received)},
+ *       {@code fee = max(received − computedPrincipal, 0)} — clamping the principal (not just the
+ *       fee) preserves {@code principal + fee == received} and never fabricates principal basis.</li>
  * </ol>
  *
- * <h3>Fallback</h3>
- * When {@code ModifyLiquidity} evidence is absent, or sqrtPriceX96 is unavailable for an in-range
- * position, returns {@link Optional#empty()} so the caller treats the full received amount as
- * principal ({@code fee = 0}) — conservative, never fabricates income.
+ * <p>The returned map (token contract / canonical-WETH → fee fraction in {@code [0, 1)}) mirrors
+ * {@link LpExitFeeDecomposer#feeFractionsForContracts}; the materializer applies each fraction to
+ * the matching inbound flow leg's decimal quantity.
  */
 @Slf4j
 @Component
@@ -50,13 +61,27 @@ public class LpV4ExitFeeDecomposer {
 
     /**
      * {@code ModifyLiquidity(bytes32,address,int24,int24,int256,bytes32)} event topic0.
-     * Emitted by Uniswap V4 PoolManager and all compatible V4-fork PoolManagers.
+     * Emitted by Uniswap V4 PoolManager and all compatible V4-fork PoolManagers (Pancake Infinity CL).
      */
     public static final String MODIFY_LIQUIDITY_TOPIC =
             "0xf208f4912782fd25c7f114ca3723a2d5dd6f3bcc3ac8db5af63baa85f711d5ec";
 
     private static final String ERC20_TRANSFER_TOPIC =
             "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+
+    /** V4 native currency0 is the zero address; it sorts before every ERC-20 contract. */
+    private static final String NATIVE_ORDERING_ADDRESS = "0x0000000000000000000000000000000000000000";
+
+    /** Fee-fraction scale, matching {@link LpExitFeeDecomposer} and the materializer split. */
+    private static final int FEE_FRACTION_SCALE = 18;
+
+    /**
+     * Minimum {@code principal/received} ratio accepted on the no-price single-token path. Below
+     * this the slot mapping is treated as ambiguous and we fall back to {@code fee = 0} rather than
+     * risk fabricating a large fee from a mis-picked degenerate amount. Real CL exit fees are a
+     * small fraction of principal, so a conservative 0.5 floor never rejects a legitimate split.
+     */
+    private static final BigDecimal MIN_PRINCIPAL_FRACTION_NO_PRICE = new BigDecimal("0.5");
 
     private final V4PoolStateLookupService poolStateLookupService;
 
@@ -77,11 +102,12 @@ public class LpV4ExitFeeDecomposer {
     }
 
     /**
-     * Computes V4 fee fractions per ERC-20 token contract for the given LP exit view.
+     * Computes V4 fee fractions per received pool token for the given LP exit view.
      *
      * @param view raw transaction view (must have {@code persistedLogs} with {@code ModifyLiquidity})
-     * @return map from token contract (lowercase, no 0x prefix) to fee fraction [0, 1),
-     *         or {@link Optional#empty()} if evidence is absent or sqrtPrice is unavailable for in-range
+     * @return map from token contract / canonical-WETH (lowercase, {@code 0x}-prefixed) to the fee
+     *         fraction {@code [0, 1)}, or {@link Optional#empty()} when evidence is absent or the
+     *         in-range price is unavailable (caller then treats the full received amount as principal)
      */
     public Optional<Map<String, BigDecimal>> feeFractionsForContracts(OnChainRawTransactionView view) {
         if (view == null) {
@@ -91,111 +117,246 @@ public class LpV4ExitFeeDecomposer {
         if (decoded == null) {
             return Optional.empty();
         }
-
         BigInteger absDelta = decoded.liquidityDelta().abs();
         if (absDelta.signum() == 0) {
             return Optional.empty();
         }
 
-        // Resolve sqrtPriceX96 — needed only for in-range positions
-        // For out-of-range: getAmountsForLiquidity handles the degenerate cases (all in one token)
-        Optional<BigInteger> sqrtPrice = Optional.empty();
-        boolean needsPrice = mightBeInRange(decoded);
-        if (needsPrice && view.blockNumber() != null && view.blockNumber() > 0) {
-            sqrtPrice = poolStateLookupService.getSqrtPriceX96(
-                    view.networkId(),
-                    decoded.poolId(),
-                    view.blockNumber()
-            );
-            if (sqrtPrice.isEmpty()) {
-                log.info("V4 fee split: sqrtPriceX96 unavailable (UNRESOLVED) network={} poolId={} block={} — using fee=0 fallback",
-                        view.networkId(), decoded.poolId(), view.blockNumber());
-                // Return empty → caller treats full received as principal (fee = 0, no fabrication)
-                return Optional.empty();
-            }
-        }
-
-        BigInteger sqrtRatioX96 = sqrtPrice.orElse(
-                // For definitely-out-of-range: use an extreme sqrtPrice that guarantees the correct branch
-                decoded.liquidityDelta().signum() < 0
-                        ? BigInteger.ZERO   // forces all token0 (price below range)
-                        : LpClMathSupport.Q96.shiftLeft(64) // forces all token1 (price above range)
-        );
-
-        // Compute principal amounts via CL math
-        LpClMathSupport.Amounts principal = LpClMathSupport.getAmountsForLiquidity(
-                sqrtRatioX96, decoded.tickLower(), decoded.tickUpper(), absDelta);
-
-        // Map received ERC-20 amounts from Transfer logs to token contracts
-        Map<String, BigInteger> receivedByContract = receivedAmountsFromTransfers(view);
-        if (receivedByContract.isEmpty()) {
+        List<ReceivedToken> received = receivedTokens(view);
+        if (received.isEmpty()) {
             return Optional.empty();
         }
 
-        // Compute fee fractions with conservation-safe clamp
-        Map<String, BigDecimal> result = new HashMap<>();
-        BigInteger[] principalRaw = new BigInteger[]{principal.amount0(), principal.amount1()};
+        Map<String, BigDecimal> result = received.size() >= 2
+                ? splitDualToken(view, decoded, absDelta, received)
+                : splitSingleToken(view, decoded, absDelta, received.get(0));
 
-        // We need to match token0/token1 to contracts. We use the received amounts to identify which
-        // contract corresponds to which slot: for V4, Transfer amounts match principal+fee totals.
-        // We resolve by matching total-received ordering (larger amount → more likely token1 for ETH pools)
-        // but since we can't reliably know token0/1 ordering from logs alone without the poolKey,
-        // we use a slot-agnostic approach: for each contract, fee = max(received - computedPrincipal, 0)
-        // where computedPrincipal is the minimum of the two computed amounts matched by proximity.
-
-        List<Map.Entry<String, BigInteger>> receivedEntries = new java.util.ArrayList<>(receivedByContract.entrySet());
-        // Sort by received amount descending to match against computed amounts
-        receivedEntries.sort((a, b) -> b.getValue().compareTo(a.getValue()));
-
-        BigInteger[] computedSorted = sortDesc(principalRaw[0], principalRaw[1]);
-
-        for (int i = 0; i < receivedEntries.size() && i < 2; i++) {
-            String contract = receivedEntries.get(i).getKey();
-            BigInteger received = receivedEntries.get(i).getValue();
-            if (received == null || received.signum() <= 0) {
-                continue;
-            }
-            BigInteger computedPrincipal = i < computedSorted.length ? computedSorted[i] : BigInteger.ZERO;
-
-            // Conservation-safe clamp: principal ≤ received
-            BigInteger clampedPrincipal = computedPrincipal.min(received);
-            BigInteger fee = received.subtract(clampedPrincipal).max(BigInteger.ZERO);
-
-            if (fee.signum() <= 0) {
-                continue;
-            }
-            BigDecimal feeFraction = new BigDecimal(fee)
-                    .divide(new BigDecimal(received), 18, RoundingMode.HALF_DOWN);
-            result.put(contract, feeFraction);
-            log.info("V4 fee split: contract={} received={} principal={} fee={} fraction={}",
-                    contract, received, clampedPrincipal, fee, feeFraction);
-        }
-
-        return result.isEmpty() ? Optional.empty() : Optional.of(Collections.unmodifiableMap(result));
+        return (result == null || result.isEmpty())
+                ? Optional.empty()
+                : Optional.of(Collections.unmodifiableMap(result));
     }
 
-    /** Returns true when the tick range might contain the current price (needs sqrtPriceX96). */
-    private static boolean mightBeInRange(ModifyLiquidityDecoded decoded) {
-        // We don't know the current price, so we conservatively assume in-range unless
-        // special BSC Infinity single-token (XYZ) case detected.
-        // In practice the V4PoolStateReader handles this correctly even for out-of-range.
-        return true;
+    /**
+     * Dual-token (in-range) exit: needs the historical {@code sqrtPriceX96}. Maps computed
+     * {@code amount0/amount1} to the received tokens by V4 currency ordering.
+     */
+    private Map<String, BigDecimal> splitDualToken(
+            OnChainRawTransactionView view,
+            ModifyLiquidityDecoded decoded,
+            BigInteger absDelta,
+            List<ReceivedToken> received
+    ) {
+        Long block = view.blockNumber();
+        if (block == null || block <= 0) {
+            log.info("V4_FEE_SPLIT_UNRESOLVED: missing block number network={} poolId={} — fee=0 fallback",
+                    view.networkId(), decoded.poolId());
+            return Map.of();
+        }
+        Optional<BigInteger> sqrtPrice = poolStateLookupService.getSqrtPriceX96(
+                view.networkId(), decoded.poolId(), block);
+        if (sqrtPrice.isEmpty()) {
+            log.info("V4_FEE_SPLIT_UNRESOLVED: sqrtPriceX96 unavailable network={} poolId={} block={} — fee=0 fallback",
+                    view.networkId(), decoded.poolId(), block);
+            return Map.of();
+        }
+
+        LpClMathSupport.Amounts principal = LpClMathSupport.getAmountsForLiquidity(
+                sqrtPrice.get(), decoded.tickLower(), decoded.tickUpper(), absDelta);
+
+        // V4 currency ordering: token0 = smallest address (native ETH sorts first), token1 = largest.
+        List<ReceivedToken> ordered = new ArrayList<>(received);
+        ordered.sort((a, b) -> a.orderingAddress().compareTo(b.orderingAddress()));
+        ReceivedToken token0 = ordered.get(0);
+        ReceivedToken token1 = ordered.get(ordered.size() - 1);
+
+        Map<String, BigDecimal> result = new HashMap<>();
+        putFeeFraction(result, token0, principal.amount0(), view, decoded);
+        putFeeFraction(result, token1, principal.amount1(), view, decoded);
+        return result;
+    }
+
+    /**
+     * Single-token (out-of-range) exit. Principal is derived from {@code liquidityDelta} + ticks;
+     * a price read is used when available to disambiguate the slot, otherwise the degenerate
+     * out-of-range formulas are evaluated and the largest amount not exceeding the received quantity
+     * is taken as principal.
+     */
+    private Map<String, BigDecimal> splitSingleToken(
+            OnChainRawTransactionView view,
+            ModifyLiquidityDecoded decoded,
+            BigInteger absDelta,
+            ReceivedToken token
+    ) {
+        BigInteger received = token.rawAmount();
+        BigInteger computedPrincipal;
+
+        Long block = view.blockNumber();
+        Optional<BigInteger> sqrtPrice = (block != null && block > 0)
+                ? poolStateLookupService.getSqrtPriceX96(view.networkId(), decoded.poolId(), block)
+                : Optional.empty();
+
+        if (sqrtPrice.isPresent()) {
+            LpClMathSupport.Amounts amounts = LpClMathSupport.getAmountsForLiquidity(
+                    sqrtPrice.get(), decoded.tickLower(), decoded.tickUpper(), absDelta);
+            // Exactly one slot is non-zero for a truly one-sided position; if both are non-zero
+            // (a boundary case), pick the largest amount that does not exceed the received quantity.
+            computedPrincipal = bestPrincipalNotExceeding(received, amounts.amount0(), amounts.amount1());
+        } else {
+            BigInteger sqrtA = LpClMathSupport.getSqrtRatioAtTick(decoded.tickLower());
+            BigInteger sqrtB = LpClMathSupport.getSqrtRatioAtTick(decoded.tickUpper());
+            BigInteger amount0Below = LpClMathSupport.getAmount0ForLiquidity(sqrtA, sqrtB, absDelta);
+            BigInteger amount1Above = LpClMathSupport.getAmount1ForLiquidity(sqrtA, sqrtB, absDelta);
+            BigInteger best = bestPrincipalNotExceeding(received, amount0Below, amount1Above);
+            // Guard: below the floor the slot mapping is ambiguous → conservative fee=0.
+            BigDecimal floor = new BigDecimal(received).multiply(MIN_PRINCIPAL_FRACTION_NO_PRICE);
+            if (best.signum() <= 0 || new BigDecimal(best).compareTo(floor) < 0) {
+                log.info("V4_FEE_SPLIT_UNRESOLVED: single-token slot ambiguous (no price) network={} poolId={} "
+                                + "received={} amount0={} amount1={} — fee=0 fallback",
+                        view.networkId(), decoded.poolId(), received, amount0Below, amount1Above);
+                return Map.of();
+            }
+            computedPrincipal = best;
+        }
+
+        Map<String, BigDecimal> result = new HashMap<>();
+        putFeeFraction(result, token, computedPrincipal, view, decoded);
+        return result;
+    }
+
+    /** Largest of the two computed amounts that does not exceed {@code received}; 0 if neither fits. */
+    private static BigInteger bestPrincipalNotExceeding(BigInteger received, BigInteger a, BigInteger b) {
+        BigInteger best = BigInteger.ZERO;
+        if (a != null && a.signum() > 0 && a.compareTo(received) <= 0) {
+            best = a;
+        }
+        if (b != null && b.signum() > 0 && b.compareTo(received) <= 0 && b.compareTo(best) > 0) {
+            best = b;
+        }
+        return best;
+    }
+
+    /**
+     * Applies the conservation-safe clamp for one token and records its fee fraction when positive.
+     */
+    private void putFeeFraction(
+            Map<String, BigDecimal> result,
+            ReceivedToken token,
+            BigInteger computedPrincipal,
+            OnChainRawTransactionView view,
+            ModifyLiquidityDecoded decoded
+    ) {
+        BigInteger received = token.rawAmount();
+        if (received == null || received.signum() <= 0) {
+            return;
+        }
+        BigInteger computed = computedPrincipal == null ? BigInteger.ZERO : computedPrincipal.max(BigInteger.ZERO);
+        if (computed.compareTo(received) > 0) {
+            log.info("LP_FEE_CLAMPED: computedPrincipal>received network={} poolId={} key={} computed={} received={}",
+                    view.networkId(), decoded.poolId(), token.mapKey(), computed, received);
+        }
+        BigInteger clampedPrincipal = computed.min(received);
+        BigInteger fee = received.subtract(clampedPrincipal).max(BigInteger.ZERO);
+        if (fee.signum() <= 0) {
+            return;
+        }
+        BigDecimal fraction = new BigDecimal(fee)
+                .divide(new BigDecimal(received), FEE_FRACTION_SCALE, RoundingMode.HALF_DOWN);
+        result.put(token.mapKey(), fraction);
+        log.info("V4 fee split: network={} poolId={} key={} received={} principal={} fee={} fraction={}",
+                view.networkId(), decoded.poolId(), token.mapKey(), received, clampedPrincipal, fee, fraction);
+    }
+
+    /**
+     * Collects the wallet's received pool tokens: ERC-20 {@code Transfer} legs (keyed by contract)
+     * plus the native-ETH internal-transfer leg (keyed by canonical wrapped-native, ordered as the
+     * zero address). Returns at most one entry per distinct pool token.
+     */
+    private List<ReceivedToken> receivedTokens(OnChainRawTransactionView view) {
+        String wallet = OnChainRawTransactionView.normalizeAddress(view.walletAddress());
+        if (wallet == null) {
+            return List.of();
+        }
+        Map<String, ReceivedToken> byKey = new java.util.LinkedHashMap<>();
+
+        // ERC-20 principal+fee legs.
+        for (Document logDoc : view.persistedLogs()) {
+            List<String> topics = LpExitFeeDecomposer.normalizedTopics(logDoc);
+            if (topics.size() < 3 || !ERC20_TRANSFER_TOPIC.equals(topics.get(0))) {
+                continue;
+            }
+            if (!wallet.equals(topicAddress(topics.get(2)))) {
+                continue;
+            }
+            String contract = OnChainRawTransactionView.normalizeAddress(stringValue(logDoc.get("address")));
+            if (contract == null) {
+                continue;
+            }
+            BigInteger amount = decodeUnsignedWord(logData(logDoc), 0);
+            if (amount == null || amount.signum() <= 0) {
+                continue;
+            }
+            byKey.merge(contract, new ReceivedToken(contract, contract, amount),
+                    (existing, add) -> new ReceivedToken(existing.mapKey(), existing.orderingAddress(),
+                            existing.rawAmount().add(add.rawAmount())));
+        }
+
+        // Native-ETH leg (V4 currency0 = zero address); keyed by canonical wrapped-native so the
+        // materializer's null-contract (native ETH) split path can look it up.
+        BigInteger nativeWei = nativeEthReceived(view, wallet);
+        if (nativeWei.signum() > 0) {
+            String canonicalWeth = NativeWrappedTokenSupport.canonicalWeth(view.networkId());
+            if (canonicalWeth != null) {
+                byKey.merge(canonicalWeth,
+                        new ReceivedToken(canonicalWeth, NATIVE_ORDERING_ADDRESS, nativeWei),
+                        (existing, add) -> new ReceivedToken(existing.mapKey(), NATIVE_ORDERING_ADDRESS,
+                                existing.rawAmount().add(add.rawAmount())));
+            }
+        }
+        return new ArrayList<>(byKey.values());
+    }
+
+    /** Sums non-errored internal transfers directed to the wallet (native-ETH settlement, wei). */
+    private static BigInteger nativeEthReceived(OnChainRawTransactionView view, String wallet) {
+        BigInteger total = BigInteger.ZERO;
+        for (Document transfer : view.explorerInternalTransfers()) {
+            if (view.internalTransferErrored(transfer)) {
+                continue;
+            }
+            if (!wallet.equals(view.internalTransferTo(transfer))) {
+                continue;
+            }
+            BigInteger value = parseWei(transfer.get("value"));
+            if (value != null && value.signum() > 0) {
+                total = total.add(value);
+            }
+        }
+        return total;
+    }
+
+    private static BigInteger parseWei(Object value) {
+        String text = stringValue(value);
+        if (text == null) {
+            return null;
+        }
+        try {
+            if (text.startsWith("0x") || text.startsWith("0X")) {
+                return new BigInteger(text.substring(2), 16);
+            }
+            return new BigInteger(text);
+        } catch (NumberFormatException ex) {
+            return null;
+        }
     }
 
     private ModifyLiquidityDecoded decodeModifyLiquidity(OnChainRawTransactionView view) {
         for (Document logDoc : view.persistedLogs()) {
             List<String> topics = LpExitFeeDecomposer.normalizedTopics(logDoc);
-            if (topics.isEmpty() || !MODIFY_LIQUIDITY_TOPIC.equals(topics.get(0))) {
+            if (topics.size() < 2 || !MODIFY_LIQUIDITY_TOPIC.equals(topics.get(0))) {
                 continue;
             }
-            if (topics.size() < 2) {
-                continue;
-            }
-            String poolId = topics.get(1).startsWith("0x")
-                    ? topics.get(1).substring(2)
-                    : topics.get(1);
+            String poolId = topics.get(1).startsWith("0x") ? topics.get(1).substring(2) : topics.get(1);
 
-            // data: tickLower (int256), tickUpper (int256), liquidityDelta (int256), salt (bytes32)
+            // data: tickLower (int24→32B), tickUpper (int24→32B), liquidityDelta (int256), salt (bytes32)
             String data = logData(logDoc);
             if (data == null) {
                 continue;
@@ -210,76 +371,44 @@ public class LpV4ExitFeeDecomposer {
             BigInteger liquidityDelta = decodeSignedInt256FromWord(cleanData, 2);
 
             if (liquidityDelta == null || liquidityDelta.signum() >= 0) {
-                // We only care about exits (liquidityDelta < 0)
-                continue;
+                continue; // only exits (liquidityDelta < 0)
             }
             return new ModifyLiquidityDecoded(poolId, tickLower, tickUpper, liquidityDelta);
         }
         return null;
     }
 
-    private Map<String, BigInteger> receivedAmountsFromTransfers(OnChainRawTransactionView view) {
-        String walletAddr = OnChainRawTransactionView.normalizeAddress(view.walletAddress());
-        if (walletAddr == null) {
-            return Map.of();
-        }
-        Map<String, BigInteger> result = new HashMap<>();
-        for (Document logDoc : view.persistedLogs()) {
-            List<String> topics = LpExitFeeDecomposer.normalizedTopics(logDoc);
-            if (topics.size() < 3 || !ERC20_TRANSFER_TOPIC.equals(topics.get(0))) {
-                continue;
-            }
-            String to = topicAddress(topics.get(2));
-            if (!walletAddr.equals(to)) {
-                continue;
-            }
-            String contractAddr = OnChainRawTransactionView.normalizeAddress(
-                    stringValue(logDoc.get("address")));
-            if (contractAddr == null) {
-                continue;
-            }
-            BigInteger amount = decodeUnsignedWord(logData(logDoc), 0);
-            if (amount == null || amount.signum() <= 0) {
-                continue;
-            }
-            result.merge(contractAddr, amount, BigInteger::add);
-        }
-        return result;
-    }
-
-    private static BigInteger[] sortDesc(BigInteger a, BigInteger b) {
-        if (a.compareTo(b) >= 0) {
-            return new BigInteger[]{a, b};
-        }
-        return new BigInteger[]{b, a};
-    }
-
     private static int decodeInt24FromWord(String hexData, int wordIndex) {
         BigInteger raw = decodeSignedInt256FromWord(hexData, wordIndex);
-        if (raw == null) return 0;
-        return raw.intValue();
+        return raw == null ? 0 : raw.intValue();
     }
 
     private static BigInteger decodeSignedInt256FromWord(String hexData, int wordIndex) {
-        if (hexData == null) return null;
+        if (hexData == null) {
+            return null;
+        }
         int start = wordIndex * 64;
         int end = start + 64;
-        if (hexData.length() < end) return null;
-        String word = hexData.substring(start, end);
-        BigInteger unsigned = new BigInteger(word, 16);
-        BigInteger MAX = BigInteger.ONE.shiftLeft(255);
-        if (unsigned.compareTo(MAX) >= 0) {
+        if (hexData.length() < end) {
+            return null;
+        }
+        BigInteger unsigned = new BigInteger(hexData.substring(start, end), 16);
+        if (unsigned.testBit(255)) {
             return unsigned.subtract(BigInteger.ONE.shiftLeft(256));
         }
         return unsigned;
     }
 
     private static BigInteger decodeUnsignedWord(String data, int wordIndex) {
-        if (data == null) return null;
+        if (data == null) {
+            return null;
+        }
         String clean = data.startsWith("0x") ? data.substring(2) : data;
         int start = wordIndex * 64;
         int end = start + 64;
-        if (clean.length() < end) return null;
+        if (clean.length() < end) {
+            return null;
+        }
         return new BigInteger(clean.substring(start, end), 16);
     }
 
@@ -289,24 +418,40 @@ public class LpV4ExitFeeDecomposer {
     }
 
     private static String logData(Document logDoc) {
-        if (logDoc == null) return null;
+        if (logDoc == null) {
+            return null;
+        }
         Object d = logDoc.get("data");
         return d == null ? null : d.toString().trim();
     }
 
     private static String topicAddress(String topic) {
-        if (topic == null) return null;
+        if (topic == null) {
+            return null;
+        }
         String normalized = topic.startsWith("0x") ? topic.substring(2) : topic;
-        if (normalized.length() < 40) return null;
+        if (normalized.length() < 40) {
+            return null;
+        }
         return OnChainRawTransactionView.normalizeAddress(normalized.substring(normalized.length() - 40));
     }
 
     private static String stringValue(Object value) {
-        if (value == null) return null;
+        if (value == null) {
+            return null;
+        }
         String text = value.toString().trim();
         return text.isEmpty() ? null : text;
     }
 
     private record ModifyLiquidityDecoded(String poolId, int tickLower, int tickUpper, BigInteger liquidityDelta) {
+    }
+
+    /**
+     * A wallet-received pool token: {@code mapKey} is the split-map key consumed by the materializer
+     * (ERC-20 contract, or canonical wrapped-native for a native-ETH leg); {@code orderingAddress}
+     * is the V4 currency address used for token0/token1 ordering (zero address for native ETH).
+     */
+    private record ReceivedToken(String mapKey, String orderingAddress, BigInteger rawAmount) {
     }
 }

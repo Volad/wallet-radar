@@ -32,6 +32,9 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class AssetLedgerQueryService implements AssetLedgerReadPort {
     private static final MathContext MC = MathContext.DECIMAL128;
+    // ADR-062 deviation guard: below this covered fraction a $0 break-even is a coverage artifact, not
+    // a real effective cost, so the read model flags it for "insufficient coverage" annotation.
+    private static final BigDecimal BREAK_EVEN_COVERAGE_SUPPRESSION_THRESHOLD = new BigDecimal("0.5");
     private static final BigDecimal GAS_ONLY_BASIS_THRESHOLD = new BigDecimal("0.00000001");
     /**
      * B-ETH-04: LP-exit inbound legs that restore zero cost basis on a residual position whose
@@ -73,7 +76,8 @@ public class AssetLedgerQueryService implements AssetLedgerReadPort {
         List<AssetLedgerPoint> timelinePoints = points.stream()
                 .filter(point -> AccountingAssetFamilySupport.includeInSpotFamilyTimelineAggregation(
                         familyIdentity,
-                        point.getAssetSymbol()
+                        point.getAssetSymbol(),
+                        point.getAccountingFamilyIdentity()
                 ))
                 .toList();
         // RC-E3 / B-ETH-05 (ADR-061): zero-RPC cross-asset LP-exit closure inputs. Both reuse existing
@@ -118,7 +122,9 @@ public class AssetLedgerQueryService implements AssetLedgerReadPort {
                 familyIdentity,
                 representativeSymbol(familyIdentity, points),
                 familyMemberSymbols(points, childAttribution.childSymbols()),
-                childAttribution.childInputs()
+                childAttribution.childInputs(),
+                terminalBlendedAvcoUsd(chartProjection.timeline()),
+                terminalBlendedNetAvcoUsd(chartProjection.timeline())
         );
         FullSessionCurrentView fullSessionCurrent = reconciliationService.fullSessionCurrentView(points, familyIdentity);
         return new SessionAssetLedgerView(
@@ -160,13 +166,24 @@ public class AssetLedgerQueryService implements AssetLedgerReadPort {
             String familyIdentity,
             String representativeSymbol,
             List<String> familyMemberSymbols,
-            List<BreakEvenCalculator.FamilyBreakEvenInput> childInputs
+            List<BreakEvenCalculator.FamilyBreakEvenInput> childInputs,
+            BigDecimal blendedAvcoUsd,
+            BigDecimal blendedNetAvcoUsd
     ) {
         List<BreakEvenCalculator.FamilyBreakEvenInput> inputs = new ArrayList<>();
+        // AC-7: the viewed family's own held members are all C1 (1:1 with the underlying family unit
+        // by ADR-054 construction — WETH/aTokens/ETH), so the reconciled covered quantity IS the
+        // ETH-equivalent (rate-adjusted) denominator. A staked derivative (C2) is never a member of
+        // its parent family, so no fail-closed rate lookup is needed on the SELF input. Fold children
+        // (AC-9) that carry their own rate-adjusted ETH-equivalent quantity are supplied via childInputs.
         inputs.add(new BreakEvenCalculator.FamilyBreakEvenInput(
                 familyIdentity,
                 representativeSymbol,
                 zeroIfNull(currentState.totalCostBasisUsd()),
+                // ADR-062 (2026-07-24): Net-lane held basis numerator under offsetLane=NET, so held
+                // zero-cost income (rewards/airdrops/yield still held) is credited free on the
+                // move-basis header scalar. Market lane still uses totalCostBasisUsd above.
+                zeroIfNull(currentState.netTotalCostBasisUsd()),
                 zeroIfNull(currentState.coveredQuantity()),
                 zeroIfNull(currentState.realisedPnlUsd()),
                 zeroIfNull(currentState.netRealisedPnlUsd())
@@ -174,15 +191,29 @@ public class AssetLedgerQueryService implements AssetLedgerReadPort {
         inputs.addAll(childInputs);
         BreakEvenCalculator.BreakEvenResult result = breakEvenCalculator.compute(inputs).get(familyIdentity);
         if (result == null) {
-            return currentState.withBreakEven(null, null, null, null, familyMemberSymbols);
+            return currentState.withBreakEven(null, null, null, null, null, familyMemberSymbols,
+                    blendedAvcoUsd, blendedNetAvcoUsd);
         }
         return currentState.withBreakEven(
                 result.breakEvenUsd(),
+                result.averageCostUsd(),
                 result.lockedSurplusUsd(),
                 result.incomeReceivedUsd(),
                 result.attributionTargetFamily(),
-                familyMemberSymbols
+                familyMemberSymbols,
+                blendedAvcoUsd,
+                blendedNetAvcoUsd
         );
+    }
+
+    /** ADR-062 Wave 3 (§5): the terminal blended-market AVCO (dust-guarded) for the diagnostic lanes. */
+    private static BigDecimal terminalBlendedAvcoUsd(List<TimelineEntryView> timeline) {
+        return timeline.isEmpty() ? null : timeline.get(timeline.size() - 1).blendedAvcoAfterUsd();
+    }
+
+    /** ADR-062 Wave 3 (§5): the terminal blended-net AVCO (dust-guarded) for the diagnostic lanes. */
+    private static BigDecimal terminalBlendedNetAvcoUsd(List<TimelineEntryView> timeline) {
+        return timeline.isEmpty() ? null : timeline.get(timeline.size() - 1).blendedNetAvcoAfterUsd();
     }
 
     /**
@@ -207,14 +238,19 @@ public class AssetLedgerQueryService implements AssetLedgerReadPort {
                         );
                 for (AssetLedgerPoint point : childPoints) {
                     BigDecimal marketDelta = zeroIfNull(point.getRealisedPnlDeltaUsd());
+                    BigDecimal netDelta = zeroIfNull(point.getNetRealisedPnlDeltaUsd());
                     marketPnl = marketPnl.add(marketDelta, MC);
-                    netPnl = netPnl.add(zeroIfNull(point.getNetRealisedPnlDeltaUsd()), MC);
-                    if (marketDelta.signum() != 0) {
+                    netPnl = netPnl.add(netDelta, MC);
+                    // ADR-062 §3 (2026-07-21 amendment): emit an event whenever EITHER lane's realized
+                    // P&L moves, so income-only child events (net ≠ 0 with market = 0) still weave into
+                    // the NET-lane offset series and reconcile with the scalar header.
+                    if (marketDelta.signum() != 0 || netDelta.signum() != 0) {
                         pnlEvents.add(new AssetLedgerChartService.AttributedRealizedPnlEvent(
                                 point.getBlockTimestamp(),
                                 point.getTransactionIndex(),
                                 point.getReplaySequence(),
-                                marketDelta
+                                marketDelta,
+                                netDelta
                         ));
                     }
                     addSymbol(childSymbols, point.getAssetSymbol());
@@ -223,6 +259,9 @@ public class AssetLedgerQueryService implements AssetLedgerReadPort {
             childInputs.add(new BreakEvenCalculator.FamilyBreakEvenInput(
                     childFamily,
                     BreakEvenAttributionService.representativeSymbolFor(childFamily, null),
+                    BigDecimal.ZERO,
+                    // Net-lane held basis (symmetry with the Market-lane ZERO above): a rollup child
+                    // input carries only realized P&L, no held basis, in either lane.
                     BigDecimal.ZERO,
                     BigDecimal.ZERO,
                     marketPnl,
@@ -479,18 +518,51 @@ public class AssetLedgerQueryService implements AssetLedgerReadPort {
                                    BigDecimal gasPaidUsd, List<UncoveredBucketView> uncoveredBuckets,
                                    List<ShortfallSourceView> shortfallSources,
                                    // ADR-062 break-even (effective-cost) header fields (nullable, read-model only).
-                                   BigDecimal breakEvenUsd, BigDecimal lockedSurplusUsd,
+                                   BigDecimal breakEvenUsd,
+                                   // ADR-062 Wave 3 (§5): secondary headline "Average cost" =
+                                   // heldBasis(Market) ÷ ETH-equivalent covered qty (rate-adjusted).
+                                   BigDecimal averageCostUsd,
+                                   BigDecimal lockedSurplusUsd,
                                    BigDecimal incomeReceivedUsd, String attributionTargetFamily,
                                    // ADR-062 §3 header hint: real member symbols of the family + attributed children.
-                                   List<String> familyMemberSymbols) {
-        public CurrentStateView withBreakEven(BigDecimal breakEvenUsd, BigDecimal lockedSurplusUsd,
-                                              BigDecimal incomeReceivedUsd, String attributionTargetFamily,
-                                              List<String> familyMemberSymbols) {
+                                   List<String> familyMemberSymbols,
+                                   // ADR-062 deviation guard (nullable, additive): covered fraction and a
+                                   // suppression flag so a low-coverage $0 break-even is never shown as a real
+                                   // effective cost.
+                                   BigDecimal coveredRatio, Boolean breakEvenSuppressed,
+                                   // ADR-062 Wave 3 (§5): demoted diagnostic lanes (Balance AVCO + raw
+                                   // Blended AVCO). Kept, not deleted; the frontend demotes them behind a
+                                   // "Details / diagnostic lanes" panel. Nullable/additive.
+                                   DiagnosticLanes details) {
+        public CurrentStateView withBreakEven(BigDecimal breakEvenUsd, BigDecimal averageCostUsd,
+                                              BigDecimal lockedSurplusUsd, BigDecimal incomeReceivedUsd,
+                                              String attributionTargetFamily, List<String> familyMemberSymbols,
+                                              BigDecimal blendedAvcoUsd, BigDecimal blendedNetAvcoUsd) {
+            BigDecimal computedCoveredRatio = quantity == null || quantity.signum() <= 0
+                    ? null
+                    : (coveredQuantity == null ? BigDecimal.ZERO : coveredQuantity).divide(quantity, MC);
+            Boolean computedBreakEvenSuppressed = breakEvenUsd == null
+                    ? null
+                    : breakEvenUsd.signum() == 0
+                            && computedCoveredRatio != null
+                            && computedCoveredRatio.compareTo(BREAK_EVEN_COVERAGE_SUPPRESSION_THRESHOLD) < 0;
+            DiagnosticLanes diagnosticLanes = new DiagnosticLanes(avcoUsd, netAvcoUsd, blendedAvcoUsd, blendedNetAvcoUsd);
             return new CurrentStateView(quantity, coveredQuantity, uncoveredQuantity, totalCostBasisUsd, avcoUsd,
                     netTotalCostBasisUsd, netAvcoUsd, realisedPnlUsd, netRealisedPnlUsd, gasPaidUsd, uncoveredBuckets,
-                    shortfallSources, breakEvenUsd, lockedSurplusUsd, incomeReceivedUsd, attributionTargetFamily,
-                    familyMemberSymbols);
+                    shortfallSources, breakEvenUsd, averageCostUsd, lockedSurplusUsd, incomeReceivedUsd,
+                    attributionTargetFamily, familyMemberSymbols, computedCoveredRatio, computedBreakEvenSuppressed,
+                    diagnosticLanes);
         }
+    }
+
+    /**
+     * ADR-062 Wave 3 (§5) demoted diagnostic lanes surfaced under the two headline metrics
+     * (Break-even price + Average cost). Balance AVCO = covered-basis-weighted balance-anchored AVCO
+     * (market + net); Blended AVCO = the total-exposure blended series terminal value (ADR-061), both
+     * dust-guarded (AC-10). All nullable.
+     */
+    public record DiagnosticLanes(BigDecimal balanceAvcoUsd, BigDecimal balanceNetAvcoUsd,
+                                  BigDecimal blendedAvcoUsd, BigDecimal blendedNetAvcoUsd) {
     }
     public record UncoveredBucketView(String walletAddress, String networkId, String assetSymbol, String assetContract,
                                       BigDecimal quantity, BigDecimal coveredQuantity, BigDecimal uncoveredQuantity,
@@ -515,7 +587,12 @@ public class AssetLedgerQueryService implements AssetLedgerReadPort {
                                     BigDecimal blendedCoveredQuantityAfter, BigDecimal liquidQuantityAfter,
                                     String blendedAvcoKind,
                                     // ADR-062 §3 — effective-cost (break-even) time series (nullable).
-                                    BigDecimal effectiveCostAfterUsd) {}
+                                    BigDecimal effectiveCostAfterUsd,
+                                    // ADR-062 Wave 3 (AC-12 / D9) — the SUBJECT (viewed-family) asset's own
+                                    // unit price for this move event, so the move-basis tooltip renders the
+                                    // subject price instead of a counterparty quote-leg (e.g. USDT $1). Null
+                                    // when no subject-asset flow price is available.
+                                    BigDecimal subjectUnitPriceUsd) {}
     public record EventOverlayView(String eventGroupId, String normalizedTransactionId, String txHash,
                                    Instant blockTimestamp, String normalizedType, String protocolName,
                                    String lifecycleKind, List<String> walletAddresses, List<String> networkIds,

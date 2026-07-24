@@ -206,6 +206,58 @@ class ProtocolRegistryLoaderTest {
     }
 
     @Test
+    @DisplayName("ADR-066: Solana program IDs key on raw case-sensitive base58, not 0x-lowercase")
+    void loadsSolanaProgramIdsAsCaseSensitiveBase58() {
+        ProtocolRegistryLoader.LoadedProtocolRegistry loaded = loader.loadFromClasspath();
+
+        ProtocolRegistryEntry jupiter = loaded.entriesByKey().get(
+                new ProtocolRegistryLoader.RegistryKey(
+                        NetworkId.SOLANA,
+                        "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"
+                ));
+        assertThat(jupiter).isNotNull();
+        assertThat(jupiter.family()).isEqualTo(ProtocolRegistryFamily.AGGREGATOR);
+        assertThat(jupiter.role()).isEqualTo(ProtocolRegistryRole.ROUTER);
+        assertThat(jupiter.protocolName()).isEqualTo("Jupiter");
+
+        ProtocolRegistryEntry meteoraDlmm = loaded.entriesByKey().get(
+                new ProtocolRegistryLoader.RegistryKey(
+                        NetworkId.SOLANA,
+                        "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo"
+                ));
+        assertThat(meteoraDlmm).isNotNull();
+        assertThat(meteoraDlmm.role()).isEqualTo(ProtocolRegistryRole.POSITION_MANAGER);
+    }
+
+    @Test
+    @DisplayName("ADR-066: rejects an entry that mixes Solana and EVM networks")
+    void rejectsMixedSolanaAndEvmEntry() {
+        String json = """
+                {
+                  "supported_networks": ["ETHEREUM", "SOLANA"],
+                  "families": ["AGGREGATOR"],
+                  "contracts": {
+                    "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4": {
+                      "name": "Bad Mixed",
+                      "protocol": "Bad",
+                      "family": "AGGREGATOR",
+                      "role": "ROUTER",
+                      "networks": ["ETHEREUM", "SOLANA"],
+                      "confidence": "HIGH"
+                    }
+                  },
+                  "method_ids": {}
+                }
+                """;
+
+        assertThatThrownBy(() -> loader.load(
+                new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)),
+                "inline"
+        )).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("must not mix Solana and EVM networks");
+    }
+
+    @Test
     @DisplayName("ignores event_topics and decorative keys while loading")
     void ignoresEventTopicsAndDecorativeKeys() {
         String json = """

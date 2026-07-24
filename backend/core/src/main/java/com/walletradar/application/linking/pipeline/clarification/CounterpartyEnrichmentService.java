@@ -1,35 +1,68 @@
 package com.walletradar.application.linking.pipeline.clarification;
 
-import com.walletradar.domain.counterparty.CounterpartyType;
+import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.transaction.normalized.NormalizedTransaction;
 import com.walletradar.domain.transaction.normalized.NormalizedTransactionRepository;
-import com.walletradar.domain.transaction.normalized.NormalizedTransactionType;
 import com.walletradar.domain.transaction.raw.RawTransaction;
-import com.walletradar.application.normalization.pipeline.onchain.OnChainRawTransactionView;
 import com.walletradar.domain.transaction.raw.RawTransactionRepository;
-import lombok.RequiredArgsConstructor;
+import com.walletradar.domain.wallet.OnChainAddressClassifier;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
-import java.util.Objects;
 import java.util.Optional;
 
 /**
- * Clarification-adjacent counterparty enrichment that fills row-local counterpartyAddress from persisted raw evidence.
+ * Clarification-adjacent counterparty enrichment that fills row-local counterpartyAddress from
+ * persisted raw evidence.
+ *
+ * <p>ADR-066: resolution is delegated to a per-{@link NetworkId}-family {@link CounterpartyResolver}
+ * selected inside {@link #enrichInPlace}. EVM behaviour is unchanged — it runs through
+ * {@link EvmCounterpartyResolver}, which holds the former inline logic verbatim.</p>
  */
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class CounterpartyEnrichmentService {
 
     private final CounterpartyEnrichmentQueryService queryService;
-    private final CounterpartyResolutionService resolutionService;
     private final RawTransactionRepository rawTransactionRepository;
     private final NormalizedTransactionRepository normalizedTransactionRepository;
+    private final List<CounterpartyResolver> resolvers;
+
+    @Autowired
+    public CounterpartyEnrichmentService(
+            CounterpartyEnrichmentQueryService queryService,
+            RawTransactionRepository rawTransactionRepository,
+            NormalizedTransactionRepository normalizedTransactionRepository,
+            List<CounterpartyResolver> resolvers
+    ) {
+        this.queryService = queryService;
+        this.rawTransactionRepository = rawTransactionRepository;
+        this.normalizedTransactionRepository = normalizedTransactionRepository;
+        this.resolvers = List.copyOf(resolvers);
+    }
+
+    /**
+     * Test/legacy constructor: wires the EVM resolver from a {@link CounterpartyResolutionService}
+     * so existing EVM unit tests keep constructing this service with the resolution service directly.
+     */
+    public CounterpartyEnrichmentService(
+            CounterpartyEnrichmentQueryService queryService,
+            CounterpartyResolutionService resolutionService,
+            RawTransactionRepository rawTransactionRepository,
+            NormalizedTransactionRepository normalizedTransactionRepository
+    ) {
+        this(
+                queryService,
+                rawTransactionRepository,
+                normalizedTransactionRepository,
+                List.of(new EvmCounterpartyResolver(resolutionService))
+        );
+    }
 
     public int processNextBatch(int batchSize) {
         int boundedBatchSize = Math.max(1, batchSize);
@@ -76,92 +109,20 @@ public class CounterpartyEnrichmentService {
         if (normalizedTransaction == null) {
             return false;
         }
-
-        CounterpartyResolutionService.ResolvedCounterparty resolved = rawTransaction == null
-                ? CounterpartyResolutionService.ResolvedCounterparty.missingRaw()
-                : resolutionService.resolveMetadata(normalizedTransaction, rawTransaction);
-        if (resolved == null) {
+        CounterpartyResolver resolver = selectResolver(normalizedTransaction.getNetworkId());
+        if (resolver == null) {
             return false;
         }
-
-        boolean changed = false;
-        if (resolved.address() != null
-                && !resolved.address().isBlank()
-                && !Objects.equals(normalizedTransaction.getCounterpartyAddress(), resolved.address())) {
-            normalizedTransaction.setCounterpartyAddress(resolved.address());
-            changed = true;
-        }
-        if (resolved.counterpartyType() != null
-                && !Objects.equals(normalizedTransaction.getCounterpartyType(), resolved.counterpartyType())) {
-            normalizedTransaction.setCounterpartyType(resolved.counterpartyType());
-            changed = true;
-        }
-        if (resolved.resolutionState() != null
-                && !Objects.equals(normalizedTransaction.getCounterpartyResolutionState(), resolved.resolutionState())) {
-            normalizedTransaction.setCounterpartyResolutionState(resolved.resolutionState());
-            changed = true;
-        }
-        if (resolved.evidence() != null
-                && !Objects.equals(normalizedTransaction.getCounterpartyResolutionEvidence(), resolved.evidence())) {
-            normalizedTransaction.setCounterpartyResolutionEvidence(resolved.evidence());
-            changed = true;
-        }
-        if (promoteExternalTransferToInternal(normalizedTransaction)) {
-            changed = true;
-        }
-        if (enrichFlowCounterparty(normalizedTransaction, rawTransaction)) {
-            changed = true;
-        }
-        FlowCounterpartySupport.applyTransactionCounterparty(normalizedTransaction);
-        if (!changed) {
-            return false;
-        }
-
-        normalizedTransaction.setUpdatedAt(now == null ? Instant.now() : now);
-        return true;
+        return resolver.enrichInPlace(normalizedTransaction, rawTransaction, now);
     }
 
-    private boolean promoteExternalTransferToInternal(NormalizedTransaction transaction) {
-        if (transaction == null || transaction.getType() == null || transaction.getCounterpartyType() == null) {
-            return false;
+    private CounterpartyResolver selectResolver(@Nullable NetworkId networkId) {
+        for (CounterpartyResolver resolver : resolvers) {
+            if (resolver.supports(networkId)) {
+                return resolver;
+            }
         }
-        if (CounterpartyType.CEX.equals(transaction.getCounterpartyType())) {
-            return false;
-        }
-        if (!CounterpartyType.PERSONAL_WALLET.equals(transaction.getCounterpartyType())) {
-            return false;
-        }
-        NormalizedTransactionType type = transaction.getType();
-        if (type != NormalizedTransactionType.EXTERNAL_TRANSFER_IN
-                && type != NormalizedTransactionType.EXTERNAL_TRANSFER_OUT) {
-            return false;
-        }
-        transaction.setType(NormalizedTransactionType.INTERNAL_TRANSFER);
-        if (Boolean.TRUE.equals(transaction.getExcludedFromAccounting())) {
-            transaction.setExcludedFromAccounting(false);
-            transaction.setAccountingExclusionReason(null);
-        }
-        return true;
-    }
-
-    private boolean enrichFlowCounterparty(
-            NormalizedTransaction transaction,
-            @Nullable RawTransaction rawTransaction
-    ) {
-        if (transaction == null) {
-            return false;
-        }
-        if (rawTransaction == null) {
-            FlowCounterpartySupport.syncFlowsFromTransaction(transaction);
-            return true;
-        }
-        OnChainRawTransactionView view = OnChainRawTransactionView.wrap(rawTransaction);
-        FlowCounterpartySupport.enrichOnChainFlows(
-                transaction,
-                view,
-                (address, networkId) -> resolutionService.classifyCounterpartyType(transaction, address)
-        );
-        return true;
+        return null;
     }
 
     private Optional<RawTransaction> loadRaw(NormalizedTransaction normalizedTransaction) {
@@ -171,9 +132,17 @@ public class CounterpartyEnrichmentService {
                 || normalizedTransaction.getWalletAddress() == null) {
             return Optional.empty();
         }
-        String txHash = normalizedTransaction.getTxHash().trim().toLowerCase(Locale.ROOT);
-        String networkId = normalizedTransaction.getNetworkId().name();
-        String walletAddress = normalizedTransaction.getWalletAddress().trim().toLowerCase(Locale.ROOT);
+        NetworkId network = normalizedTransaction.getNetworkId();
+        // ADR-066 / RC-S2: Solana (base58) and TON (base64url) identifiers are case-sensitive and must
+        // never be lowercased, or the raw doc key can never be matched. EVM keeps its 0x-lowercase form
+        // (byte-for-byte unchanged). Wallet addresses reuse the codebase-wide family-aware normaliser
+        // (see SourceSyncPlanner.normalizedAddress).
+        boolean caseSensitiveFamily = network == NetworkId.SOLANA || network == NetworkId.TON;
+        String txHash = caseSensitiveFamily
+                ? normalizedTransaction.getTxHash().trim()
+                : normalizedTransaction.getTxHash().trim().toLowerCase(Locale.ROOT);
+        String networkId = network.name();
+        String walletAddress = OnChainAddressClassifier.normalize(normalizedTransaction.getWalletAddress().trim());
         String rawId = txHash + ":" + networkId + ":" + walletAddress;
 
         Optional<RawTransaction> exact = rawTransactionRepository.findByTxHashAndNetworkIdAndWalletAddress(

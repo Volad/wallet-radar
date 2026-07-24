@@ -1,4 +1,4 @@
-import { EvmNetworkId } from './wallet-api.models';
+import { OnChainWalletNetworkId } from './wallet-api.models';
 
 export type LpPrecision = 'EXACT' | 'ESTIMATED' | 'N/A' | 'UNAVAILABLE' | string;
 export type LpPositionStatus = 'in_range' | 'out_of_range' | 'closed' | 'unknown';
@@ -90,7 +90,7 @@ export interface LpPosition {
   readonly correlationId: string;
   readonly protocol: string;
   readonly family: LpFamily;
-  readonly networkId: EvmNetworkId;
+  readonly networkId: OnChainWalletNetworkId;
   readonly wallet: string;
   readonly pair: string;
   readonly token0: LpTokenSide;

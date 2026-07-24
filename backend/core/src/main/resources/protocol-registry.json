@@ -15,7 +15,9 @@
     "MANTLE",
     "UNICHAIN",
     "KATANA",
-    "PLASMA"
+    "PLASMA",
+    "SOLANA",
+    "TON"
   ],
   "families": [
     "DEX",
@@ -49,6 +51,217 @@
     "LENDING_LOOP_REBALANCE"
   ],
   "contracts": {
+    "── SOLANA program IDs (ADR-063 / ADR-066) ──": {},
+    "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4": {
+      "name": "Jupiter Aggregator",
+      "protocol": "Jupiter",
+      "version": "v6",
+      "family": "AGGREGATOR",
+      "role": "ROUTER",
+      "confidence": "HIGH",
+      "event_type": "SWAP",
+      "networks": ["SOLANA"]
+    },
+    "JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB": {
+      "name": "Jupiter Aggregator",
+      "protocol": "Jupiter",
+      "version": "v4",
+      "family": "AGGREGATOR",
+      "role": "ROUTER",
+      "confidence": "HIGH",
+      "event_type": "SWAP",
+      "networks": ["SOLANA"]
+    },
+    "jupr81YtYssSyPt8jbnGuiWon5f6x9TcDEFxYe3Bdzi": {
+      "name": "Jupiter Lend",
+      "protocol": "JupiterLend",
+      "version": "v1-borrow",
+      "family": "LENDING",
+      "role": "POOL",
+      "confidence": "HIGH",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": ["SOLANA"]
+    },
+    "jupeiUmn818Jg1ekPURTpr4mFo29p46vygyykFJ3wZC": {
+      "name": "Jupiter Lend",
+      "protocol": "JupiterLend",
+      "version": "v1-earn",
+      "family": "LENDING",
+      "role": "POOL",
+      "confidence": "HIGH",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": ["SOLANA"]
+    },
+    "jupnw4B6Eqs7ft6rxpzYLJZYSnrpRgPcr589n5Kv4oc": {
+      "name": "Jupiter Lend",
+      "protocol": "JupiterLend",
+      "version": "v1-liquidity",
+      "family": "LENDING",
+      "role": "POOL",
+      "confidence": "HIGH",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": ["SOLANA"]
+    },
+    "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo": {
+      "name": "Meteora DLMM",
+      "protocol": "Meteora",
+      "version": "DLMM",
+      "family": "LP",
+      "role": "POSITION_MANAGER",
+      "confidence": "HIGH",
+      "event_type": "LP_MINT",
+      "networks": ["SOLANA"]
+    },
+    "61DFfeTKM7trxYcPQCM78bJ794ddZprZpAwAnLiwTpYH": {
+      "name": "Jupiter RFQ",
+      "protocol": "Jupiter",
+      "version": "OrderEngine",
+      "family": "AGGREGATOR",
+      "role": "ROUTER",
+      "confidence": "HIGH",
+      "event_type": "SWAP",
+      "networks": ["SOLANA"]
+    },
+    "24Uqj9JCLxUeoC3hGfh5W3s9FM9uCHDS2SG3LYwBpyTi": {
+      "name": "Meteora Vault",
+      "protocol": "Meteora",
+      "version": "DynamicVault",
+      "family": "YIELD",
+      "role": "VAULT",
+      "confidence": "HIGH",
+      "event_type": "VAULT_DEPOSIT",
+      "networks": ["SOLANA"]
+    },
+    "Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB": {
+      "name": "Meteora Dynamic AMM",
+      "protocol": "Meteora",
+      "version": "DAMMv1",
+      "family": "LP",
+      "role": "POOL",
+      "confidence": "HIGH",
+      "event_type": "SWAP",
+      "networks": ["SOLANA"]
+    },
+    "cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG": {
+      "name": "Meteora DAMM v2",
+      "protocol": "Meteora",
+      "version": "DAMMv2",
+      "family": "LP",
+      "role": "POOL",
+      "confidence": "HIGH",
+      "event_type": "SWAP",
+      "networks": ["SOLANA"]
+    },
+    "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8": {
+      "name": "Raydium AMM v4",
+      "protocol": "Raydium",
+      "version": "v4",
+      "family": "DEX",
+      "role": "POOL",
+      "confidence": "HIGH",
+      "event_type": "SWAP",
+      "networks": ["SOLANA"]
+    },
+    "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK": {
+      "name": "Raydium CLMM",
+      "protocol": "Raydium",
+      "version": "CLMM",
+      "family": "LP",
+      "role": "POOL",
+      "confidence": "HIGH",
+      "event_type": "LP_MINT",
+      "networks": ["SOLANA"]
+    },
+    "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C": {
+      "name": "Raydium CPMM",
+      "protocol": "Raydium",
+      "version": "CPMM",
+      "family": "DEX",
+      "role": "POOL",
+      "confidence": "HIGH",
+      "event_type": "SWAP",
+      "networks": ["SOLANA"]
+    },
+    "FqGg2Y1FNxMiGd51Q6UETixQWkF5fB92MysbYogRJb3P": {
+      "name": "Hawksight Automation",
+      "protocol": "Hawksight",
+      "version": "v1",
+      "family": "LP",
+      "role": "POSITION_MANAGER",
+      "confidence": "HIGH",
+      "event_type": "LP_MINT",
+      "networks": ["SOLANA"]
+    },
+    "KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD": {
+      "name": "Kamino Lend",
+      "protocol": "Kamino",
+      "version": "v1",
+      "family": "LENDING",
+      "role": "POOL",
+      "confidence": "HIGH",
+      "event_type": "LENDING_DEPOSIT",
+      "networks": ["SOLANA"]
+    },
+    "kvauTFR8qm1dhniz6pYuBZkuene38GjkNbFxHWe4s1o": {
+      "name": "Kamino Vault",
+      "protocol": "Kamino",
+      "version": "Vault",
+      "family": "YIELD",
+      "role": "VAULT",
+      "confidence": "HIGH",
+      "event_type": "VAULT_DEPOSIT",
+      "networks": ["SOLANA"]
+    },
+    "MarBmsSgKXdrN1egZf5sqe1TMai9K1rChYNDJgjq7aD": {
+      "name": "Marinade",
+      "protocol": "Marinade",
+      "version": "v1",
+      "family": "STAKING",
+      "role": "STAKE_CONTRACT",
+      "confidence": "HIGH",
+      "event_type": "STAKING_DEPOSIT",
+      "networks": ["SOLANA"]
+    },
+    "Jito4APyf642JPZPx3hGc6WWJ8zPKtRbRs4P815Awbb": {
+      "name": "Jito Stake Pool",
+      "protocol": "Jito",
+      "version": "v1",
+      "family": "STAKING",
+      "role": "STAKE_CONTRACT",
+      "confidence": "HIGH",
+      "event_type": "STAKING_DEPOSIT",
+      "networks": ["SOLANA"]
+    },
+    "FarmuwXPWXvefWUeqFAa5w6rifLkq5X6E8bimYvrhCB1": {
+      "name": "Meteora Farm",
+      "protocol": "Meteora",
+      "version": "Farm",
+      "family": "STAKING",
+      "role": "STAKE_CONTRACT",
+      "confidence": "HIGH",
+      "event_type": "REWARD_CLAIM",
+      "networks": ["SOLANA"]
+    },
+    "DF1ow4tspfHX9JwWJsAb9epbkA8hmpSEAtxXy1V27QBH": {
+      "name": "DFlow Aggregator",
+      "protocol": "DFlow",
+      "version": "v1",
+      "family": "AGGREGATOR",
+      "role": "ROUTER",
+      "confidence": "HIGH",
+      "event_type": "SWAP",
+      "networks": ["SOLANA"]
+    },
+    "routeUGWgWzqBWFcrCfv8tritsqukccJPu3q5GPP3xS": {
+      "name": "OKX DEX Router",
+      "protocol": "OKX",
+      "version": "v1",
+      "family": "AGGREGATOR",
+      "role": "ROUTER",
+      "confidence": "HIGH",
+      "event_type": "SWAP",
+      "networks": ["SOLANA"]
+    },
     "\u2500\u2500 DEX: Uniswap \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500": {},
     "0xe592427a0aece92de3edee1f18e0157c05861564": {
       "name": "Uniswap V3 SwapRouter",
@@ -1052,11 +1265,12 @@
       "version": "Sidechain",
       "family": "YIELD",
       "role": "REWARD_ROUTER",
+      "specialHandler": "AURA_BOOSTER",
       "networks": [
         "AVALANCHE"
       ],
       "confidence": "HIGH",
-      "notes": "Aura Finance BoosterLite on Avalanche. Orchestrates staking/unstaking to reward pools. Not the direct LP staking target."
+      "notes": "R6a: Aura Finance BoosterLite on Avalanche. deposit(pid,amount,stake) stakes a Balancer BPT and mints the Aura deposit-vault receipt token. AURA_BOOSTER special handler classifies the BPT<->deposit-vault movement as LP_POSITION_STAKE/UNSTAKE (basis-neutral), keying the pool via the deposit-vault entry's underlyingPositionManager. Retains REWARD_ROUTER role for pure getReward claims (no BPT movement)."
     },
     "0x7037358a6f2c1d9e5cc9b4a29e7415a7060dadcc": {
       "name": "auraAave GHO/USDT/USDC-vault (Aura BaseRewardPool)",

@@ -12,6 +12,8 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.util.List;
 
@@ -28,15 +30,18 @@ public class WalletController {
 
     @PostMapping
     @ResponseStatus(HttpStatus.ACCEPTED)
-    public AddWalletResponse addWallet(@RequestBody @Valid AddWalletRequest request) {
+    public Mono<AddWalletResponse> addWallet(@RequestBody @Valid AddWalletRequest request) {
         String address = request.address().trim();
         var networks = request.networks();
-        walletBackfillService.addWallet(address, networks);
         String networkLabel = (networks != null && !networks.isEmpty())
                 ? networks.get(0).name()
                 : "all";
         String syncId = "wallet-" + address.substring(0, Math.min(10, address.length())) + "-" + networkLabel;
-        return new AddWalletResponse(syncId, "Backfill started");
+        // Backfill planning performs blocking RPC/explorer head resolution; it must not run on the
+        // reactive event loop (WebClient .block() throws there). Offload to a blocking-capable scheduler.
+        return Mono.fromRunnable(() -> walletBackfillService.addWallet(address, networks))
+                .subscribeOn(Schedulers.boundedElastic())
+                .thenReturn(new AddWalletResponse(syncId, "Backfill started"));
     }
 
     @GetMapping(value = "/{address}/status", params = "network")

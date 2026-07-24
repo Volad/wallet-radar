@@ -69,6 +69,7 @@ public final class LendingAssetSymbolSupport {
             "ARB",
             "OP",
             "POL",
+            "ZK",
             "WSTETH",
             "WEETH",
             "SAVAX",
@@ -171,6 +172,33 @@ public final class LendingAssetSymbolSupport {
         return RECEIPT_PREFIXES.stream().anyMatch(prefix ->
                 cleaned.equals(prefix) || cleaned.startsWith(prefix) && cleaned.length() > prefix.length()
         );
+    }
+
+    /**
+     * Public classification for lending receipt tokens (aToken-style) and debt tokens
+     * (variable/stable). Interest-accruing receipt/debt tokens rebase their {@code balanceOf}, so
+     * indexed balance providers that report scaled/principal amounts under-report accrued interest;
+     * callers refreshing on-chain balances use this to force a live {@code balanceOf} RPC read. Pure
+     * symbol grammar — no hardcoded contracts, wallets or networks.
+     */
+    public static boolean isLendingReceiptOrDebtSymbol(String symbol) {
+        return isLendingPositionSymbol(symbol);
+    }
+
+    /**
+     * True when the symbol is an Aave supply-side receipt (aToken), excluding variable/stable debt
+     * markers. Used by network-agnostic classification to recognize a routed Aave supply/withdraw
+     * (aToken ↔ underlying) regardless of the network-specific market prefix (e.g. {@code aBas},
+     * {@code aZks}, {@code aArb}, {@code aEth}). Pure symbol grammar — no hardcoded contracts,
+     * wallets, or networks.
+     */
+    public static boolean isAaveSupplyReceiptSymbol(String symbol) {
+        if (lendingReceiptLifecycleUnderlying(symbol) == null) {
+            return false;
+        }
+        return LendingProtocolNameSupport.protocolFromAssetSymbol(symbol)
+                .filter(LendingProtocolNameSupport.AAVE::equals)
+                .isPresent();
     }
 
     static boolean isStable(String symbol) {

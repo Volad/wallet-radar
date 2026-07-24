@@ -58,10 +58,12 @@ class NativeWrappedTokenSupportTest {
     }
 
     @Test
-    void canonicalWeth_returnsNullForUnknownOrNonWrappedNetwork() {
+    void canonicalWeth_resolvesConfiguredWrappedNativeAndNullOtherwise() {
         assertThat(NativeWrappedTokenSupport.canonicalWeth(null)).isNull();
-        // Non-EVM networks have no wrapped-native configured.
-        assertThat(NativeWrappedTokenSupport.canonicalWeth(NetworkId.SOLANA)).isNull();
+        // Solana has a configured wrapped-native (wSOL SPL mint) in network-descriptors.yml.
+        assertThat(NativeWrappedTokenSupport.canonicalWeth(NetworkId.SOLANA))
+                .isEqualTo("so11111111111111111111111111111111111111112");
+        // TON has no wrapped-native configured.
         assertThat(NativeWrappedTokenSupport.canonicalWeth(NetworkId.TON)).isNull();
     }
 }

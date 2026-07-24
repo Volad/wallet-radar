@@ -46,7 +46,7 @@
           <div></div>
           <div></div>
           <div>Label</div>
-          <div>EVM Address</div>
+          <div>Address</div>
           <div>Networks</div>
           <div></div>
         </div>
@@ -77,7 +77,7 @@
                     [value]="wallet.address"
                     (paste)="handleAddressPaste($event, index)"
                     (input)="updateWallet(wallet.id, { address: $any($event.target).value })"
-                    placeholder="0x… EVM address"
+                    placeholder="Wallet address"
                     autocomplete="off"
                     spellcheck="false" />
 
@@ -88,17 +88,26 @@
                   }
                 </div>
 
-                <button type="button" class="wallet-networks-toggle" (click)="toggleWalletNetworks(wallet.id)">
-                  <span class="wallet-networks-copy">
-                    {{ wallet.networks.length === allNetworkIds.length ? 'All networks' : wallet.networks.length + ' selected' }}
-                  </span>
-                  <span class="chev" [class.open]="wallet.networksOpen">⌄</span>
-                </button>
+                @if (wallet.domain === 'EVM' || wallet.domain === 'UNKNOWN') {
+                  <button type="button" class="wallet-networks-toggle" (click)="toggleWalletNetworks(wallet.id)">
+                    <span class="wallet-networks-copy">
+                      {{ wallet.networks.length === allNetworkIds.length ? 'All networks' : wallet.networks.length + ' selected' }}
+                    </span>
+                    <span class="chev" [class.open]="wallet.networksOpen">⌄</span>
+                  </button>
+                } @else {
+                  <div class="wallet-networks-fixed">
+                    @if (networkIcon(wallet.domain)) {
+                      <span class="network-chip-icon">{{ networkIcon(wallet.domain) }}</span>
+                    }
+                    <span [style.color]="networkColor(wallet.domain)">{{ networkLabel(wallet.domain) }}</span>
+                  </div>
+                }
 
                 <button type="button" class="wallet-remove" (click)="removeWallet(wallet.id)" aria-label="Remove wallet">🗑</button>
               </div>
 
-              @if (wallet.networksOpen) {
+              @if (wallet.networksOpen && (wallet.domain === 'EVM' || wallet.domain === 'UNKNOWN')) {
                 <div class="wallet-networks-panel">
                   <div class="networks-panel-head">
                     <span class="networks-panel-title">Networks</span>

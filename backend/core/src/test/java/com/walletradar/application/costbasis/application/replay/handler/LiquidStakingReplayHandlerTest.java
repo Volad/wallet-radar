@@ -26,7 +26,8 @@ class LiquidStakingReplayHandlerTest {
     );
 
     @Test
-    void avaxToSavaxCrossCanonicalDoesNotSelectPrincipalFlows() {
+    void avaxToSavaxIntraClusterSelectsPrincipalFlows() {
+        // ADR-083: AVAX and sAVAX both resolve to CLUSTER:AVAX_STAKING → cluster-carry (not realize).
         NormalizedTransaction transaction = transaction(
                 flow(NormalizedLegRole.SELL, "AVAX", "-1"),
                 flow(NormalizedLegRole.BUY, "sAVAX", "0.95")
@@ -34,14 +35,15 @@ class LiquidStakingReplayHandlerTest {
 
         LiquidStakingFlowSelection selection = handler.selectPrincipalFlows(transaction);
 
-        assertThat(selection.outbound()).isEmpty();
-        assertThat(selection.inbound()).isEmpty();
+        assertThat(selection.outbound()).hasSize(1);
+        assertThat(selection.outbound().getFirst().flow().getAssetSymbol()).isEqualTo("AVAX");
+        assertThat(selection.inbound()).hasSize(1);
+        assertThat(selection.inbound().getFirst().flow().getAssetSymbol()).isEqualTo("sAVAX");
     }
 
     @Test
-    void methToCmethSelectsPrincipalFlowsAsC1SameFamily() {
-        // CMETH is now C1 sharing FAMILY:METH — METH→CMETH routes through LiquidStakingReplayHandler
-        // as REALLOCATE_OUT/IN (same-family basis carry), not cross-canonical DISPOSE+ACQUIRE.
+    void methToCmethSelectsPrincipalFlowsAsDegenerateSingleClusterCase() {
+        // ADR-083 degenerate case: METH and CMETH both FAMILY:METH → CLUSTER:ETH_STAKING carry.
         NormalizedTransaction transaction = transaction(
                 flow(NormalizedLegRole.TRANSFER, "METH", "-0.66865026"),
                 flow(NormalizedLegRole.TRANSFER, "CMETH", "0.66865026")
@@ -56,10 +58,39 @@ class LiquidStakingReplayHandlerTest {
     }
 
     @Test
-    void ethToCmethStakingDepositDoesNotSelectPrincipalFlows() {
+    void ethToCmethIntraClusterSelectsPrincipalFlows() {
+        // ADR-083: ETH (FAMILY:ETH) and CMETH (FAMILY:METH) both resolve to CLUSTER:ETH_STAKING.
         NormalizedTransaction transaction = transaction(
                 flow(NormalizedLegRole.TRANSFER, "ETH", "-1.0"),
                 flow(NormalizedLegRole.TRANSFER, "CMETH", "0.97")
+        );
+
+        LiquidStakingFlowSelection selection = handler.selectPrincipalFlows(transaction);
+
+        assertThat(selection.outbound()).hasSize(1);
+        assertThat(selection.inbound()).hasSize(1);
+    }
+
+    @Test
+    void crossClusterEthToSolDoesNotSelectPrincipalFlows() {
+        // ADR-083: ETH (ETH cluster) → SOL (SOL cluster) is cross-cluster → realize, not carry.
+        NormalizedTransaction transaction = transaction(
+                flow(NormalizedLegRole.SELL, "ETH", "-1.0"),
+                flow(NormalizedLegRole.BUY, "SOL", "20.0")
+        );
+
+        LiquidStakingFlowSelection selection = handler.selectPrincipalFlows(transaction);
+
+        assertThat(selection.outbound()).isEmpty();
+        assertThat(selection.inbound()).isEmpty();
+    }
+
+    @Test
+    void clusterToNonClusterEthToUsdtDoesNotSelectPrincipalFlows() {
+        // ADR-083: ETH (cluster) → USDT (non-cluster) is an exit/sale → realize, not carry.
+        NormalizedTransaction transaction = transaction(
+                flow(NormalizedLegRole.SELL, "ETH", "-1.0"),
+                flow(NormalizedLegRole.BUY, "USDT", "3000.0")
         );
 
         LiquidStakingFlowSelection selection = handler.selectPrincipalFlows(transaction);

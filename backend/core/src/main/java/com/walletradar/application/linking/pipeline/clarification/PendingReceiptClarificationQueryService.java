@@ -9,6 +9,7 @@ import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.domain.transaction.raw.RawTransactionRepository;
 import com.walletradar.application.normalization.pipeline.classification.reason.ClassificationReasonCode;
 import com.walletradar.application.normalization.pipeline.classification.support.ClarificationEligibilitySupport;
+import com.walletradar.platform.networks.descriptor.NetworkRegistry;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoOperations;
@@ -40,6 +41,21 @@ public class PendingReceiptClarificationQueryService {
     private final MongoOperations mongoOperations;
     private final RawTransactionRepository rawTransactionRepository;
     private final ReceiptClarificationGateway receiptClarificationGateway;
+    private final NetworkRegistry networkRegistry;
+
+    /**
+     * Restricts every clarification selection to EVM-family networks. Full-receipt clarification
+     * decodes EVM receipts (execution status, effective gas price, ERC-20/native transfer logs), so
+     * Solana (Helius) and TON (toncenter) rows have no receipt to fetch. Without this guard a
+     * SOLANA/TON {@code NEEDS_REVIEW}/{@code PENDING_CLARIFICATION} row is pulled into the EVM path,
+     * accrues {@code CLARIFICATION_FULL_RECEIPT_UNAVAILABLE}, terminalizes to
+     * {@code CLASSIFICATION_FAILED}, and stalls the resume scheduler. The EVM-family set is derived
+     * from {@link NetworkRegistry} (config-driven {@code address-format: EVM}) rather than a
+     * hardcoded enum list.
+     */
+    private Criteria evmFamilyCriteria() {
+        return Criteria.where("networkId").in(networkRegistry.evmWalletSupportedNetworks());
+    }
 
     public List<NormalizedTransaction> loadNextBatch(int batchSize, int maxAttempts, long retryDelaySeconds) {
         return loadNextBatch(batchSize, maxAttempts, retryDelaySeconds, null, 0L);
@@ -88,6 +104,7 @@ public class PendingReceiptClarificationQueryService {
 
         Query query = new Query(new Criteria().andOperator(
                 Criteria.where("source").is(NormalizedTransactionSource.ON_CHAIN),
+                evmFamilyCriteria(),
                 Criteria.where("status").is(NormalizedTransactionStatus.NEEDS_REVIEW),
                 activeAccountingCriteria,
                 attemptsCriteria,
@@ -151,6 +168,7 @@ public class PendingReceiptClarificationQueryService {
 
         Query query = new Query(new Criteria().andOperator(
                 Criteria.where("source").is(NormalizedTransactionSource.ON_CHAIN),
+                evmFamilyCriteria(),
                 Criteria.where("status").in(
                         NormalizedTransactionStatus.CONFIRMED,
                         NormalizedTransactionStatus.PENDING_PRICE
@@ -213,6 +231,7 @@ public class PendingReceiptClarificationQueryService {
 
         Query query = new Query(new Criteria().andOperator(
                 Criteria.where("source").is(NormalizedTransactionSource.ON_CHAIN),
+                evmFamilyCriteria(),
                 Criteria.where("status").in(
                         NormalizedTransactionStatus.CONFIRMED,
                         NormalizedTransactionStatus.PENDING_PRICE,
@@ -351,6 +370,22 @@ public class PendingReceiptClarificationQueryService {
                 Criteria.where("missingDataReasons")
                         .in(ClassificationReasonCode.LP_POSITION_CORRELATION_REQUIRED.code())
         );
+        // R1 (LP exit fee split): a V3/Slipstream (or V4/Infinity) CL exit routed to
+        // PENDING_CLARIFICATION by LpExitFeeClarificationTrigger so the full receipt is fetched and
+        // the DecreaseLiquidity/Collect (or ModifyLiquidity) event logs are persisted. Without this
+        // selector the row would stall at PENDING_CLARIFICATION whenever no sibling trigger (native
+        // settlement / LP correlation) happened to fetch the full receipt first, leaving the
+        // principal-vs-fee split unresolved and the exit mis-booked via the pool-residual fallback.
+        Criteria lpFeeSplitEvidenceRecoveryCriteria = new Criteria().andOperator(
+                Criteria.where("status").is(NormalizedTransactionStatus.PENDING_CLARIFICATION),
+                Criteria.where("type").in(
+                        NormalizedTransactionType.LP_EXIT,
+                        NormalizedTransactionType.LP_EXIT_PARTIAL,
+                        NormalizedTransactionType.LP_EXIT_FINAL
+                ),
+                Criteria.where("missingDataReasons")
+                        .in(ClassificationReasonCode.LP_FEE_SPLIT_EVIDENCE_REQUIRED.code())
+        );
         // LP_ENTRY mint() calls that were classified but never got a correlationId because the
         // NonfungiblePositionManager's ERC-721 mint event is absent from Blockscout's ERC-20
         // transfer API.  These transactions are CONFIRMED (not PENDING_CLARIFICATION) so the
@@ -383,6 +418,7 @@ public class PendingReceiptClarificationQueryService {
 
         Query query = new Query(new Criteria().andOperator(
                 Criteria.where("source").is(NormalizedTransactionSource.ON_CHAIN),
+                evmFamilyCriteria(),
                 attemptsCriteria,
                 dueCriteria,
                 leaseCriteria,
@@ -395,6 +431,7 @@ public class PendingReceiptClarificationQueryService {
                         eulerPendingClarificationCriteria,
                         nativeSettlementTransferRecoveryCriteria,
                         lpPositionCorrelationRecoveryCriteria,
+                        lpFeeSplitEvidenceRecoveryCriteria,
                         lpEntryMissingCorrelationCriteria,
                         multicallMissingTransferCriteria
                 )
@@ -534,6 +571,7 @@ public class PendingReceiptClarificationQueryService {
 
         Query requestsQuery = new Query(new Criteria().andOperator(
                 Criteria.where("source").is(NormalizedTransactionSource.ON_CHAIN),
+                evmFamilyCriteria(),
                 Criteria.where("type").is(NormalizedTransactionType.DERIVATIVE_ORDER_REQUEST),
                 Criteria.where("protocolName").is("GMX")
         ));
@@ -572,6 +610,7 @@ public class PendingReceiptClarificationQueryService {
 
         Query requestsQuery = new Query(new Criteria().andOperator(
                 Criteria.where("source").is(NormalizedTransactionSource.ON_CHAIN),
+                evmFamilyCriteria(),
                 Criteria.where("type").is(requestType),
                 Criteria.where("protocolName").is(protocolName)
         ));
@@ -635,6 +674,7 @@ public class PendingReceiptClarificationQueryService {
         Criteria attemptsCriteria = fullReceiptAttemptsCriteria(maxAttempts, retryCutoff);
         Query candidateQuery = new Query(new Criteria().andOperator(
                 Criteria.where("source").is(NormalizedTransactionSource.ON_CHAIN),
+                evmFamilyCriteria(),
                 Criteria.where("walletAddress").in(wallets),
                 Criteria.where("networkId").in(networks),
                 Criteria.where("status").is(NormalizedTransactionStatus.PENDING_PRICE),

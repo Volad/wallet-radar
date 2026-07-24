@@ -23,14 +23,46 @@ import java.util.List;
 @RequiredArgsConstructor
 public class PendingRawTransactionQueryService {
 
-    private static final List<String> SUPPORTED_ON_CHAIN_NETWORKS = Arrays.stream(NetworkId.values())
-            .filter(networkId -> networkId != NetworkId.SOLANA)
+    private static final List<String> ALL_ON_CHAIN_NETWORKS = Arrays.stream(NetworkId.values())
+            .map(Enum::name)
+            .toList();
+
+    private static final List<String> EVM_ON_CHAIN_NETWORKS = Arrays.stream(NetworkId.values())
+            .filter(networkId -> networkId != NetworkId.SOLANA && networkId != NetworkId.TON)
             .map(Enum::name)
             .toList();
 
     private final MongoOperations mongoOperations;
 
+    /**
+     * Loads the next batch including all supported networks (EVM + Solana).
+     */
     public List<RawTransaction> loadNextBatch(int batchSize) {
+        return loadNextBatch(batchSize, ALL_ON_CHAIN_NETWORKS);
+    }
+
+    /**
+     * Loads the next batch restricted to EVM networks only (excludes Solana).
+     */
+    public List<RawTransaction> loadNextEvmBatch(int batchSize) {
+        return loadNextBatch(batchSize, EVM_ON_CHAIN_NETWORKS);
+    }
+
+    /**
+     * Loads the next batch restricted to Solana only.
+     */
+    public List<RawTransaction> loadNextSolanaBatch(int batchSize) {
+        return loadNextBatch(batchSize, List.of(NetworkId.SOLANA.name()));
+    }
+
+    /**
+     * Loads the next batch restricted to TON only.
+     */
+    public List<RawTransaction> loadNextTonBatch(int batchSize) {
+        return loadNextBatch(batchSize, List.of(NetworkId.TON.name()));
+    }
+
+    private List<RawTransaction> loadNextBatch(int batchSize, List<String> networks) {
         Instant now = Instant.now();
         int boundedBatchSize = Math.max(1, batchSize);
 
@@ -40,7 +72,7 @@ public class PendingRawTransactionQueryService {
         );
         Criteria matchCriteria = new Criteria().andOperator(
                 Criteria.where("normalizationStatus").is(NormalizationStatus.PENDING),
-                Criteria.where("networkId").in(SUPPORTED_ON_CHAIN_NETWORKS),
+                Criteria.where("networkId").in(networks),
                 dueRetryCriteria
         );
 

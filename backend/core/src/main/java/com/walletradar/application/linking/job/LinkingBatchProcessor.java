@@ -5,6 +5,8 @@ import com.walletradar.application.linking.pipeline.clarification.BridgePairCont
 import com.walletradar.application.linking.pipeline.clarification.BybitTransferContinuityRepairService;
 import com.walletradar.application.linking.pipeline.clarification.CowSwapEthFlowSettlementLinkService;
 import com.walletradar.application.linking.pipeline.clarification.CrossNetworkBridgePairFallbackService;
+import com.walletradar.application.linking.pipeline.clarification.SameNetworkCustodyRoundTripLinkService;
+import com.walletradar.application.linking.pipeline.clarification.SourcelessBridgeInboundReclassificationService;
 import com.walletradar.application.linking.pipeline.clarification.InternalTransferPairLinkService;
 import com.walletradar.application.linking.pipeline.clarification.OnChainInternalTransferPairRepairService;
 import com.walletradar.application.linking.pipeline.clarification.LiFiBridgePairLinkService;
@@ -91,6 +93,8 @@ class LinkingBatchProcessor {
     private final OwnWalletBridgeMistypeCorrectionService ownWalletBridgeMistypeCorrectionService;
     private final MultiCounterpartyCorrectionService multiCounterpartyCorrectionService;
     private final CrossNetworkBridgePairFallbackService crossNetworkBridgePairFallbackService;
+    private final SameNetworkCustodyRoundTripLinkService sameNetworkCustodyRoundTripLinkService;
+    private final SourcelessBridgeInboundReclassificationService sourcelessBridgeInboundReclassificationService;
     private final TurtleVaultBurnRepairService turtleVaultBurnRepairService;
     private final LendingLoopOpenClosePairLinkService lendingLoopOpenClosePairLinkService;
 
@@ -213,6 +217,13 @@ class LinkingBatchProcessor {
                 () -> crossNetworkBridgePairFallbackService.reconcileOrphanInbounds(batchSize));
         progressHeartbeat.run();
 
+        // B2a: pair same-network custody/parking round-trips (deposit into a dual-purpose vault/router
+        // and later withdrawal from the same addresses) mis-shaped as unlinked BRIDGE_OUT → BRIDGE_IN,
+        // so the return leg inherits the carried-out basis per family instead of re-pricing at market.
+        processed += timedPass("sameNetworkCustodyRoundTripLink",
+                () -> sameNetworkCustodyRoundTripLinkService.reconcileOrphanInbounds(batchSize));
+        progressHeartbeat.run();
+
         // R11 Fix 5: exclude address-poisoning dust IN (vanity-prefix match)
         processed += timedPass("addressPoisoningDetector",
                 () -> addressPoisoningDetector.detectAndExclude(batchSize));
@@ -320,6 +331,14 @@ class LinkingBatchProcessor {
         // Cycle/8 S3: demote orphan BRIDGE_IN to market-priced ACQUIRE
         processed += timedPass("unmatchedBridgeInboundPricingFallback.orphanInbounds",
                 unmatchedBridgeInboundPricingFallbackService::reconcileOrphanInbounds);
+        progressHeartbeat.run();
+
+        // B2b: a genuinely sourceless BRIDGE_IN (unlinked after every pairing pass, non-peg) has no
+        // provable basis — reclassify it to an uncovered EXTERNAL_TRANSFER_IN so replay stops
+        // fabricating a market-at-arrival basis it never paid. Runs after all bridge/corridor pairing
+        // (including the continuity-flagged orphan demotion above) so only truly unlinked legs remain.
+        processed += timedPass("sourcelessBridgeInboundReclassification",
+                () -> sourcelessBridgeInboundReclassificationService.reconcile(batchSize));
         progressHeartbeat.run();
 
         // Cycle/15 R3: second Bybit pairing pass after cross-batch normalization (qty drift)

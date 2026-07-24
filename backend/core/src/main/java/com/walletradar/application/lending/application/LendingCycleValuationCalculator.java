@@ -27,8 +27,16 @@ final class LendingCycleValuationCalculator {
         BigDecimal currentUsdValue = "OPEN".equals(input.status()) ? input.currentUsdValue() : null;
         BigDecimal unrealizedTotalUsdPnl = null;
         if (currentUsdValue != null && !"UNAVAILABLE".equals(totalPrecision)) {
+            // Prefer the live outstanding debt (incl. accrued interest, e.g. 233.39 USDT) over the
+            // borrowed−repaid accounting principal (210) so the headline running PnL captures the
+            // borrow interest cost and cross-foots exactly with the per-asset breakdown, which already
+            // marks debt at the live position value.
+            BigDecimal accountingOutstanding = input.borrowedUsd().subtract(input.repaidUsd(), MC)
+                    .max(BigDecimal.ZERO);
             BigDecimal outstandingBorrow = "OPEN".equals(input.status())
-                    ? input.borrowedUsd().subtract(input.repaidUsd(), MC).max(BigDecimal.ZERO)
+                    ? (input.liveOutstandingBorrowUsd() != null && input.liveOutstandingBorrowUsd().signum() > 0
+                            ? input.liveOutstandingBorrowUsd()
+                            : accountingOutstanding)
                     : BigDecimal.ZERO;
             unrealizedTotalUsdPnl = totalUsdPnl.add(currentUsdValue, MC).subtract(outstandingBorrow, MC);
         }
@@ -89,6 +97,7 @@ final class LendingCycleValuationCalculator {
             BigDecimal feesUsd,
             BigDecimal gasUsd,
             BigDecimal currentUsdValue,
+            BigDecimal liveOutstandingBorrowUsd,
             BigDecimal yieldOnlyPnl,
             String yieldOnlyPrecision,
             boolean hasWrapperOrShareExposure,

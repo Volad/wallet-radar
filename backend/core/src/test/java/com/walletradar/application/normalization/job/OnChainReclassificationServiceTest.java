@@ -61,6 +61,8 @@ class OnChainReclassificationServiceTest {
     private RegistryBridgeInboundTypeCorrectionService registryBridgeInboundTypeCorrectionService;
     @Mock
     private AccountingUniverseService accountingUniverseService;
+    @Mock
+    private com.walletradar.application.linking.pipeline.clarification.ExternalCustodyDestinationRegistry externalCustodyDestinationRegistry;
 
     private OnChainNormalizationProperties properties;
     private OnChainClarificationProperties clarificationProperties;
@@ -83,7 +85,8 @@ class OnChainReclassificationServiceTest {
                 protocolNameEnrichmentService,
                 registryBridgeInboundTypeCorrectionService,
                 counterpartyEnrichmentService,
-                accountingUniverseService
+                accountingUniverseService,
+                externalCustodyDestinationRegistry
         );
     }
 

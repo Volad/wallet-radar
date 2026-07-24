@@ -45,6 +45,22 @@ class BybitSymbolMapperTest {
     }
 
     @Test
+    void mantleStakedEthMapsToItsOwnSpotPairs() {
+        // D1: mETH (C2 ETH-derivative) must resolve its OWN Bybit spot pairs so the cross-canonical
+        // staking acquisition leg (ETH → mETH) enters the pricing chain instead of booking $0 basis.
+        BybitSymbolMapper mapper = new BybitSymbolMapper(new ExternalPriceMappingService());
+
+        assertThat(mapper.candidateSymbols(new PriceRequest(
+                "BYBIT:tx-meth",
+                NormalizedTransactionSource.BYBIT,
+                null,
+                null,
+                "METH",
+                Instant.parse("2025-03-12T00:00:00Z")
+        ))).contains("METHUSDT");
+    }
+
+    @Test
     void auditedAaveAvaxReceiptMapsToAvaxSpotCandidates() {
         BybitSymbolMapper mapper = new BybitSymbolMapper(new ExternalPriceMappingService());
 

@@ -77,7 +77,7 @@ public class OnChainNormalizationService {
         bindUniverseIfPresent(sessionId);
         try {
         List<RawTransaction> batch = new ArrayList<>(
-                pendingRawTransactionQueryService.loadNextBatch(properties.getBatchSize())
+                pendingRawTransactionQueryService.loadNextEvmBatch(properties.getBatchSize())
         );
         int repairedPeers = internalTransferRawPeerRepairService.repairMissingPeers(batch);
         if (repairedPeers > 0) {

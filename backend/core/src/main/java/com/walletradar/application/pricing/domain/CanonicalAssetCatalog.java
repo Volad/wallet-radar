@@ -70,9 +70,19 @@ public final class CanonicalAssetCatalog {
             Map.entry("AAVASAVAX", "AVAX"),
             Map.entry("WMNT", "MNT"),
             Map.entry("WXPL", "XPL"),
+            // Wrapped SOL (SPL mint So111…112) is accounting- and price-identical to native SOL.
+            // Canonicalising here keeps a wSOL swap leg from being treated as a distinct asset and
+            // from tripping the SwapDerivedPriceResolver circular guard against a native-SOL leg.
+            Map.entry("WSOL", "SOL"),
             Map.entry("USDBC", "USDC"),
             Map.entry("USD₮0", "USDT"),
             Map.entry("USDT0", "USDT"),
+            // Tether Gold bridged to TON (XAUt0) → canonical XAUT (its CEX/CoinGecko market ticker).
+            Map.entry("XAUT0", "XAUT"),
+            // xStock tokenised-equity jettons (TON) → their underlying equity ticker, so the equity
+            // price feeds (Dzengi kline / ticker) resolve them. Identity mapping only — no price.
+            Map.entry("AMZNX", "AMZN"),
+            Map.entry("MSTRX", "MSTR"),
             Map.entry("POL", "MATIC"),
             Map.entry("BBSOL", "SOL"),
             // Aave aToken USD-stable family
@@ -106,6 +116,7 @@ public final class CanonicalAssetCatalog {
     private static final Map<String, String> COINGECKO_IDS = Map.ofEntries(
             Map.entry("ETH", "ethereum"),
             Map.entry("SOL", "solana"),
+            Map.entry("TON", "the-open-network"),
             Map.entry("BTC", "bitcoin"),
             Map.entry("BNB", "binancecoin"),
             Map.entry("AVAX", "avalanche-2"),
@@ -152,7 +163,10 @@ public final class CanonicalAssetCatalog {
             Map.entry("AAVE", "aave"),
             Map.entry("CRV", "curve-dao-token"),
             Map.entry("MKR", "maker"),
-            Map.entry("SNX", "havven")
+            Map.entry("SNX", "havven"),
+            // WS-6 (B4): Tether Gold — historical/external fallback for the TON XAUt0 jetton (which
+            // canonicalises to XAUT). Current marks still come from the TON jetton price provider.
+            Map.entry("XAUT", "tether-gold")
     );
 
     private static final Map<String, List<String>> EXCHANGE_MARKET_FALLBACKS = Map.ofEntries(
@@ -175,8 +189,7 @@ public final class CanonicalAssetCatalog {
             "EUL",
             "AGLD",
             "WLKN",
-            "CUDIS",
-            "TON"
+            "CUDIS"
     );
 
     /**
@@ -194,6 +207,19 @@ public final class CanonicalAssetCatalog {
      */
     private static final Set<String> PEGGED_NATIVE_SYMBOLS = Set.of(
             "BBSOL"
+    );
+
+    /**
+     * WS-6 (B4): canonical underlyings of tokenised-equity ("xStock") jettons whose price is an
+     * equity quote, not a crypto quote. When one of these is tracked, its
+     * {@link TrackedPriceAssetDocument.Kind} must be {@code EQUITY} so the Dzengi equity ticker
+     * ({@code SYMBOL.}) is matched rather than a crypto ticker. Membership is derived from the
+     * xStock canonical aliases (e.g. {@code AMZNX→AMZN}, {@code MSTRX→MSTR}); no per-token price is
+     * ever hardcoded here.
+     */
+    private static final Set<String> EQUITY_BACKED_SYMBOLS = Set.of(
+            "AMZN",
+            "MSTR"
     );
 
     /**
@@ -297,6 +323,19 @@ public final class CanonicalAssetCatalog {
             return false;
         }
         return PEGGED_NATIVE_SYMBOLS.contains(normalizeSymbol(assetSymbol));
+    }
+
+    /**
+     * WS-6 (B4): returns {@code true} when the symbol (or its canonical alias) is a tokenised-equity
+     * asset priced off an equity quote (e.g. an xStock jetton {@code AMZNx→AMZN}). The tracked-asset
+     * registry uses this to stamp {@code EQUITY} kind so equity price feeds are matched. Confusable
+     * lookalikes never qualify.
+     */
+    public static boolean isEquityBacked(String assetSymbol) {
+        if (assetSymbol == null || isConfusableSymbol(assetSymbol)) {
+            return false;
+        }
+        return EQUITY_BACKED_SYMBOLS.contains(canonicalMarketSymbol(assetSymbol));
     }
 
     /**

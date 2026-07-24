@@ -403,12 +403,24 @@ public class LpReceiptEntryReplayHandler {
         receiptPosition.setUncoveredQuantity(totalUncovered);
         receiptPosition.setPerWalletAvco(avco);
         receiptPosition.setPerWalletNetAvco(avco);
-        IndexedFlow marker = outboundPrincipal.getFirst();
+        // ADR-081 (C1): when the receipt is minted as an explicit inbound leg (Balancer BPT, Meteora
+        // DAMM MLP), record the synthesis point against that receipt flow — not the outbound principal
+        // — so a flagged LP-receipt leg (MLP) stamps FAMILY:LP_RECEIPT on the entry bucket point too.
+        NormalizedTransaction.Flow markerFlow;
+        int markerIndex;
+        if (explicitReceiptFlow != null) {
+            markerFlow = explicitReceiptFlow;
+            markerIndex = transaction.getFlows().indexOf(explicitReceiptFlow);
+        } else {
+            IndexedFlow marker = outboundPrincipal.getFirst();
+            markerFlow = marker.flow();
+            markerIndex = marker.index();
+        }
         replayState.recordLpReceiptEntryEvent(corrId);
         replayState.ledgerPointCollector().record(
                 transaction,
-                marker.flow(),
-                marker.index(),
+                markerFlow,
+                markerIndex,
                 receiptPosition.assetKey(),
                 before,
                 receiptPosition,
@@ -440,7 +452,17 @@ public class LpReceiptEntryReplayHandler {
     }
 
     private static boolean isLpReceiptMarker(NormalizedTransaction.Flow flow) {
-        if (flow == null || flow.getAssetSymbol() == null) {
+        if (flow == null) {
+            return false;
+        }
+        // ADR-081 (C1): durable identity/flag route — a leg explicitly flagged at normalization as
+        // the LP receipt (e.g. the Meteora DAMM MLP, whose fungible symbol is confusable across
+        // pools) is a receipt marker regardless of its symbol grammar. Symbol matching below stays
+        // for EVM/Balancer BPT / Pendle receipts that are recognised by their symbol.
+        if (Boolean.TRUE.equals(flow.getLpReceipt())) {
+            return true;
+        }
+        if (flow.getAssetSymbol() == null) {
             return false;
         }
         String sym = flow.getAssetSymbol().trim().toUpperCase();

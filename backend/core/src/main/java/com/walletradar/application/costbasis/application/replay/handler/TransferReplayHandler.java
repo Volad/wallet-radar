@@ -5,6 +5,7 @@ import com.walletradar.application.costbasis.application.replay.model.PositionSt
 import com.walletradar.application.costbasis.application.replay.model.TransferPendingKey;
 import com.walletradar.application.costbasis.application.replay.state.ReplayExecutionState;
 import com.walletradar.application.costbasis.application.replay.support.ContinuityCarryService;
+import com.walletradar.application.costbasis.application.replay.support.CustodyRoundTripReplaySupport;
 import com.walletradar.application.costbasis.application.replay.support.LinkedBridgeTransferReplaySupport;
 import com.walletradar.application.costbasis.application.replay.support.ReplayFlowSupport;
 import com.walletradar.application.costbasis.application.replay.support.ReplayMarketAuthority;
@@ -29,6 +30,7 @@ public class TransferReplayHandler {
     private final BridgeTransferReplaySupport bridgeTransferReplaySupport;
     private final EarnBundleTransferReplaySupport earnBundleTransferReplaySupport;
     private final CarryTransferReplaySupport carryTransferReplaySupport;
+    private final CustodyRoundTripReplaySupport custodyRoundTripReplaySupport;
 
     public TransferReplayHandler(
             ReplayFlowSupport flowSupport,
@@ -38,7 +40,8 @@ public class TransferReplayHandler {
             LinkedBridgeTransferReplaySupport linkedBridgeTransferReplaySupport,
             BridgeTransferReplaySupport bridgeTransferReplaySupport,
             EarnBundleTransferReplaySupport earnBundleTransferReplaySupport,
-            CarryTransferReplaySupport carryTransferReplaySupport
+            CarryTransferReplaySupport carryTransferReplaySupport,
+            CustodyRoundTripReplaySupport custodyRoundTripReplaySupport
     ) {
         this.flowSupport = flowSupport;
         this.continuityCarryService = continuityCarryService;
@@ -48,6 +51,7 @@ public class TransferReplayHandler {
         this.bridgeTransferReplaySupport = bridgeTransferReplaySupport;
         this.earnBundleTransferReplaySupport = earnBundleTransferReplaySupport;
         this.carryTransferReplaySupport = carryTransferReplaySupport;
+        this.custodyRoundTripReplaySupport = custodyRoundTripReplaySupport;
     }
 
     /**
@@ -87,6 +91,13 @@ public class TransferReplayHandler {
             PositionState position,
             ReplayExecutionState replayState
     ) {
+        // Finding 2: a same-network custody/parking round-trip is pooled into ONE cross-family basis
+        // envelope and redistributed by return-time market value. It must be routed BEFORE the
+        // per-family bridge continuity queue, which restores each family's carried-out basis
+        // independently and over-restores basis when the vault rebalances the returned composition.
+        if (classifier.isCustodyRoundTripContinuityTransfer(transaction, flow)) {
+            return custodyRoundTripReplaySupport.apply(transaction, flow, flowIndex, position, replayState);
+        }
         if (classifier.isLinkedBridgeContinuityTransfer(transaction, flow)) {
             return linkedBridgeTransferReplaySupport.applyLinkedBridgeTransfer(
                     transaction,

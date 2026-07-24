@@ -175,16 +175,6 @@ public class AccountingUniverseService {
         if (member.getBackfillEnabled() != null) {
             return member.getBackfillEnabled();
         }
-        if (member.getNetworks() != null) {
-            for (NetworkId network : member.getNetworks()) {
-                if (network == NetworkId.SOLANA || network == NetworkId.TON) {
-                    return false;
-                }
-            }
-        }
-        if ("SOLANA".equalsIgnoreCase(member.getProvider()) || "TON".equalsIgnoreCase(member.getProvider())) {
-            return false;
-        }
         return true;
     }
 

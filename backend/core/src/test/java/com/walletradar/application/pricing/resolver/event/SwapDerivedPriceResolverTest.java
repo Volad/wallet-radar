@@ -271,6 +271,201 @@ class SwapDerivedPriceResolverTest {
         assertThat(result).isPresent();
     }
 
+    // ──────────────────────────────────────────────────────────────
+    // WS-6 (B4): swap-derived-first for Solana / TON long-tail basis
+    // ──────────────────────────────────────────────────────────────
+
+    @Test
+    void solanaSwap_stableAnchorLeg_derivesMemecoinUsdBasis() {
+        // Jupiter swap: 50 USDC (anchor $1) → 1000 SNAI. SNAI has no CEX/feed quote, but its USD
+        // basis is derived from the stable anchor leg: $50 / 1000 = $0.05.
+        NormalizedTransaction tx = swapTx(List.of(
+                flow("USDC", "-50.00", NormalizedLegRole.SELL),
+                flow("SNAI", "1000.0", NormalizedLegRole.BUY)
+        ));
+        Map<Integer, PriceQuote> resolved = Map.of(0, quote(new BigDecimal("1.00")));
+
+        Optional<PriceQuote> result = RESOLVER.resolve(context(tx, 1, resolved));
+
+        assertThat(result).isPresent();
+        assertThat(result.get().source()).isEqualTo(PriceSource.SWAP_DERIVED);
+        assertThat(result.get().unitPriceUsd()).isEqualByComparingTo("0.05");
+    }
+
+    @Test
+    void solanaSwap_nativeSolAnchorLeg_derivesMemecoinUsdBasis() {
+        // 0.5 SOL (anchor priced $200) → 4000 DUKO → DUKO basis = $100 / 4000 = $0.025.
+        NormalizedTransaction tx = swapTx(List.of(
+                flow("SOL",  "-0.5",   NormalizedLegRole.SELL),
+                flow("DUKO", "4000.0", NormalizedLegRole.BUY)
+        ));
+        Map<Integer, PriceQuote> resolved = Map.of(0, quote(new BigDecimal("200.00")));
+
+        Optional<PriceQuote> result = RESOLVER.resolve(context(tx, 1, resolved));
+
+        assertThat(result).isPresent();
+        assertThat(result.get().unitPriceUsd()).isEqualByComparingTo("0.025");
+    }
+
+    @Test
+    void wsolCanonicalisesToSol_circularGuardFires_soWsolLegIsNotADistinctAsset() {
+        // A wSOL SELL vs native SOL BUY is the SAME asset (wSOL→SOL canonical). The circular guard
+        // must fire so wSOL is never treated as a distinct counterpart that self-prices SOL.
+        NormalizedTransaction tx = swapTx(List.of(
+                flow("wSOL", "-1.0", NormalizedLegRole.SELL),
+                flow("SOL",  "1.0",  NormalizedLegRole.BUY)
+        ));
+        Map<Integer, PriceQuote> resolved = Map.of(0, quote(new BigDecimal("200.00")));
+
+        Optional<PriceQuote> result = RESOLVER.resolve(context(tx, 1, resolved));
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    void wsolAnchorLeg_derivesMemecoinUsdBasis() {
+        // wSOL (canonical SOL) as the priced counterpart anchor still derives the memecoin's basis;
+        // it differs in symbol from the memecoin, so the circular guard does NOT fire.
+        NormalizedTransaction tx = swapTx(List.of(
+                flow("wSOL", "-0.25",  NormalizedLegRole.SELL),
+                flow("PIAI", "500.0",  NormalizedLegRole.BUY)
+        ));
+        Map<Integer, PriceQuote> resolved = Map.of(0, quote(new BigDecimal("200.00")));
+
+        Optional<PriceQuote> result = RESOLVER.resolve(context(tx, 1, resolved));
+
+        assertThat(result).isPresent();
+        assertThat(result.get().unitPriceUsd()).isEqualByComparingTo("0.10"); // $50 / 500
+    }
+
+    @Test
+    void tonSwap_nativeTonAnchorLeg_derivesJettonUsdBasis() {
+        // Ston.fi swap: 20 TON (anchor priced $6) → 200 STON → STON basis = $120 / 200 = $0.60.
+        NormalizedTransaction tx = swapTx(List.of(
+                flow("TON",  "-20.0",  NormalizedLegRole.SELL),
+                flow("STON", "200.0",  NormalizedLegRole.BUY)
+        ));
+        Map<Integer, PriceQuote> resolved = Map.of(0, quote(new BigDecimal("6.00")));
+
+        Optional<PriceQuote> result = RESOLVER.resolve(context(tx, 1, resolved));
+
+        assertThat(result).isPresent();
+        assertThat(result.get().unitPriceUsd()).isEqualByComparingTo("0.60");
+    }
+
+    @Test
+    void illiquidToIlliquidSwap_noAnchor_returnsEmptySoAssetStaysUnpriced() {
+        // Both legs are illiquid memecoins with NO stable/native anchor and no resolved sibling
+        // quote. Swap-derived alone cannot produce a USD value → returns empty → the asset flows
+        // to the external chain and ultimately to an explicit UNPRICED state (never a $0 basis).
+        NormalizedTransaction tx = swapTx(List.of(
+                flow("DOOD", "-100.0", NormalizedLegRole.SELL),
+                flow("SNAI", "250.0",  NormalizedLegRole.BUY)
+        ));
+        Map<Integer, PriceQuote> resolved = Map.of(); // neither leg priced
+
+        assertThat(RESOLVER.resolve(context(tx, 0, resolved))).isEmpty();
+        assertThat(RESOLVER.resolve(context(tx, 1, resolved))).isEmpty();
+    }
+
+    @Test
+    void zeroQuantityLeg_ignoredAsSibling_soNettedPtonNeverPricesCounterpart() {
+        // WS-2 nets proxy-TON (pTON) to 0 before pricing. A zero-quantity pTON leg must never act as
+        // a swap sibling: here TON (priced anchor) → STON derives correctly and the pTON leg (qty 0)
+        // is ignored entirely, so it cannot re-enter as a phantom-priced counterpart.
+        NormalizedTransaction tx = swapTx(List.of(
+                flow("TON",  "-20.0", NormalizedLegRole.SELL),
+                flow("PTON", "0",     NormalizedLegRole.BUY),
+                flow("STON", "200.0", NormalizedLegRole.BUY)
+        ));
+        Map<Integer, PriceQuote> resolved = Map.of(0, quote(new BigDecimal("6.00")));
+
+        Optional<PriceQuote> result = RESOLVER.resolve(context(tx, 2, resolved));
+
+        assertThat(result).isPresent();
+        assertThat(result.get().unitPriceUsd()).isEqualByComparingTo("0.60"); // $120 / 200, pTON ignored
+    }
+
+    @Test
+    void stableToStableSwapWithDustBuyLeg_defersDustToExternalMarketPricing() {
+        // Real Jupiter RFQ (4BYVQwQ...): SELL 65.377 USDC ($1) → BUY 65.330 USDT ($1) + a dust
+        // BUY of 0.000010245 SOL. The SOL BUY's only opposite-role counterpart is the USDC SELL,
+        // but that value is already balanced by the USDT BUY. Without the guard, swap-derived would
+        // price 0.000010245 SOL at $6.4M/SOL (poisoning the SOL basis and the FEE/WRAPPER gas leg).
+        // The guard defers the dust leg to the external market chain instead.
+        NormalizedTransaction tx = swapTx(List.of(
+                flow("USDC", "-65.376999",  NormalizedLegRole.SELL),
+                flow("USDT", "65.329599",   NormalizedLegRole.BUY),
+                flow("SOL",  "0.000010245", NormalizedLegRole.BUY)
+        ));
+        Map<Integer, PriceQuote> resolved = Map.of(
+                0, quote(new BigDecimal("1.00")),  // USDC
+                1, quote(new BigDecimal("1.00"))   // USDT
+        );
+
+        Optional<PriceQuote> result = RESOLVER.resolve(context(tx, 2, resolved));
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    void stableToStableSwapWithDustSellLeg_defersDustToExternalMarketPricing() {
+        // Symmetric case: SELL 65.377 USDC + dust SELL 0.00001 SOL → BUY 65.330 USDT. The SOL SELL's
+        // counterpart (USDT BUY) is already balanced by the USDC SELL, so the SOL SELL defers.
+        NormalizedTransaction tx = swapTx(List.of(
+                flow("USDC", "-65.376999",   NormalizedLegRole.SELL),
+                flow("SOL",  "-0.000010245", NormalizedLegRole.SELL),
+                flow("USDT", "65.329599",    NormalizedLegRole.BUY)
+        ));
+        Map<Integer, PriceQuote> resolved = Map.of(
+                0, quote(new BigDecimal("1.00")),  // USDC
+                2, quote(new BigDecimal("1.00"))   // USDT
+        );
+
+        Optional<PriceQuote> result = RESOLVER.resolve(context(tx, 1, resolved));
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    void majorAssetSoldForMemecoin_notDerivedFromMemecoinPrice() {
+        // Real Meteora swap (4uPJvz1…): SELL 0.1 SOL → BUY 6932 COM (memecoin). COM's external
+        // price ($0.1192) is unreliable; deriving SOL from it yields $8,263/SOL. SOL is a reliable
+        // anchor (CoinGecko-listed) and its only counterpart (COM) is long-tail → the SOL SELL must
+        // defer to external so it takes its own market price (~$194); COM then derives from SOL.
+        NormalizedTransaction tx = swapTx(List.of(
+                flow("SOL", "-0.1",       NormalizedLegRole.SELL),
+                flow("COM", "6932.056674", NormalizedLegRole.BUY)
+        ));
+        Map<Integer, PriceQuote> resolved = Map.of(
+                1, quote(new BigDecimal("0.1192"))  // COM (unreliable long-tail external)
+        );
+
+        Optional<PriceQuote> result = RESOLVER.resolve(context(tx, 0, resolved));
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    void memecoinBoughtWithSol_stillDerivesFromSolAnchor() {
+        // The long-tail leg (COM) IS still swap-derived from the reliable SOL anchor: SELL 0.1 SOL
+        // ($194) → COM = $19.4 / 6932 ≈ $0.0028. Confirms the guard is asymmetric (only blocks
+        // deriving the anchor from long-tail, not the reverse).
+        NormalizedTransaction tx = swapTx(List.of(
+                flow("SOL", "-0.1",        NormalizedLegRole.SELL),
+                flow("COM", "6932.056674", NormalizedLegRole.BUY)
+        ));
+        Map<Integer, PriceQuote> resolved = Map.of(
+                0, quote(new BigDecimal("194.00"))  // SOL anchor
+        );
+
+        Optional<PriceQuote> result = RESOLVER.resolve(context(tx, 1, resolved));
+
+        assertThat(result).isPresent();
+        BigDecimal expected = new BigDecimal("19.40").divide(new BigDecimal("6932.056674"), java.math.MathContext.DECIMAL128);
+        assertThat(result.get().unitPriceUsd()).isEqualByComparingTo(expected);
+    }
+
     // ──────────────────────────────────────────────
     // Helpers
     // ──────────────────────────────────────────────

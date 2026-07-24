@@ -40,13 +40,16 @@ class PendingReceiptClarificationQueryServiceTest {
     private com.walletradar.domain.transaction.raw.RawTransactionRepository rawTransactionRepository;
     @Mock
     private ReceiptClarificationGateway receiptClarificationGateway;
+    @Mock
+    private com.walletradar.platform.networks.descriptor.NetworkRegistry networkRegistry;
 
     @Test
     void loadsBlockingNeedsReviewRowsWithArbitraryReasonForReceiptRecovery() {
         PendingReceiptClarificationQueryService service = new PendingReceiptClarificationQueryService(
                 mongoOperations,
                 rawTransactionRepository,
-                receiptClarificationGateway
+                receiptClarificationGateway,
+                networkRegistry
         );
 
         NormalizedTransaction candidate = reviewCandidate();
@@ -71,7 +74,8 @@ class PendingReceiptClarificationQueryServiceTest {
         PendingReceiptClarificationQueryService service = new PendingReceiptClarificationQueryService(
                 mongoOperations,
                 rawTransactionRepository,
-                receiptClarificationGateway
+                receiptClarificationGateway,
+                networkRegistry
         );
         when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(List.of());
 
@@ -86,11 +90,35 @@ class PendingReceiptClarificationQueryServiceTest {
     }
 
     @Test
+    void needsReviewRecoveryQueryRestrictsSelectionToEvmFamilyNetworks() {
+        PendingReceiptClarificationQueryService service = new PendingReceiptClarificationQueryService(
+                mongoOperations,
+                rawTransactionRepository,
+                receiptClarificationGateway,
+                networkRegistry
+        );
+        when(networkRegistry.evmWalletSupportedNetworks())
+                .thenReturn(java.util.EnumSet.of(NetworkId.ETHEREUM, NetworkId.ARBITRUM, NetworkId.BASE));
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(List.of());
+
+        service.loadNextBatch(1, 2, 120);
+
+        ArgumentCaptor<Query> queryCaptor = ArgumentCaptor.forClass(Query.class);
+        verify(mongoOperations, atLeastOnce()).find(queryCaptor.capture(), eq(NormalizedTransaction.class));
+        String queryText = String.valueOf(queryCaptor.getAllValues().get(0).getQueryObject());
+        assertThat(queryText).contains("networkId");
+        assertThat(queryText).contains("ARBITRUM");
+        assertThat(queryText).doesNotContain("SOLANA");
+        assertThat(queryText).doesNotContain("TON");
+    }
+
+    @Test
     void skipsRowsThatAlreadyCarryPersistedReceiptEvidence() {
         PendingReceiptClarificationQueryService service = new PendingReceiptClarificationQueryService(
                 mongoOperations,
                 rawTransactionRepository,
-                receiptClarificationGateway
+                receiptClarificationGateway,
+                networkRegistry
         );
 
         NormalizedTransaction candidate = reviewCandidate();
@@ -129,7 +157,8 @@ class PendingReceiptClarificationQueryServiceTest {
         PendingReceiptClarificationQueryService service = new PendingReceiptClarificationQueryService(
                 mongoOperations,
                 rawTransactionRepository,
-                receiptClarificationGateway
+                receiptClarificationGateway,
+                networkRegistry
         );
 
         NormalizedTransaction candidate = new NormalizedTransaction();
@@ -176,7 +205,8 @@ class PendingReceiptClarificationQueryServiceTest {
         PendingReceiptClarificationQueryService service = new PendingReceiptClarificationQueryService(
                 mongoOperations,
                 rawTransactionRepository,
-                receiptClarificationGateway
+                receiptClarificationGateway,
+                networkRegistry
         );
         when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(List.of());
 
@@ -197,7 +227,8 @@ class PendingReceiptClarificationQueryServiceTest {
         PendingReceiptClarificationQueryService service = new PendingReceiptClarificationQueryService(
                 mongoOperations,
                 rawTransactionRepository,
-                receiptClarificationGateway
+                receiptClarificationGateway,
+                networkRegistry
         );
 
         NormalizedTransaction candidate = new NormalizedTransaction();
@@ -248,7 +279,8 @@ class PendingReceiptClarificationQueryServiceTest {
         PendingReceiptClarificationQueryService service = new PendingReceiptClarificationQueryService(
                 mongoOperations,
                 rawTransactionRepository,
-                receiptClarificationGateway
+                receiptClarificationGateway,
+                networkRegistry
         );
 
         NormalizedTransaction candidate = new NormalizedTransaction();
@@ -303,11 +335,83 @@ class PendingReceiptClarificationQueryServiceTest {
     }
 
     @Test
+    void loadsPendingClarificationLpExitRowsForFeeSplitEvidenceRecovery() {
+        PendingReceiptClarificationQueryService service = new PendingReceiptClarificationQueryService(
+                mongoOperations,
+                rawTransactionRepository,
+                receiptClarificationGateway,
+                networkRegistry
+        );
+
+        NormalizedTransaction candidate = new NormalizedTransaction();
+        candidate.setId("0xfeesplit:BASE:" + WALLET);
+        candidate.setTxHash("0xfeesplit");
+        candidate.setNetworkId(NetworkId.BASE);
+        candidate.setWalletAddress(WALLET);
+        candidate.setSource(NormalizedTransactionSource.ON_CHAIN);
+        candidate.setBlockTimestamp(Instant.ofEpochSecond(1_763_366_333L));
+        candidate.setTransactionIndex(84);
+        candidate.setType(NormalizedTransactionType.LP_EXIT);
+        candidate.setStatus(NormalizedTransactionStatus.PENDING_CLARIFICATION);
+        candidate.setClassifiedBy(ClassificationSource.PROTOCOL_REGISTRY);
+        candidate.setProtocolName("PancakeSwap");
+        candidate.setMissingDataReasons(List.of(
+                ClassificationReasonCode.LP_FEE_SPLIT_EVIDENCE_REQUIRED.code()
+        ));
+        candidate.setFullReceiptClarificationAttempts(0);
+        candidate.setUpdatedAt(Instant.parse("2026-04-09T10:00:00Z"));
+
+        RawTransaction rawTransaction = new RawTransaction();
+        rawTransaction.setId(candidate.getId());
+        rawTransaction.setTxHash(candidate.getTxHash());
+        rawTransaction.setNetworkId(NetworkId.BASE.name());
+        rawTransaction.setWalletAddress(WALLET);
+        rawTransaction.setRawData(new Document()
+                .append("methodId", "0xac9650d8")
+                .append("to", "0x46a15b0b27311cedf172ab29e4f4766fbe7f4364"));
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(candidate));
+        when(rawTransactionRepository.findAllById(List.of(candidate.getId()))).thenReturn(List.of(rawTransaction));
+        when(receiptClarificationGateway.fromPersistedEvidence(rawTransaction, true)).thenReturn(Optional.empty());
+
+        List<NormalizedTransaction> batch = service.loadNextBatch(1, 2, 120);
+
+        assertThat(batch).singleElement().satisfies(row -> {
+            assertThat(row.getId()).isEqualTo(candidate.getId());
+            assertThat(row.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_CLARIFICATION);
+            assertThat(row.getType()).isEqualTo(NormalizedTransactionType.LP_EXIT);
+            assertThat(row.getMissingDataReasons())
+                    .contains(ClassificationReasonCode.LP_FEE_SPLIT_EVIDENCE_REQUIRED.code());
+        });
+    }
+
+    @Test
+    void feeSplitEvidenceRecoveryQueryMatchesLpExitFamilyAndReason() {
+        PendingReceiptClarificationQueryService service = new PendingReceiptClarificationQueryService(
+                mongoOperations,
+                rawTransactionRepository,
+                receiptClarificationGateway,
+                networkRegistry
+        );
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class))).thenReturn(List.of());
+
+        service.loadNextBatch(1, 2, 120);
+
+        ArgumentCaptor<Query> queryCaptor = ArgumentCaptor.forClass(Query.class);
+        verify(mongoOperations, atLeastOnce()).find(queryCaptor.capture(), eq(NormalizedTransaction.class));
+        String queryText = String.valueOf(queryCaptor.getAllValues().get(0).getQueryObject());
+        assertThat(queryText).contains("LP_FEE_SPLIT_EVIDENCE_REQUIRED");
+        assertThat(queryText).contains("LP_EXIT");
+    }
+
+    @Test
     void loadsPendingClarificationLpEntryRowsForPositionCorrelationRecovery() {
         PendingReceiptClarificationQueryService service = new PendingReceiptClarificationQueryService(
                 mongoOperations,
                 rawTransactionRepository,
-                receiptClarificationGateway
+                receiptClarificationGateway,
+                networkRegistry
         );
 
         NormalizedTransaction candidate = new NormalizedTransaction();

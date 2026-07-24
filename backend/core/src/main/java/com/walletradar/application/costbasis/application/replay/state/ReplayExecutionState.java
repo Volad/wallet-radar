@@ -36,6 +36,15 @@ public final class ReplayExecutionState {
     private final Set<String> seenContinuityFlows = new HashSet<>();
     /** Per {@code lp-position:} correlation — [entryEvents, principalExitEvents]. */
     private final Map<String, int[]> lpPositionReceiptLifecycle = new LinkedHashMap<>();
+    /**
+     * Finding 2 — pooled basis envelopes per {@code bridge:custody-roundtrip:} correlation. Each
+     * envelope pools the carried-out basis of every deposited family and redistributes it onto the
+     * returned assets by market-value weight, so a composition rebalance inside the custody vault
+     * conserves basis exactly ({@code Σ carried-in == Σ carried-out}) instead of restoring each
+     * family independently.
+     */
+    private final Map<String, com.walletradar.application.costbasis.application.replay.model.CustodyRoundTripBasisEnvelope>
+            custodyRoundTripEnvelopes = new LinkedHashMap<>();
 
     public ReplayExecutionState(
             PassThroughCorridorPlan passThroughCorridorPlan,
@@ -148,6 +157,17 @@ public final class ReplayExecutionState {
 
     public LpReceiptBasisPoolReplayContext lpReceiptBasisPoolContext() {
         return lpReceiptBasisPoolContext;
+    }
+
+    /**
+     * Finding 2 — returns (creating if absent) the pooled basis envelope for a
+     * {@code bridge:custody-roundtrip:} correlation.
+     */
+    public com.walletradar.application.costbasis.application.replay.model.CustodyRoundTripBasisEnvelope
+            custodyRoundTripEnvelope(String correlationId) {
+        return custodyRoundTripEnvelopes.computeIfAbsent(
+                correlationId,
+                ignored -> new com.walletradar.application.costbasis.application.replay.model.CustodyRoundTripBasisEnvelope());
     }
 
     /** Returns true if the fingerprint was newly added; false if it was already seen. */

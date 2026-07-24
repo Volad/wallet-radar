@@ -234,12 +234,20 @@ public class GenericAsyncLifecycleReplayHandler {
             return;
         }
 
+        // ADR-040 net-carry conservation: carry the receipt's Σ net (reward-discounted) basis back
+        // onto the returned assets, split by the same weights as the tax lane — never re-seed net =
+        // tax on redeem. This is the exit-side peer of the GMX GLV/GM mint fix. Same-asset returns
+        // above already carry net via restoreToPosition(CarryTransfer); only the cross-asset residual
+        // (allocated from the remaining bucket basis) needs the explicit net thread here.
+        BigDecimal remainingNetCostBasis = bucket.remainingNetCostBasisUsd();
+
         if (assetSupport.allSameAsset(principalInflows.stream().map(IndexedFlow::flow).toList(), transaction)) {
             settlementAllocator.allocateIndexedSettlementByQuantity(
                     transaction,
                     principalInflows,
                     replayState.positions(),
                     remainingCostBasis,
+                    remainingNetCostBasis,
                     replayState.ledgerPointCollector()
             );
             bucket.clearAll();
@@ -253,6 +261,7 @@ public class GenericAsyncLifecycleReplayHandler {
                     principalInflows,
                     replayState.positions(),
                     remainingCostBasis,
+                    remainingNetCostBasis,
                     replayState.ledgerPointCollector()
             );
             bucket.clearAll();

@@ -43,8 +43,10 @@ public record SessionAssetLedgerResponse(
             BigDecimal gasPaidUsd,
             List<UncoveredBucket> uncoveredBuckets,
             List<ShortfallSource> shortfallSources,
-            /** ADR-062 break-even (effective-cost) per unit; null when covered quantity is zero. */
+            /** ADR-062 headline "Break-even price" per unit; null when the ETH-equivalent denominator is unusable. */
             BigDecimal breakEvenUsd,
+            /** ADR-062 Wave 3 headline "Average cost" = heldBasis(Market) ÷ ETH-equivalent covered qty. */
+            BigDecimal averageCostUsd,
             /** ADR-062 realized profit already past break-even. */
             BigDecimal lockedSurplusUsd,
             /** ADR-062 informational zero-basis income booked against this family's cluster. */
@@ -55,7 +57,29 @@ public record SessionAssetLedgerResponse(
              * ADR-062 §3 header hint: distinct member asset symbols actually present in the ledger for
              * this family and its attributed children (viewed family's symbols first). Read-model only.
              */
-            List<String> familyMemberSymbols
+            List<String> familyMemberSymbols,
+            /** ADR-062 deviation guard: coveredQuantity / quantity in [0,1]; null when quantity is zero. */
+            BigDecimal coveredRatio,
+            /** ADR-062 deviation guard: true when a $0 break-even is a low-coverage artifact, not real. */
+            Boolean breakEvenSuppressed,
+            /**
+             * ADR-062 Wave 3 (§5): demoted diagnostic lanes (Balance AVCO + raw Blended AVCO). Kept for
+             * the "Details / diagnostic lanes" panel; the two headline metrics are {@code breakEvenUsd}
+             * ("Break-even price") and {@code averageCostUsd} ("Average cost"). Nullable/additive.
+             */
+            DiagnosticLanes details
+    ) {
+    }
+
+    /**
+     * ADR-062 Wave 3 (§5) demoted diagnostic lanes: balance-anchored AVCO (market + net) and the
+     * total-exposure blended AVCO terminal (ADR-061), dust-guarded (AC-10). All nullable.
+     */
+    public record DiagnosticLanes(
+            BigDecimal balanceAvcoUsd,
+            BigDecimal balanceNetAvcoUsd,
+            BigDecimal blendedAvcoUsd,
+            BigDecimal blendedNetAvcoUsd
     ) {
     }
 
@@ -131,7 +155,13 @@ public record SessionAssetLedgerResponse(
              * over the blended total-exposure covered/basis; null when covered quantity is zero.
              * Its terminal value reconciles with the header {@code breakEvenUsd}.
              */
-            BigDecimal effectiveCostAfterUsd
+            BigDecimal effectiveCostAfterUsd,
+            /**
+             * ADR-062 Wave 3 (AC-12 / D9): the SUBJECT (viewed-family) asset's own unit price for this
+             * move event, so the move-basis tooltip renders the subject price instead of a counterparty
+             * quote-leg (e.g. USDT $1). Nullable.
+             */
+            BigDecimal subjectUnitPriceUsd
     ) {
     }
 

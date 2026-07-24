@@ -2,7 +2,10 @@ package com.walletradar.application.linking.pipeline.clarification;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.walletradar.domain.common.NetworkAddressFormat;
 import com.walletradar.domain.common.NetworkId;
+import com.walletradar.domain.wallet.OnChainAddressClassifier;
+import com.walletradar.domain.wallet.WalletDomainKind;
 import com.walletradar.domain.transaction.raw.RawSyncMethod;
 import com.walletradar.domain.transaction.raw.RawTransaction;
 import com.walletradar.domain.transaction.raw.NormalizationStatus;
@@ -160,6 +163,20 @@ public class ReceiptClarificationGateway {
         return List.copyOf(hashes);
     }
 
+    /**
+     * True when the wallet address belongs to the same chain family the network descriptor declares.
+     * EVM networks accept EVM (0x) wallets; Solana/TON networks accept their base58/TON wallets. CEX refs
+     * are never valid on-chain wallets. Uses the descriptor-backed {@link NetworkAddressFormat#isEvm} and the
+     * grammar-level {@link OnChainAddressClassifier}, so no chain-specific patterns are hard-coded here.
+     */
+    private static boolean addressFamilyMatchesNetwork(NetworkId networkId, String walletAddress) {
+        WalletDomainKind kind = OnChainAddressClassifier.classifyDomain(walletAddress);
+        if (kind == WalletDomainKind.CEX) {
+            return false;
+        }
+        return NetworkAddressFormat.isEvm(networkId) == (kind == WalletDomainKind.EVM);
+    }
+
     public Optional<RawTransaction> fetchRawTransactionByHash(
             String txHash,
             NetworkId networkId,
@@ -167,6 +184,15 @@ public class ReceiptClarificationGateway {
             RawSyncMethod sourceFamily
     ) {
         if (txHash == null || txHash.isBlank() || networkId == null || walletAddress == null || walletAddress.isBlank()) {
+            return Optional.empty();
+        }
+        // Network-family guard: a wallet may only hold rows on networks whose address family matches its
+        // own. Continuity/clarification probes must never materialize a raw row against a family-mismatched
+        // wallet (e.g. cloning an EVM scam-dust address-poisoning transfer onto Solana/TON wallets), which
+        // would terminalize as NEEDS_REVIEW and block the accounting-replay gate. Cross-family corridors are
+        // linked separately, not by raw cloning. Family membership is derived from the network descriptor
+        // (NetworkAddressFormat.isEvm) and the grammar-level address classifier, not hard-coded patterns.
+        if (!addressFamilyMatchesNetwork(networkId, walletAddress)) {
             return Optional.empty();
         }
         RawSyncMethod resolvedSourceFamily = sourceFamily != null ? sourceFamily : sourceFamilyFromConfig(networkId);

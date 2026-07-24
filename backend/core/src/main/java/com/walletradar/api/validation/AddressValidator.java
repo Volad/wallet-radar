@@ -17,6 +17,10 @@ public class AddressValidator {
     private static final Pattern EVM_ADDRESS = Pattern.compile("^0x[0-9a-fA-F]{40}$");
     /** Solana Base58: 32-44 chars. */
     private static final Pattern SOLANA_ADDRESS = Pattern.compile("^[1-9A-HJ-NP-Za-km-z]{32,44}$");
+    /** TON friendly address: UQ/EQ/Ef/kQ prefix + 46 base64url chars. */
+    private static final Pattern TON_FRIENDLY_ADDRESS = Pattern.compile("^(UQ|EQ|Ef|kQ)[A-Za-z0-9_-]{46}$");
+    /** TON raw address: workchain:64-hex-chars. */
+    private static final Pattern TON_RAW_ADDRESS = Pattern.compile("^-?[0-9]+:[0-9a-fA-F]{64}$");
 
     private final Set<NetworkId> supportedNetworks;
     private final Set<NetworkId> supportedEvmNetworks;
@@ -29,7 +33,10 @@ public class AddressValidator {
     public boolean isValidAddress(String address) {
         if (address == null || address.isBlank()) return false;
         String normalized = address.trim();
-        return EVM_ADDRESS.matcher(normalized).matches() || SOLANA_ADDRESS.matcher(normalized).matches();
+        return EVM_ADDRESS.matcher(normalized).matches()
+                || SOLANA_ADDRESS.matcher(normalized).matches()
+                || TON_FRIENDLY_ADDRESS.matcher(normalized).matches()
+                || TON_RAW_ADDRESS.matcher(normalized).matches();
     }
 
     public boolean isValidEvmAddress(String address) {

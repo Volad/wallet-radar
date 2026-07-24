@@ -31,7 +31,7 @@ class ReplayTransactionRouterTest {
                 ignored -> new SimpleFamilyCustodySelection(List.of(new SimpleFamilyCustodyPair(indexedFlow(2), indexedFlow(3))), java.util.Map.of())
         );
 
-        assertThat(decision.route()).isEqualTo(ReplayRoute.LIQUID_STAKING);
+        assertThat(decision.route()).isEqualTo(ReplayRoute.CLUSTER_CARRY);
         assertThat(decision.liquidStakingSelection().outbound()).hasSize(1);
         assertThat(decision.familyCustodySelection().pairs()).isEmpty();
     }

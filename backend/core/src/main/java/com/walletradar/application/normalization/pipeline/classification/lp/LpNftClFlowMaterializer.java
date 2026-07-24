@@ -456,8 +456,11 @@ public final class LpNftClFlowMaterializer {
                 new ArrayList<>(baseFlows == null ? List.of() : baseFlows)
         );
         if (externalFeeFractions != null && !externalFeeFractions.isEmpty()) {
-            // V4 path: use pre-computed fee fractions from LpV4ExitFeeDecomposer
-            flows = splitFeeFlows(flows, externalFeeFractions);
+            // V4 path: use pre-computed fee fractions from LpV4ExitFeeDecomposer. Pass networkId so
+            // native-ETH legs (null assetContract) split via the canonical WETH↔ETH identity key —
+            // V4 settles native ETH (currency0 = zero address), so the ETH principal/fee legs would
+            // otherwise be missed.
+            flows = splitFeeFlows(flows, externalFeeFractions, view.networkId());
         } else {
             // V3/Slipstream path: auto-decode from DecreaseLiquidity/Collect events
             flows = applyFeeSplitIfAvailable(view, flows);
@@ -570,16 +573,6 @@ public final class LpNftClFlowMaterializer {
             }
         }
         return result;
-    }
-
-    /**
-     * V4 path: external pre-computed fee fractions (no native ETH support on this path — deferred).
-     */
-    private static List<NormalizedTransaction.Flow> splitFeeFlows(
-            List<NormalizedTransaction.Flow> flows,
-            Map<String, BigDecimal> feeFractions
-    ) {
-        return splitFeeFlows(flows, feeFractions, null);
     }
 
     private static NormalizedTransaction.Flow copyFlowWithQty(NormalizedTransaction.Flow src, BigDecimal qty) {

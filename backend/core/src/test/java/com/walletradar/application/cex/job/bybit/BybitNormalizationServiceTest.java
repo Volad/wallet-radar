@@ -517,7 +517,7 @@ class BybitNormalizationServiceTest {
     }
 
     @Test
-    void extractedOnChainEarnSubscriptionPairBecomesConfirmedStakingDeposit() {
+    void extractedOnChainEarnSubscriptionPairBecomesCrossCanonicalPendingPriceStakingDeposit() {
         BybitExtractedEvent ethLeg = extractedLiquidStakingRow(
                 "cmeth-eth-leg",
                 "ETH",
@@ -543,7 +543,10 @@ class BybitNormalizationServiceTest {
         verify(normalizedTransactionStore).upsert(captor.capture());
         NormalizedTransaction saved = captor.getValue();
         assertThat(saved.getType()).isEqualTo(NormalizedTransactionType.STAKING_DEPOSIT);
-        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        // D1 (ADR-054 §9): ETH → cmETH is cross-canonical (FAMILY:ETH → FAMILY:METH), so it routes to
+        // PENDING_PRICE so both principal legs get a market quote instead of a $0-basis acquisition.
+        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(saved.getCrossCanonicalStakingConversion()).isTrue();
         assertThat(saved.getFlows())
                 .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getRole() + ":" + flow.getQuantityDelta())
                 .containsExactlyInAnyOrder(
@@ -605,7 +608,7 @@ class BybitNormalizationServiceTest {
     }
 
     @Test
-    void extractedEth20StakeMintPairBecomesConfirmedStakingDeposit() {
+    void extractedEth20StakeMintPairBecomesCrossCanonicalPendingPriceStakingDeposit() {
         BybitExtractedEvent stakeLeg = extractedLiquidStakingRow(
                 "eth20-stake-leg",
                 "ETH",
@@ -636,7 +639,10 @@ class BybitNormalizationServiceTest {
         verify(normalizedTransactionStore).upsert(captor.capture());
         NormalizedTransaction saved = captor.getValue();
         assertThat(saved.getType()).isEqualTo(NormalizedTransactionType.STAKING_DEPOSIT);
-        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.CONFIRMED);
+        // D1 (ADR-054 §9): ETH → mETH is cross-canonical (FAMILY:ETH → FAMILY:METH), so it routes to
+        // PENDING_PRICE so both principal legs get a market quote instead of a $0-basis acquisition.
+        assertThat(saved.getStatus()).isEqualTo(NormalizedTransactionStatus.PENDING_PRICE);
+        assertThat(saved.getCrossCanonicalStakingConversion()).isTrue();
         assertThat(saved.getFlows())
                 .extracting(flow -> flow.getAssetSymbol() + ":" + flow.getRole() + ":" + flow.getQuantityDelta())
                 .containsExactlyInAnyOrder(

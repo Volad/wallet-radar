@@ -56,8 +56,11 @@ The canonical builder stamps these venue-neutral fields on every `NormalizedTran
 | `umbrellaKey` | `WalletRef.parse(walletAddress).umbrellaKey()` | umbrella aggregation |
 | `externalCapitalBoundary` | `VenueExternalCapitalPolicy` | conservation NEC |
 | `externalCapitalEligibleUsd` | `VenueExternalCapitalPolicy` | conservation NEC |
+| `custodialOffChain` | normalization (ADR-072) | informational custody ledger |
+| `receiptBearingCollateral` | normalization builders (EVM=`true`, Solana/TON=`false`) | `LendingCycleBuilder` (synthesis / OPEN promotion) |
+| `lpConcentrated` | Solana normalization builder / `SolanaLpPositionReader` | `SessionLpQueryService`, `LpPositionRefreshService`, `LpPositionSnapshot` |
 
-**Global boundary rule (supersedes old "Boundary rule"): `costbasis`, `portfolio`, `pricing`, `linking`, and `api` read the neutral contract only — never `VenueRegistry`, `VenueDescriptor`, `CexLedgerSource`, or any concrete venue descriptor.**
+**Global boundary rule (supersedes old "Boundary rule"): `costbasis`, `portfolio`, `pricing`, `linking`, `liquiditypools`, `lending`, and `api` read the neutral contract only — never `VenueRegistry`, `VenueDescriptor`, `CexLedgerSource`, any concrete venue descriptor, or (network axis, ADR-074) `NetworkAddressFormat.isEvm(...)` / `NetworkId`-member branches / network-named string prefixes (`lp-position:solana:`). DTOs may still *carry* `NetworkId` as data.**
 
 ## Network family SPI (B2)
 

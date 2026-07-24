@@ -45,7 +45,7 @@ public class ReplayTransactionRouter {
 
         LiquidStakingFlowSelection liquidStakingSelection = liquidStakingSelector.apply(transaction);
         if (!liquidStakingSelection.outbound().isEmpty() && !liquidStakingSelection.inbound().isEmpty()) {
-            return ReplayRoutingDecision.liquidStaking(liquidStakingSelection);
+            return ReplayRoutingDecision.clusterCarry(liquidStakingSelection);
         }
 
         SimpleFamilyCustodySelection familyCustodySelection = familyCustodySelector.apply(transaction);

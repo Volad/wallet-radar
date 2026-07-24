@@ -7,13 +7,18 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 
+/**
+ * Refreshes live market rates across every registered {@link LendingMarketRateReader}, dispatching
+ * per discovered market by {@link LendingMarketRateReader#supports(String, String)} (WS-3). The
+ * hardcoded {@code AAVE} protocol gate was removed so any protocol/network reader plugs in.
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class LendingMarketRateRefreshService {
 
     private final LendingActiveMarketDiscoveryService activeMarketDiscoveryService;
-    private final LendingAaveV3MarketRateCollector aaveV3MarketRateCollector;
+    private final List<LendingMarketRateReader> rateReaders;
     private final LendingMarketRateSnapshotService snapshotService;
 
     public RefreshResult refreshActiveMarkets() {
@@ -21,10 +26,14 @@ public class LendingMarketRateRefreshService {
         int saved = 0;
         int unavailable = 0;
         for (LendingActiveMarketDiscoveryService.ActiveMarket market : activeMarkets) {
-            if (!LendingProtocolNameSupport.AAVE.equalsIgnoreCase(market.protocol())) {
+            LendingMarketRateReader reader = rateReaders.stream()
+                    .filter(candidate -> candidate.supports(market.protocol(), market.networkId()))
+                    .findFirst()
+                    .orElse(null);
+            if (reader == null) {
                 continue;
             }
-            LendingMarketRateSnapshot snapshot = aaveV3MarketRateCollector.collect(market).orElse(null);
+            LendingMarketRateSnapshot snapshot = reader.collect(market).orElse(null);
             if (snapshot == null) {
                 continue;
             }

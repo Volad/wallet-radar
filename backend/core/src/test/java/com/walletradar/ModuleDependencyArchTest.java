@@ -120,6 +120,42 @@ class ModuleDependencyArchTest {
     }
 
     /**
+     * WS-8 (ADR-073): network specificity ends at normalization — the generalization of the
+     * ADR-052 venue invariant above from the venue axis to the network axis.
+     *
+     * <p>Post-normalization read/query view-assembly packages must NOT depend on
+     * {@link com.walletradar.domain.common.NetworkAddressFormat} — the network-family classifier
+     * whose {@code isEvm(...)} is the runtime "which chain family is this?" branch (the network
+     * analogue of {@code VenueRegistry}/venue descriptors). Read paths must instead consume the
+     * semantic capability flags stamped at normalization time
+     * ({@code receiptBearingCollateral}, {@code lpConcentrated}, {@code custodialOffChain}).</p>
+     *
+     * <p>Scope note: this rule targets {@code NetworkAddressFormat} only, NOT {@link NetworkId}.
+     * DTOs, keys, and records may freely <em>carry</em> {@code NetworkId} (grouping, labels,
+     * serialization) — that is data, not a network-family branch. The single documented carve-out is
+     * the WS-3 live-position true-up machinery ({@code *LiveTrueUpService}), which sits upstream of
+     * the read plane and legitimately gates the live reader by network family (mirroring the venue
+     * rule's single-venue adapter allowance). Ingestion/enrichment adapters (balance providers, LP
+     * on-chain readers, normalization builders) are outside these packages by design.</p>
+     */
+    @Test
+    void post_normalization_read_query_packages_must_not_depend_on_NetworkAddressFormat() {
+        ArchRule rule = noClasses()
+                .that().resideInAnyPackage(
+                        "..application.costbasis..",
+                        "..application.portfolio..",
+                        "..application.pricing..",
+                        "..application.liquiditypools..",
+                        "..application.lending..",
+                        "..api.."
+                )
+                .and().haveSimpleNameNotEndingWith("LiveTrueUpService")
+                .should().dependOnClassesThat()
+                .haveNameMatching(".*\\.NetworkAddressFormat$");
+        rule.check(classes);
+    }
+
+    /**
      * Supplementary check: the API layer must not expose venue-specific acquisition types
      * directly (e.g. BybitStreamSyncSnapshot).  The session settings query service must
      * translate to a neutral DTO before handing data to the controller.

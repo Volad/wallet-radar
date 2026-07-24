@@ -47,8 +47,11 @@ class AccountingAssetFamilyRegistryConsolidationTest {
 
     @Test
     void aaveSavaxResolvesViaSupplementalEntryNotClassifiedC1OrC2() {
-        // The one genuine SYMBOL_FAMILIES residue: family without classification, no cluster.
-        assertSurfaces("AAVASAVAX", "FAMILY:SAVAX", null, null, false, false, null);
+        // The one genuine SYMBOL_FAMILIES residue: family (FAMILY:SAVAX) without C1/C2 classification.
+        // ADR-083: aAvaSAVAX is an AVAX staking-cluster member, so normalizationClusterForSymbol now
+        // resolves it to CLUSTER:AVAX_STAKING (via the supplemental cluster map) to keep normalization
+        // and replay carry decisions in agreement.
+        assertSurfaces("AAVASAVAX", "FAMILY:SAVAX", null, null, false, false, "CLUSTER:AVAX_STAKING");
     }
 
     @Test

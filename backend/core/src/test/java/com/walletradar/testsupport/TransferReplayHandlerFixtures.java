@@ -5,6 +5,7 @@ import com.walletradar.application.costbasis.application.replay.handler.CarryTra
 import com.walletradar.application.costbasis.application.replay.handler.EarnBundleTransferReplaySupport;
 import com.walletradar.application.costbasis.application.replay.handler.TransferReplayHandler;
 import com.walletradar.application.costbasis.application.replay.support.ContinuityCarryService;
+import com.walletradar.application.costbasis.application.replay.support.CustodyRoundTripReplaySupport;
 import com.walletradar.application.costbasis.application.replay.support.LinkedBridgeTransferReplaySupport;
 import com.walletradar.application.costbasis.application.replay.support.ReplayFlowSupport;
 import com.walletradar.application.costbasis.application.replay.support.ReplayMarketAuthority;
@@ -49,6 +50,10 @@ public final class TransferReplayHandlerFixtures {
                 flowSupport,
                 carryService
         );
+        CustodyRoundTripReplaySupport custodyRoundTripSupport = new CustodyRoundTripReplaySupport(
+                flowSupport,
+                marketAuthority
+        );
         return new TransferReplayHandler(
                 flowSupport,
                 carryService,
@@ -57,7 +62,8 @@ public final class TransferReplayHandlerFixtures {
                 linkedBridgeSupport(flowSupport, carryService, keyFactory, matcher),
                 bridgeSupport,
                 earnSupport,
-                carryTransferSupport
+                carryTransferSupport,
+                custodyRoundTripSupport
         );
     }
 

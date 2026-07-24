@@ -6,6 +6,8 @@ import com.walletradar.application.costbasis.domain.OnChainBalance;
 import com.walletradar.application.costbasis.support.AccountingAssetFamilySupport;
 import com.walletradar.application.costbasis.support.AccountingAssetIdentitySupport;
 import com.walletradar.application.costbasis.support.CexUmbrellaSupport;
+import com.walletradar.application.costbasis.support.ReceiptlessLockedCollateralSupport;
+import com.walletradar.application.costbasis.support.WalletAddressReadScope;
 import com.walletradar.domain.common.NetworkId;
 import com.walletradar.domain.session.UserSession;
 import com.walletradar.domain.wallet.WalletDomainKind;
@@ -159,6 +161,29 @@ class AssetLedgerReconciliationService {
             }
         }
 
+        // Receipt-less locked-collateral coverage: on networks without a receipt token (e.g. Jupiter
+        // Lend on Solana) a LENDING/STAKING/VAULT deposit REALLOCATE_OUTs the underlying's basis, but
+        // no receipt-token on_chain_balance exists to re-cover it — while a live-balance provider
+        // merges the still-locked amount back into the native balance, so it reads as held-but-
+        // uncovered. The parked basis is the net same-family REALLOCATE_OUT (out minus any restored
+        // IN). Receipt-bearing lending nets to ~0 within the family (the basis lands on the aToken
+        // bucket, which reconciles via its own on_chain_balance), so this credits ONLY receipt-less
+        // collateral. The credit is capped by the still-uncovered on-chain quantity, so it can never
+        // over-cover. Network-agnostic: driven by lifecycle + basis effect, no chain gate.
+        ReceiptlessLockedCollateralSupport.LockedCollateralBasis lockedCollateral =
+                receiptlessLockedCollateral(universePoints, familyIdentity);
+        if (lockedCollateral.isPresent()) {
+            BigDecimal onChainGap = quantity.subtract(coveredQuantity, MC).max(BigDecimal.ZERO);
+            BigDecimal creditQty = lockedCollateral.quantity().min(onChainGap);
+            if (creditQty.signum() > 0) {
+                BigDecimal ratio = creditQty.divide(lockedCollateral.quantity(), MC);
+                coveredQuantity = coveredQuantity.add(creditQty, MC);
+                totalCostBasisUsd = totalCostBasisUsd.add(lockedCollateral.grossBasisUsd().multiply(ratio, MC), MC);
+                netTotalCostBasisUsd = netTotalCostBasisUsd.add(lockedCollateral.netBasisUsd().multiply(ratio, MC), MC);
+                reduceLockedUncoveredBuckets(uncoveredBuckets, creditQty);
+            }
+        }
+
         LinkedHashSet<String> enabledCexVenueRefs = new LinkedHashSet<>(CexUmbrellaSupport.enabledCexAccountRefs(session));
         if (!enabledCexVenueRefs.isEmpty()) {
             Map<String, CexFamilyUmbrellaAccumulator> umbrellas = new LinkedHashMap<>();
@@ -273,11 +298,15 @@ class AssetLedgerReconciliationService {
                 gasPaidUsd,
                 List.copyOf(uncoveredBuckets),
                 shortfallSources,
-                null,
-                null,
-                null,
-                null,
-                List.of()
+                null,   // breakEvenUsd
+                null,   // averageCostUsd
+                null,   // lockedSurplusUsd
+                null,   // incomeReceivedUsd
+                null,   // attributionTargetFamily
+                List.of(), // familyMemberSymbols
+                null,   // coveredRatio
+                null,   // breakEvenSuppressed
+                null    // details
         );
     }
 
@@ -318,6 +347,76 @@ class AssetLedgerReconciliationService {
                 .limit(20)
                 .map(ShortfallSourceAccumulator::toView)
                 .toList();
+    }
+
+    /**
+     * Outstanding basis parked by receipt-less same-family locked positions (LENDING/STAKING/VAULT).
+     * Computed as the negated net of same-family REALLOCATE_OUT minus REALLOCATE_IN; a receipt-bearing
+     * position nets to ~0 because the basis re-enters the family on the receipt-token bucket.
+     */
+    private ReceiptlessLockedCollateralSupport.LockedCollateralBasis receiptlessLockedCollateral(
+            List<AssetLedgerPoint> universePoints,
+            String familyIdentity
+    ) {
+        List<AssetLedgerPoint> familyReceiptlessPoints = new ArrayList<>();
+        for (AssetLedgerPoint point : universePoints) {
+            if (!ReceiptlessLockedCollateralSupport.isReceiptlessLockedPoint(point)) {
+                continue;
+            }
+            String pointFamily = resolvedFamilyIdentity(
+                    point,
+                    point.getNetworkId(),
+                    point.getAssetSymbol(),
+                    point.getAssetContract()
+            );
+            if (!Objects.equals(pointFamily, familyIdentity)) {
+                continue;
+            }
+            familyReceiptlessPoints.add(point);
+        }
+        return ReceiptlessLockedCollateralSupport.fromFamilyPoints(familyReceiptlessPoints);
+    }
+
+    /**
+     * Reduces the reported uncovered quantity by {@code creditQty}, draining the largest on-chain
+     * uncovered buckets first (the locked collateral is the dominant uncovered chunk). Fully covered
+     * buckets are dropped. Called before CEX umbrella buckets are appended.
+     */
+    private static void reduceLockedUncoveredBuckets(
+            List<AssetLedgerQueryService.UncoveredBucketView> uncoveredBuckets,
+            BigDecimal creditQty
+    ) {
+        if (uncoveredBuckets.isEmpty() || creditQty.signum() <= 0) {
+            return;
+        }
+        uncoveredBuckets.sort((left, right) -> right.uncoveredQuantity().compareTo(left.uncoveredQuantity()));
+        BigDecimal remaining = creditQty;
+        for (int i = 0; i < uncoveredBuckets.size() && remaining.signum() > 0; i++) {
+            AssetLedgerQueryService.UncoveredBucketView bucket = uncoveredBuckets.get(i);
+            BigDecimal reduce = bucket.uncoveredQuantity().min(remaining);
+            if (reduce.signum() <= 0) {
+                continue;
+            }
+            remaining = remaining.subtract(reduce, MC);
+            uncoveredBuckets.set(i, new AssetLedgerQueryService.UncoveredBucketView(
+                    bucket.walletAddress(),
+                    bucket.networkId(),
+                    bucket.assetSymbol(),
+                    bucket.assetContract(),
+                    bucket.quantity(),
+                    bucket.coveredQuantity().add(reduce, MC),
+                    bucket.uncoveredQuantity().subtract(reduce, MC).max(BigDecimal.ZERO),
+                    bucket.uncoveredReason(),
+                    bucket.latestTxHash(),
+                    bucket.latestNormalizedType(),
+                    bucket.latestBasisEffect(),
+                    bucket.latestProtocolName(),
+                    bucket.hasIncompleteHistory(),
+                    bucket.hasUnresolvedFlags(),
+                    bucket.unresolvedFlagCount()
+            ));
+        }
+        uncoveredBuckets.removeIf(bucket -> bucket.uncoveredQuantity().signum() <= 0);
     }
 
     private List<OnChainBalance> loadOnChainBalances(String sessionId, List<String> walletAddresses) {
@@ -454,7 +553,11 @@ class AssetLedgerReconciliationService {
     }
 
     private static String normalizeAddress(String address) {
-        return address == null ? "" : address.trim().toLowerCase(Locale.ROOT);
+        // Family-aware: EVM/CEX lowercased (legacy), Solana case-preserved, TON preferred member ref.
+        // Blind lowercasing corrupted base58 Solana/TON addresses so the on_chain_balances $in query
+        // never matched the session wallet — the move-basis header (quantity / AVCO / effective cost)
+        // came back empty for every Solana/TON asset.
+        return WalletAddressReadScope.normalize(address);
     }
 
     private static String normalizeSymbol(String symbol) {

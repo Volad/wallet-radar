@@ -104,7 +104,37 @@ public final class AccountingAssetFamilySupport {
         }
         return symbol.startsWith("LP-RECEIPT:")
                 || symbol.contains("-LP-")
-                || symbol.endsWith("-LP");
+                || symbol.endsWith("-LP")
+                // ADR-081 / ADR-023 D2: Pendle LP tokens (and their eqb/pnp staked wrappers) follow the
+                // deterministic `-LPT` naming convention (e.g. PENDLE-LPT, eqbPENDLE-LPT, <market>-LPT).
+                // This is a protocol convention, not a curated per-token bucket. The plain PENDLE
+                // governance/reward token does not end in `-LPT` and stays a priced spot asset.
+                || symbol.endsWith("-LPT");
+    }
+
+    /**
+     * ADR-080 / ADR-081: identity-driven LP-receipt recognition. A holding is an LP receipt when its
+     * resolved accounting family is {@link #FAMILY_LP_RECEIPT} — set at classification/replay when the
+     * asset participates in an LP correlation (the durable identity/flag route, robust to novel receipt
+     * symbols) — falling back to the continuity identity recomputed from the symbol/contract for
+     * callers that do not hold a persisted family. Recognition is by <em>identity</em>, never by an
+     * ad-hoc broadened symbol-suffix heuristic keyed on real symbol spelling.
+     */
+    public static boolean isLpReceiptFamilyIdentity(String familyIdentity) {
+        return FAMILY_LP_RECEIPT.equals(familyIdentity);
+    }
+
+    /**
+     * ADR-080 / ADR-081 (C7): whether a dashboard holding row is an LP receipt and must be excluded
+     * from the priced spot-asset surface. Consults the resolved/persisted family identity first (so a
+     * receipt with a novel symbol routed via its LP correlationId is still excluded), then the
+     * continuity identity recomputed from the symbol/contract.
+     */
+    public static boolean isLpReceiptHolding(String familyIdentity, String assetSymbol, String assetContract) {
+        if (isLpReceiptFamilyIdentity(familyIdentity)) {
+            return true;
+        }
+        return FAMILY_LP_RECEIPT.equals(continuityIdentity(assetSymbol, assetContract));
     }
 
     /**
@@ -115,11 +145,30 @@ public final class AccountingAssetFamilySupport {
      * {@code FAMILY:ETH} (ADR-054 / ADR-045).
      */
     public static boolean includeInSpotFamilyTimelineAggregation(String familyIdentity, String assetSymbol) {
+        return includeInSpotFamilyTimelineAggregation(familyIdentity, assetSymbol, null);
+    }
+
+    /**
+     * Persisted-family aware overload. Callers that hold the ledger point pass its authoritative
+     * {@code accountingFamilyIdentity} so raw-contract families are never silently dropped.
+     * <p>
+     * The legacy symbol-only recompute ({@link #continuityIdentity(String, String)} with a
+     * {@code null} contract) discards the contract, so any asset whose family is keyed on its
+     * contract — native TON persisted as {@code toncoin}, SPL memecoins keyed on their mint, TON
+     * jettons keyed on the jetton address — never equalled the requested family and had its entire
+     * move-basis timeline filtered out. The point's persisted family is contract-aware and is the
+     * value the points were already loaded by, so it is authoritative here; the symbol recompute is
+     * kept only as a fallback for callers that do not supply it.
+     */
+    public static boolean includeInSpotFamilyTimelineAggregation(
+            String familyIdentity, String assetSymbol, String persistedFamilyIdentity) {
         if (isLpReceiptSymbol(assetSymbol)) {
             return false;
         }
-        String symbolFamily = continuityIdentity(assetSymbol, null);
-        if (symbolFamily == null || !symbolFamily.equals(familyIdentity)) {
+        String effectiveFamily = (persistedFamilyIdentity != null && !persistedFamilyIdentity.isBlank())
+                ? persistedFamilyIdentity
+                : continuityIdentity(assetSymbol, null);
+        if (effectiveFamily == null || !effectiveFamily.equals(familyIdentity)) {
             return false;
         }
         if (FAMILY_ETH_IDENTITY.equals(familyIdentity)

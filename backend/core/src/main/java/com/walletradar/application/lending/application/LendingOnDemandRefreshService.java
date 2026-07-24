@@ -1,34 +1,35 @@
 package com.walletradar.application.lending.application;
 
 import com.walletradar.application.lending.view.*;
-import com.walletradar.application.lending.config.LendingMarketRateProperties;
-import com.walletradar.application.lending.persistence.LendingHealthFactorSnapshot;
 import com.walletradar.application.lending.persistence.LendingMarketRateSnapshot;
+import com.walletradar.application.lending.spi.LivePositionRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
-import java.math.BigDecimal;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
+/**
+ * Explicit user-triggered lending refresh. Refactored (WS-3) to dispatch to the live-position and
+ * market-rate reader SPIs by {@link com.walletradar.application.lending.spi.LendingLivePositionReader#supports}
+ * / {@link LendingMarketRateReader#supports} instead of the hardcoded Aave gate, so any protocol/network
+ * (Aave, Jupiter Lend, …) refreshes. It never applies the borrow-liability true-up (that stays
+ * background-only in {@link LendingHealthFactorRefreshService}).
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class LendingOnDemandRefreshService {
 
-    private static final String AAVE_PROTOCOL_KEY = "Aave";
-
     private final SessionLendingQueryService lendingQueryService;
     private final LendingActiveMarketDiscoveryService activeMarketDiscoveryService;
-    private final LendingAaveV3HealthCollector healthCollector;
-    private final LendingAaveV3MarketRateCollector marketRateCollector;
-    private final LendingHealthFactorSnapshotService healthSnapshotService;
+    private final LendingHealthFactorRefreshService healthFactorRefreshService;
+    private final List<LendingMarketRateReader> rateReaders;
     private final LendingMarketRateSnapshotService marketRateSnapshotService;
     private final LendingGroupRefreshStateService refreshStateService;
-    private final LendingMarketRateProperties marketRateProperties;
 
     public RefreshResult refreshGroupWithState(String sessionId, String groupId) {
         return lendingQueryService.findSessionLending(sessionId)
@@ -88,31 +89,29 @@ public class LendingOnDemandRefreshService {
         int saved = 0;
         int skipped = 0;
 
-        if (shouldRefreshHealth(group, marketRateProperties)) {
-            LendingAaveV3HealthCollector.ActiveBorrowGroup borrowGroup =
-                    new LendingAaveV3HealthCollector.ActiveBorrowGroup(
-                            sessionId,
-                            AAVE_PROTOCOL_KEY,
-                            group.networkId(),
-                            group.walletAddress()
-                    );
-            LendingHealthFactorSnapshot snapshot = healthCollector.collect(borrowGroup).orElse(null);
-            if (snapshot == null) {
-                skipped++;
-            } else {
-                healthSnapshotService.save(snapshot);
+        if (shouldRefreshHealth(group)) {
+            String networkId = group.networkId() == null ? "" : group.networkId().trim().toUpperCase(Locale.ROOT);
+            LivePositionRequest request = new LivePositionRequest(
+                    sessionId, group.protocol(), networkId, group.walletAddress());
+            if (healthFactorRefreshService.refreshPositionSnapshots(request).isPresent()) {
                 saved++;
+            } else {
+                skipped++;
             }
         }
 
         List<LendingActiveMarketDiscoveryService.ActiveMarket> markets =
                 activeMarketsForGroup(sessionId, group);
         for (LendingActiveMarketDiscoveryService.ActiveMarket market : markets) {
-            if (!LendingProtocolNameSupport.AAVE.equalsIgnoreCase(market.protocol())) {
+            LendingMarketRateReader reader = rateReaders.stream()
+                    .filter(candidate -> candidate.supports(market.protocol(), market.networkId()))
+                    .findFirst()
+                    .orElse(null);
+            if (reader == null) {
                 skipped++;
                 continue;
             }
-            LendingMarketRateSnapshot snapshot = marketRateCollector.collect(market).orElse(null);
+            LendingMarketRateSnapshot snapshot = reader.collect(market).orElse(null);
             if (snapshot == null) {
                 skipped++;
                 continue;
@@ -162,18 +161,10 @@ public class LendingOnDemandRefreshService {
         ).toLowerCase(Locale.ROOT);
     }
 
-    private static boolean shouldRefreshHealth(
-            LendingGroupView group,
-            LendingMarketRateProperties marketRateProperties
-    ) {
-        if (!AAVE_PROTOCOL_KEY.equalsIgnoreCase(group.protocol())) {
-            return false;
-        }
-        if (group.borrowUsd() == null || group.borrowUsd().signum() <= 0) {
-            return false;
-        }
-        String networkId = group.networkId() == null ? "" : group.networkId().trim();
-        return marketRateProperties.isAaveV3HealthFetchEnabled(networkId);
+    private static boolean shouldRefreshHealth(LendingGroupView group) {
+        // Protocol-agnostic (WS-3): refresh any OPEN borrow group; reader dispatch + per-network
+        // enablement is decided by the readers' supports()/read() (Aave config gate, Jupiter enabled).
+        return group.borrowUsd() != null && group.borrowUsd().signum() > 0;
     }
 
     private static String normalizeAddress(String address) {

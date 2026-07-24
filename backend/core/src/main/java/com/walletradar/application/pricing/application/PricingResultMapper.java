@@ -57,6 +57,21 @@ public class PricingResultMapper {
         copy.setConfirmedAt(transaction.getConfirmedAt());
         copy.setClientId(transaction.getClientId());
         copy.setExternalCapitalBoundary(transaction.getExternalCapitalBoundary());
+        // WS-8 (ADR-074): the network-neutral capability flags are stamped at normalization and must
+        // survive the pricing copy-and-replace cycle so the receipt-less lending and concentrated-LP
+        // read paths keep working (same contract as externalCapitalBoundary above / acquisitionFeeUsd
+        // in the per-flow copy). Omitting them silently drops the flags on every priced row.
+        copy.setReceiptBearingCollateral(transaction.getReceiptBearingCollateral());
+        copy.setLpConcentrated(transaction.getLpConcentrated());
+        // ADR-072/ADR-079: preserve the off-chain custody flag through the pricing copy-and-replace
+        // cycle (same contract as the flags above). Otherwise a priced-row rewrite drops
+        // custodialOffChain and the informational custody ledger read comes back empty.
+        copy.setCustodialOffChain(transaction.getCustodialOffChain());
+        // D1 (ADR-054 §9): preserve the cross-canonical staking flag through the pricing copy-and-
+        // replace cycle. It gates requiresMarketPrice for the principal TRANSFER legs, so dropping it
+        // on the priced-row rewrite would strip the acquired receipt's market quote and re-introduce
+        // the $0-basis leak this flag exists to prevent.
+        copy.setCrossCanonicalStakingConversion(transaction.getCrossCanonicalStakingConversion());
         copy.setMissingDataReasons(new ArrayList<>(transaction.getMissingDataReasons() == null
                 ? List.of()
                 : transaction.getMissingDataReasons()));
@@ -84,6 +99,10 @@ public class PricingResultMapper {
             // Net AVCO. This field is set at normalization time (CEX venues only) and must survive
             // the pricing copy-and-replace cycle.
             flowCopy.setAcquisitionFeeUsd(flow.getAcquisitionFeeUsd());
+            // ADR-081 (C1): the LP-receipt flag is set at normalization and must survive the pricing
+            // copy-and-replace cycle (same contract as acquisitionFeeUsd above), else the confusable
+            // Meteora DAMM MLP receipt loses its FAMILY:LP_RECEIPT stamp on priced rows.
+            flowCopy.setLpReceipt(flow.getLpReceipt());
             flows.add(flowCopy);
         }
         copy.setFlows(flows);

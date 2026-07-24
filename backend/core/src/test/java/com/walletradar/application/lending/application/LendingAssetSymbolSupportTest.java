@@ -53,6 +53,17 @@ class LendingAssetSymbolSupportTest {
     }
 
     @Test
+    void classifiesAaveZkSyncZkReceiptAsLendingPositionWithZkUnderlying() {
+        // C7 (LP6): aZksZK is the Aave zkSync market receipt for the ZK token. It must classify as a
+        // lending position (so it surfaces as lending, not a priced spot asset) and resolve to the ZK
+        // underlying via the AZKS receipt-prefix + explicit ZK underlying.
+        assertThat(LendingAssetSymbolSupport.isLendingPositionSymbol("aZksZK")).isTrue();
+        assertThat(LendingAssetSymbolSupport.isLendingReceiptOrDebtSymbol("aZksZK")).isTrue();
+        assertThat(LendingAssetSymbolSupport.underlyingSymbol("aZksZK")).isEqualTo("ZK");
+        assertThat(LendingAssetSymbolSupport.lifecycleAsset("aZksZK")).isEqualTo("ZK");
+    }
+
+    @Test
     void distinguishesPositionTokensFromUnderlyingSpotBalances() {
         assertThat(LendingAssetSymbolSupport.isLendingPositionSymbol("AARBARB")).isTrue();
         assertThat(LendingAssetSymbolSupport.isLendingPositionSymbol("AARBWBTC")).isTrue();

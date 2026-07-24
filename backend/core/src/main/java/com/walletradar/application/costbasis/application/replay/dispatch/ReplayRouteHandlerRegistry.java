@@ -77,7 +77,7 @@ public class ReplayRouteHandlerRegistry {
             case LP_RECEIPT_ENTRY -> ReplayRoutingDecision.of(ReplayRoute.LP_RECEIPT_ENTRY);
             case ASYNC_LP_EXIT_SETTLEMENT -> ReplayRoutingDecision.of(ReplayRoute.ASYNC_LP_EXIT_SETTLEMENT);
             case POSITION_SCOPED_LP_EXIT -> ReplayRoutingDecision.of(ReplayRoute.POSITION_SCOPED_LP_EXIT);
-            case LIQUID_STAKING -> ReplayRoutingDecision.liquidStaking(
+            case CLUSTER_CARRY -> ReplayRoutingDecision.clusterCarry(
                     com.walletradar.application.costbasis.application.replay.model.LiquidStakingFlowSelection.empty()
             );
             case FAMILY_EQUIVALENT_CUSTODY -> ReplayRoutingDecision.familyEquivalentCustody(

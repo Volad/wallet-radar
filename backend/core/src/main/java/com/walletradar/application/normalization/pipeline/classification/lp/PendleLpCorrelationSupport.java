@@ -82,19 +82,31 @@ public final class PendleLpCorrelationSupport {
             }
             String marketId = marketIdFromSymbol(leg.assetSymbol());
             if (marketId != null) {
-                return formatCorrelationId(view.networkId(), marketId);
+                return formatCorrelationId(view.networkId(), marketId, view.walletAddress());
             }
         }
         return null;
     }
 
+    /**
+     * ADR-081 (C2): resolves the deterministic Pendle market slug from an LP-receipt symbol,
+     * stripping the Equilibria ({@code eqb}) and Penpie ({@code pnp}) staking-wrapper prefixes so a
+     * direct-entry {@code PENDLE-LPT} and its later wrapped exit ({@code eqbPENDLE-LPT} /
+     * {@code pnpPENDLE-LPT}) resolve to the SAME market segment. This wrapper→base mapping is what
+     * lets an Equilibria/Penpie {@code zapOutV3SingleToken} exit link to the entry's receipt pool and
+     * net {@code PENDLE-LPT} to zero (close BY LINK). The wrapped exit only exposes the wrapper leg
+     * (never the base market contract), so the segment MUST be symbol-derived, not contract-derived,
+     * to stay identical across entry and wrapped exit without a wrapper→market address registry.
+     */
     public static String marketIdFromSymbol(String assetSymbol) {
         if (assetSymbol == null || assetSymbol.isBlank()) {
             return null;
         }
         String normalized = assetSymbol.trim().toUpperCase(Locale.ROOT);
-        // Strip Equilibria staking wrapper prefix: eqbPENDLE-LPT → PENDLE-LPT
-        if (normalized.startsWith("EQB") && (normalized.contains("PENDLE") || normalized.contains("-LPT"))) {
+        // Strip the Equilibria (eqb) / Penpie (pnp) staking-wrapper prefix: eqbPENDLE-LPT /
+        // pnpPENDLE-LPT → PENDLE-LPT, so the wrapped exit and the direct entry share one market slug.
+        if ((normalized.startsWith("EQB") || normalized.startsWith("PNP"))
+                && (normalized.contains("PENDLE") || normalized.contains("-LPT"))) {
             normalized = normalized.substring(3);
         }
         // Must be an LP position receipt token (ending in -LPT), not the plain Pendle governance token.
@@ -105,12 +117,23 @@ public final class PendleLpCorrelationSupport {
         return slugify(normalized);
     }
 
-    public static String formatCorrelationId(NetworkId networkId, String marketId) {
+    /**
+     * ADR-081 (C2, supersedes ADR-023 D3): the per-market + per-wallet Pendle correlation key
+     * {@code pendle-lp:{network}:{marketSlug}:{walletLower}}. The trailing lowercased wallet segment
+     * disambiguates the same market held across multiple tracked wallets (the ADR-023 D3 symbol-only
+     * 3-segment key collapsed them, merging distinct per-wallet positions into one pool). When the
+     * wallet is unavailable the key degrades to the legacy 3-segment form so it is never malformed.
+     */
+    public static String formatCorrelationId(NetworkId networkId, String marketId, String walletAddress) {
         if (marketId == null || marketId.isBlank()) {
             return null;
         }
         String network = networkId == null ? "unknown" : networkId.name().toLowerCase(Locale.ROOT);
-        return "pendle-lp:" + network + ":" + marketId;
+        String base = "pendle-lp:" + network + ":" + marketId;
+        if (walletAddress == null || walletAddress.isBlank()) {
+            return base;
+        }
+        return base + ":" + walletAddress.trim().toLowerCase(Locale.ROOT);
     }
 
     private static String slugify(String value) {

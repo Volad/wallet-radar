@@ -1,4 +1,14 @@
 # Track A / A5 — per-network metadata (imported from application.yml).
+#
+# token-overrides (WS-7): single source of truth for the irreducible per-network token identity
+# overrides that replaced the retired token-metadata.json. Resolution order everywhere metadata is
+# resolved at NORMALIZATION is: descriptor override (this map) → persistent token_metadata_cache →
+# live resolver (write-through) → explicit unresolved. Each entry may carry:
+#   symbol          fallback/seed symbol (used when the source payload omits one);
+#   decimals        fallback/seed decimals (used when the source omits them);
+#   decimal-override authoritative decimals that ALWAYS replace a known-wrong source value.
+# Only load-bearing decimals (qty = raw / 10^decimals feeds AVCO) and explorer-misreport overrides
+# are kept; redundant symbol-only entries are dropped since live RPC/resolvers + stables cover them.
 walletradar:
   networks:
     entries:
@@ -16,6 +26,11 @@ walletradar:
           - "0x6b175474e89094c44da98b954eedeac495271d0f"
           - "0xc5f0f7b66764f6ec8c8dff7ba683102295e16409"
           - "0x4c9edd5852cd905f086c759e8383e09bff1e68b3"
+        token-overrides:
+          # Euler v2 eUSDC-2 vault share (fallback symbol/decimals when the explorer omits them).
+          "0x39de0f00189306062d79edec6dca5bb6bfd108f9": { symbol: "eUSDC-2", decimals: 6 }
+          # Resolv wstUSR (builder ERC-20 evidence decoding fallback).
+          "0x2a52b289ba68bbd02676640aa9f605700c9e5699": { symbol: "wstUSR", decimals: 18 }
       ARBITRUM:
         address-format: EVM
         native-symbol: ETH
@@ -29,6 +44,13 @@ walletradar:
           - "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9"
           - "0xda10009cbd5d07dd0cecc66161fc93d7c9000da1"
           - "0x5d3a1ff2b6bab83b63cd9ad0787074081a52ef34"
+        token-overrides:
+          # soUSDC "Silo Optima" — Etherscan misreports tokenDecimal=6; on-chain decimal is 12.
+          # decimal-override ALWAYS replaces the wrong explorer value (financial correctness).
+          "0x2514a2ce842705ead703d02fabfd8250bfcfb8bd": { symbol: "soUSDC", decimal-override: 12 }
+          # Arbitrum native USDC + bridged USDC.e (builder ERC-20 evidence decoding fallback).
+          "0xaf88d065e77c8cc2239327c5edb3a432268e5831": { symbol: "USDC", decimals: 6 }
+          "0xff970a61a04b1ca14834a43f5de4533ebddb5cc8": { symbol: "USDC", decimals: 6 }
       OPTIMISM:
         address-format: EVM
         native-symbol: ETH
@@ -41,6 +63,9 @@ walletradar:
           - "0x0b2c639c533813f4aa9d7837caf62653d097ff85"
           - "0x94b008aa00579c1307b0ef2c499ad98a8ce58e58"
           - "0x01bff41798a0bcf287b996046ca68b395dbc1071"
+        token-overrides:
+          # OP-stack canonical WETH (fallback symbol/decimals when the explorer omits them).
+          "0x4200000000000000000000000000000000000006": { symbol: "WETH", decimals: 18 }
       BASE:
         address-format: EVM
         native-symbol: ETH
@@ -53,6 +78,9 @@ walletradar:
           - "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
           - "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2"
           - "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca"
+        token-overrides:
+          # Base native USDC (fallback symbol/decimals when the explorer omits them).
+          "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": { symbol: "USDC", decimals: 6 }
       UNICHAIN:
         address-format: EVM
         native-symbol: ETH
@@ -163,11 +191,41 @@ walletradar:
         evm-wallet-supported: true
         usd-stable-contracts:
           - "0xb8ce59fc3717ada4c02eadf9682a9e934f625ebb"
+        token-overrides:
+          # Plasma USDT0 (builder ERC-20 evidence decoding fallback).
+          "0xb8ce59fc3717ada4c02eadf9682a9e934f625ebb": { symbol: "USDT0", decimals: 6 }
       SOLANA:
         address-format: SOLANA
+        native-symbol: SOL
+        # Wrapped SOL (wSOL) SPL mint — accounting-identical to native SOL (wrap/unwrap has no basis impact).
+        # NOTE: base-58 is case-sensitive; NetworkRegistry lowercases contract keys and lowercases the
+        # query side symmetrically, so stablecoin/wrapped-native membership checks still match.
+        wrapped-native:
+          contract: "So11111111111111111111111111111111111111112"
+          symbol: WSOL
         wallet-supported: true
         evm-wallet-supported: false
+        usd-stable-contracts:
+          - "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"  # USDC (SPL)
+          - "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"  # USDT (SPL)
+        # SPL majors seeded because Helius frequently omits symbol/decimals on parsed payloads.
+        # base58 is case-sensitive → keys are matched exactly (never lowercased).
+        token-overrides:
+          "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": { symbol: "USDC", decimals: 6 }
+          "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": { symbol: "USDT", decimals: 6 }
+          "So11111111111111111111111111111111111111112": { symbol: "SOL", decimals: 9 }
       TON:
         address-format: TON
         wallet-supported: true
         evm-wallet-supported: false
+        native-symbol: TON
+        usd-stable-contracts:
+          - "EQCxE6mUtQJKFnGfaROTKOt1lZbDiiX1kCixRv7Nw2Id_sDs"  # USD₮ (Tether jetton master, TON)
+        # Jetton masters keyed in any canonical form (friendly EQ…/UQ… or raw workchain:hex);
+        # TonAddressCanonicalizer resolves cross-form matches (keys are NOT lowercased). Load-bearing
+        # decimals only — RWA/xStock symbols now resolve live via the TON jetton metadata resolver.
+        token-overrides:
+          "EQCxE6mUtQJKFnGfaROTKOt1lZbDiiX1kCixRv7Nw2Id_sDs": { symbol: "USDT", decimals: 6 }  # USDT-TON
+          "0:ad0f6fbbab11e1428361c6b8b6252cc7f9d9665aa298083b65119a918b7fb9ea": { decimals: 8 }  # AMZNx (xStock)
+          "0:5bb0b607e6c0fbe2060ee033a88f442c1da34bf3534b0f5dc07619260f4529fb": { decimals: 8 }  # MSTRx (xStock)
+          "0:3547f2ee4022c794c80ea354b81bb63b5b571dd05ac091b035d19abbadd74ac6": { decimals: 6 }  # XAUT0 (RWA gold)

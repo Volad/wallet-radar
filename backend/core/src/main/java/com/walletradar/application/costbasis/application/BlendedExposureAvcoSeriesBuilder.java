@@ -33,11 +33,16 @@ import java.util.Set;
  *   <li>{@code REALLOCATE_IN} whose {@code correlationId} matches a still-open parked slice withdraws
  *       the restored amount, clamped ≥ 0. An unmatched {@code REALLOCATE_IN} (yield accrual) does not
  *       touch the pool — its quantity is already in the liquid pool.</li>
- *   <li>Only {@code REALLOCATE} participates. {@code DISPOSE}/{@code ACQUIRE} (realized identity
- *       change, e.g. C2 staked derivatives per ADR-054) and {@code CARRY_OUT}/{@code CARRY_IN}
- *       (same-asset corridors) never park — structurally excluding C2 derivatives from the blended
- *       {@code FAMILY:ETH} pool. Additionally the C2 symbol guard is re-applied when consuming the
- *       superset.</li>
+ *   <li>{@code REALLOCATE} <b>and</b> same-family {@code CARRY} participate (RM-1, 2026-07-24). A
+ *       {@code CARRY_OUT} corridor (cross-wallet/cross-chain internal transfer, bridge-out,
+ *       lending-loop collateral) parks its covered qty + basis keyed by {@code correlationId} (or, for
+ *       a bare internal transfer, by {@code lifecycleChainId}) and closes on the matching
+ *       {@code CARRY_IN}, keeping the blended denominator whole through the in-flight leg instead of
+ *       collapsing to a false $0. {@code DISPOSE}/{@code ACQUIRE} (realized identity change, e.g. C2
+ *       staked derivatives per ADR-054) never park. The C2 symbol guard is re-applied when consuming
+ *       the superset so wstETH/weETH/cmETH still never enter the blended {@code FAMILY:ETH} pool
+ *       (whether they arrive as REALLOCATE or CARRY). This relaxation is for the blended denominator
+ *       ONLY — the AVCO/ledger lanes are untouched.</li>
  * </ul>
  *
  * <h2>B-ETH-05 — cross-asset LP-exit slice closure (ADR-061 amendment 2026-07-17)</h2>
@@ -314,24 +319,28 @@ class BlendedExposureAvcoSeriesBuilder {
                 applyReceiptBurnClamp(receiptBurns.get(receiptBurnCursor));
                 receiptBurnCursor++;
             }
-            for (String correlationId : parkedGrossCoveredByCorr.keySet()) {
-                // B-ETH-02 / B-ETH-06 item 3: lending-loop corridors keep their basis-conserving residual
-                // (they use CARRY and normally never enter this REALLOCATE pool; this prefix guard also
-                // protects any edge that did park, so the lending lane stays untouched).
-                if (isLendingLoopCorrelation(correlationId)) {
+            for (String parkKey : parkedGrossCoveredByCorr.keySet()) {
+                // B-ETH-02 / B-ETH-06 item 3: a lending-loop corridor keeps its basis-conserving residual
+                // at terminal. Under RM-1 a lending-loop CARRY corridor now parks (collateral folded while
+                // open) and closes on its LENDING_LOOP_CLOSE/_DECREASE CARRY_IN via unpark; if still open
+                // at terminal this guard preserves the genuinely-locked collateral rather than force-zeroing
+                // it, so the lending lane stays untouched. A same-asset CARRY corridor that already returned
+                // is closed by unpark; a CARRY corridor with NO matching return (bridge leak / dropped
+                // transfer) has no open family-origin pool row and is clamped to zero below (B-ETH-06).
+                if (isLendingLoopCorrelation(parkKey)) {
                     continue;
                 }
-                EthOriginHolding holding = familyOriginHoldingByCorrelationId.get(correlationId);
+                EthOriginHolding holding = familyOriginHoldingByCorrelationId.get(parkKey);
                 if (holding == null) {
-                    pool.remove(correlationId);
+                    pool.remove(parkKey);
                     continue;
                 }
-                ParkedSlice slice = pool.computeIfAbsent(correlationId, ignored -> new ParkedSlice());
+                ParkedSlice slice = pool.computeIfAbsent(parkKey, ignored -> new ParkedSlice());
                 slice.coveredQuantity = zeroIfNull(holding.coveredQuantity()).max(BigDecimal.ZERO);
                 slice.marketBasisUsd = zeroIfNull(holding.marketBasisUsd()).max(BigDecimal.ZERO);
                 slice.netBasisUsd = zeroIfNull(holding.netBasisUsd()).max(BigDecimal.ZERO);
                 if (slice.isClosed()) {
-                    pool.remove(correlationId);
+                    pool.remove(parkKey);
                 }
             }
         }
@@ -364,35 +373,41 @@ class BlendedExposureAvcoSeriesBuilder {
         }
 
         private void applyReallocation(AssetLedgerPoint point) {
-            String correlationId = point.getCorrelationId();
-            if (correlationId == null || correlationId.isBlank()) {
+            String parkKey = parkKey(point);
+            if (parkKey == null) {
                 return;
             }
             AssetLedgerPoint.BasisEffect basisEffect = point.getBasisEffect();
-            if (basisEffect == AssetLedgerPoint.BasisEffect.REALLOCATE_OUT) {
-                park(correlationId, point);
-            } else if (basisEffect == AssetLedgerPoint.BasisEffect.REALLOCATE_IN) {
-                unpark(correlationId, point);
+            // RM-1 (2026-07-24): same-family CARRY_OUT/CARRY_IN corridors are folded into the blended
+            // denominator alongside REALLOCATE (park on OUT, close on the matching IN) so the series
+            // holds through an in-flight cross-wallet/cross-chain transfer, bridge-out, or lending-loop
+            // collateral leg instead of collapsing to a false $0. AVCO/ledger lanes are untouched.
+            if (basisEffect == AssetLedgerPoint.BasisEffect.REALLOCATE_OUT
+                    || basisEffect == AssetLedgerPoint.BasisEffect.CARRY_OUT) {
+                park(parkKey, point);
+            } else if (basisEffect == AssetLedgerPoint.BasisEffect.REALLOCATE_IN
+                    || basisEffect == AssetLedgerPoint.BasisEffect.CARRY_IN) {
+                unpark(parkKey, point);
             }
         }
 
-        private void park(String correlationId, AssetLedgerPoint point) {
+        private void park(String parkKey, AssetLedgerPoint point) {
             BigDecimal coveredQuantity = coveredReallocationQuantity(point);
             BigDecimal marketBasis = absOrZero(point.getCostBasisDeltaUsd());
             BigDecimal netBasis = absOrZero(netCostBasisDelta(point));
             if (coveredQuantity.signum() <= 0 && marketBasis.signum() <= 0 && netBasis.signum() <= 0) {
                 return;
             }
-            ParkedSlice slice = pool.computeIfAbsent(correlationId, ignored -> new ParkedSlice());
+            ParkedSlice slice = pool.computeIfAbsent(parkKey, ignored -> new ParkedSlice());
             slice.coveredQuantity = slice.coveredQuantity.add(coveredQuantity, MC);
             slice.marketBasisUsd = slice.marketBasisUsd.add(marketBasis, MC);
             slice.netBasisUsd = slice.netBasisUsd.add(netBasis, MC);
-            parkedGrossCoveredByCorr.merge(correlationId, coveredQuantity, (existing, added) -> existing.add(added, MC));
+            parkedGrossCoveredByCorr.merge(parkKey, coveredQuantity, (existing, added) -> existing.add(added, MC));
         }
 
-        private void unpark(String correlationId, AssetLedgerPoint point) {
-            ParkedSlice slice = pool.get(correlationId);
-            // Unmatched REALLOCATE_IN (e.g. pure yield accrual) does not touch the pool.
+        private void unpark(String parkKey, AssetLedgerPoint point) {
+            ParkedSlice slice = pool.get(parkKey);
+            // Unmatched REALLOCATE_IN/CARRY_IN (e.g. pure yield accrual, orphan return) does not touch the pool.
             if (slice == null || slice.isClosed()) {
                 return;
             }
@@ -403,7 +418,7 @@ class BlendedExposureAvcoSeriesBuilder {
             slice.marketBasisUsd = slice.marketBasisUsd.subtract(marketBasis, MC).max(BigDecimal.ZERO);
             slice.netBasisUsd = slice.netBasisUsd.subtract(netBasis, MC).max(BigDecimal.ZERO);
             if (slice.isClosed()) {
-                pool.remove(correlationId);
+                pool.remove(parkKey);
             }
         }
 
@@ -590,12 +605,18 @@ class BlendedExposureAvcoSeriesBuilder {
                 return false;
             }
             AssetLedgerPoint.BasisEffect basisEffect = point.getBasisEffect();
+            // RM-1: REALLOCATE (LP / receipt corridors) AND same-family CARRY (internal transfer,
+            // bridge-out, lending-loop collateral) both fold into the blended denominator. CARRY was
+            // previously excluded, which is why an in-flight CARRY corridor floored the series to $0.
             if (basisEffect != AssetLedgerPoint.BasisEffect.REALLOCATE_OUT
-                    && basisEffect != AssetLedgerPoint.BasisEffect.REALLOCATE_IN) {
+                    && basisEffect != AssetLedgerPoint.BasisEffect.REALLOCATE_IN
+                    && basisEffect != AssetLedgerPoint.BasisEffect.CARRY_OUT
+                    && basisEffect != AssetLedgerPoint.BasisEffect.CARRY_IN) {
                 return false;
             }
-            String correlationId = point.getCorrelationId();
-            if (correlationId == null || correlationId.isBlank()) {
+            // A CARRY corridor may carry no correlationId (bare internal transfer); fall back to the
+            // transfer/lifecycle chain id so both legs still share one park key.
+            if (parkKey(point) == null) {
                 return false;
             }
             // Re-apply ONLY the C2 guard when consuming the superset (never the LP-receipt-symbol drop):
@@ -603,6 +624,26 @@ class BlendedExposureAvcoSeriesBuilder {
             // never enter the blended FAMILY:ETH pool. Non-ETH families are unaffected (no C2 concept).
             return !(ETH_FAMILY_IDENTITY.equals(familyIdentity)
                     && AccountingAssetClassificationSupport.isC2DistinctAsset(point.getAssetSymbol()));
+        }
+
+        /**
+         * RM-1: the pool key for a park/unpark leg — the {@code correlationId} when present (LP
+         * corridors, lending-loop {@code lending-loop:{openTxHash}}, bridge {@code bridge:*}), else the
+         * {@code lifecycleChainId} for a bare internal transfer that shares no correlation. Both legs of
+         * one corridor resolve to the same key so the OUT parks and the matching IN closes it. Returns
+         * {@code null} when neither identifier is present (never parks — matches the legacy blank-corr
+         * no-op).
+         */
+        private static String parkKey(AssetLedgerPoint point) {
+            String correlationId = point.getCorrelationId();
+            if (correlationId != null && !correlationId.isBlank()) {
+                return correlationId;
+            }
+            String lifecycleChainId = point.getLifecycleChainId();
+            if (lifecycleChainId != null && !lifecycleChainId.isBlank()) {
+                return lifecycleChainId;
+            }
+            return null;
         }
 
         private static BigDecimal coveredReallocationQuantity(AssetLedgerPoint point) {

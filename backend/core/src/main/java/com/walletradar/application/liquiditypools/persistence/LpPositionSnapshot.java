@@ -38,6 +38,14 @@ public class LpPositionSnapshot {
     private String status;
     private Boolean staked;
 
+    /**
+     * WS-8 concentrated-liquidity capability carried onto the snapshot record: {@code true} for
+     * Solana DLMM/CLMM positions whose closure is snapshot-driven (residual-tolerant). Lets the
+     * refresh service close ghost snapshots without testing the {@code "lp-position:solana:"}
+     * correlation-id prefix or the {@code networkId} (ADR-073). {@code null} for other families.
+     */
+    private Boolean lpConcentrated;
+
     private TokenSide token0;
     private TokenSide token1;
 

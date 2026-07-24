@@ -18,12 +18,78 @@ public class BreakEvenAttributionService {
 
     private static final Logger log = LoggerFactory.getLogger(BreakEvenAttributionService.class);
     private static final String FAMILY_PREFIX = "FAMILY:";
+    private static final String CLUSTER_PREFIX = "CLUSTER:";
+    /**
+     * ADR-062 (Wave 3, AC-8): the intra-cluster loss-floor carve-out applies to attributions whose
+     * source is a staking cluster. Cluster keys follow the {@code CLUSTER:*_STAKING} convention
+     * (see {@link AccountingAssetClassificationSupport#normalizationClusterForSymbol(String)}).
+     */
+    private static final String STAKING_CLUSTER_SUFFIX = "_STAKING";
 
     private final Map<String, String> sourceToTarget;
+    private final Set<String> foldHeldExposureSources;
+    private final OffsetLane offsetLane;
 
     public BreakEvenAttributionService(BreakEvenAttributionLoader loader) {
-        this.sourceToTarget = loader.loadFromClasspath().sourceToTarget();
-        log.info("Loaded break-even attribution: {} source->target mappings", sourceToTarget.size());
+        BreakEvenAttributionLoader.LoadedBreakEvenAttribution loaded = loader.loadFromClasspath();
+        this.sourceToTarget = loaded.sourceToTarget();
+        this.foldHeldExposureSources = loaded.foldHeldExposureSources();
+        this.offsetLane = loaded.offsetLane();
+        log.info("Loaded break-even attribution: {} source->target mappings, {} fold-held-exposure sources, offsetLane={}",
+                sourceToTarget.size(), foldHeldExposureSources.size(), offsetLane);
+    }
+
+    /**
+     * ADR-062 Wave 3 resolution result: the target family, plus whether the resolution went through
+     * a staking cluster (AC-8 loss-floor carve-out) and whether the source's held exposure is folded
+     * into the target's denominator/basis (AC-9 / D8).
+     */
+    public record Attribution(String target, boolean viaStakingCluster, boolean foldHeldExposure) {
+    }
+
+    /**
+     * ADR-062 §2 (Wave 3): full attribution resolution. (1) an explicit {@code FAMILY:*} source
+     * mapping wins; (2) else the symbol's normalization cluster mapping applies when its target
+     * differs from the family; (3) else the family maps to itself. The returned
+     * {@link Attribution#viaStakingCluster()} is {@code true} only when a {@code CLUSTER:*_STAKING}
+     * source drove the resolution onto a different target (AC-8). {@link Attribution#foldHeldExposure()}
+     * reflects the matched source's config flag (AC-9).
+     */
+    public Attribution resolve(String familyIdentity, String representativeSymbol) {
+        if (familyIdentity == null || familyIdentity.isBlank()) {
+            return new Attribution(familyIdentity, false, false);
+        }
+        String explicit = sourceToTarget.get(familyIdentity);
+        if (explicit != null) {
+            boolean redirected = !explicit.equals(familyIdentity);
+            return new Attribution(
+                    explicit,
+                    redirected && isStakingCluster(familyIdentity),
+                    redirected && foldHeldExposureSources.contains(familyIdentity));
+        }
+        String cluster = AccountingAssetClassificationSupport.normalizationClusterForSymbol(representativeSymbol);
+        if (cluster != null) {
+            String target = sourceToTarget.get(cluster);
+            if (target != null && !target.equals(familyIdentity)) {
+                return new Attribution(
+                        target,
+                        isStakingCluster(cluster),
+                        foldHeldExposureSources.contains(cluster));
+            }
+        }
+        return new Attribution(familyIdentity, false, false);
+    }
+
+    private static boolean isStakingCluster(String source) {
+        return source != null && source.startsWith(CLUSTER_PREFIX) && source.endsWith(STAKING_CLUSTER_SUFFIX);
+    }
+
+    /**
+     * ADR-062 (2026-07-21 amendment): the configured effective-cost offset lane
+     * ({@link OffsetLane#NET} default, or {@link OffsetLane#MARKET}).
+     */
+    public OffsetLane offsetLane() {
+        return offsetLane;
     }
 
     /**
@@ -32,21 +98,7 @@ public class BreakEvenAttributionService {
      * family maps to itself. Null/blank {@code familyIdentity} is returned unchanged.
      */
     public String resolveTarget(String familyIdentity, String representativeSymbol) {
-        if (familyIdentity == null || familyIdentity.isBlank()) {
-            return familyIdentity;
-        }
-        String explicit = sourceToTarget.get(familyIdentity);
-        if (explicit != null) {
-            return explicit;
-        }
-        String cluster = AccountingAssetClassificationSupport.normalizationClusterForSymbol(representativeSymbol);
-        if (cluster != null) {
-            String target = sourceToTarget.get(cluster);
-            if (target != null && !target.equals(familyIdentity)) {
-                return target;
-            }
-        }
-        return familyIdentity;
+        return resolve(familyIdentity, representativeSymbol).target();
     }
 
     /**

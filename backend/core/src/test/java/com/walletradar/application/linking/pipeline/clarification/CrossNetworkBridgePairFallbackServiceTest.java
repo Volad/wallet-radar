@@ -314,6 +314,168 @@ class CrossNetworkBridgePairFallbackServiceTest {
         verify(normalizedTransactionRepository, never()).saveAll(any());
     }
 
+    // FB-04: peg-neutral stablecoin corridor. Evidence anchors (audit §A.2 "Cross-network pairs the
+    // linker missed") are carried as test-only hash prefixes — never as runtime decision keys.
+    @Test
+    @DisplayName("FB-04: USDT0 OPTIMISM -> USDC UNICHAIN links as value-equivalent stablecoins (cross-symbol, unpriced inbound endpoint, cc=false settlement carry, $0 realized)")
+    void pegStablecoinCrossSymbolUsdt0ToUsdcAcrossNetworks() {
+        // anchor: OUT 0xc9052c41… OPTIMISM USDT0 1.0 -> IN 0x6c233a93… UNICHAIN USDC 0.9968, 2s
+        String outHash = anchoredHash("c9052c41");
+        String inHash = anchoredHash("6c233a93");
+        NormalizedTransaction outbound = bridgeLeg(
+                "out", outHash, NetworkId.OPTIMISM, NormalizedTransactionType.BRIDGE_OUT,
+                "USDT0", "-1.0", Instant.parse("2026-02-01T10:00:00Z"));
+        // UNICHAIN inbound has no USD quote (bridge endpoint without a live price): quantity is the
+        // $1 proxy, so value-equivalence still resolves.
+        NormalizedTransaction inbound = bridgeLeg(
+                "in", inHash, NetworkId.UNICHAIN, NormalizedTransactionType.BRIDGE_IN,
+                "USDC", "0.9968", Instant.parse("2026-02-01T10:00:02Z"));
+        inbound.setMissingDataReasons(new ArrayList<>(List.of("BRIDGE_ON_CHAIN_LEG_NOT_FOUND")));
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(inbound), List.of(outbound));
+
+        int paired = service.reconcileOrphanInbounds(25);
+
+        assertThat(paired).isEqualTo(1);
+        String expectedCorrelation = "bridge:crossnet:" + outHash;
+        assertThat(outbound.getCorrelationId()).isEqualTo(expectedCorrelation);
+        assertThat(inbound.getCorrelationId()).isEqualTo(expectedCorrelation);
+        // Distinct families (USDT vs USDC) → asset-converting settlement carry, not plain continuity.
+        assertThat(outbound.getContinuityCandidate()).isFalse();
+        assertThat(inbound.getContinuityCandidate()).isFalse();
+        assertThat(outbound.getMatchedCounterparty()).isEqualTo(inHash);
+        assertThat(inbound.getMatchedCounterparty()).isEqualTo(outHash);
+        // Both principals retagged to price-less TRANSFER → basis carry, no market SELL/BUY.
+        assertThat(outbound.getFlows().getFirst().getRole()).isEqualTo(NormalizedLegRole.TRANSFER);
+        assertThat(inbound.getFlows().getFirst().getRole()).isEqualTo(NormalizedLegRole.TRANSFER);
+        assertThat(outbound.getFlows().getFirst().getUnitPriceUsd()).isNull();
+        assertThat(inbound.getFlows().getFirst().getUnitPriceUsd()).isNull();
+    }
+
+    @Test
+    @DisplayName("FB-04: USDT0 -> USDC pair 24m apart links (inside the 2h stablecoin window, beyond the 180s cross-asset window)")
+    void pegStablecoinCrossSymbolLinksWithinTwoHourWindow() {
+        // anchor: OUT 0xd83708e3… OPTIMISM USDT0 895.04 -> IN 0xbeac83e9… UNICHAIN USDC 895.05, 24m
+        String outHash = anchoredHash("d83708e3");
+        String inHash = anchoredHash("beac83e9");
+        NormalizedTransaction outbound = bridgeLeg(
+                "out", outHash, NetworkId.OPTIMISM, NormalizedTransactionType.BRIDGE_OUT,
+                "USDT0", "-895.04", Instant.parse("2026-02-01T10:00:00Z"));
+        NormalizedTransaction inbound = bridgeLeg(
+                "in", inHash, NetworkId.UNICHAIN, NormalizedTransactionType.BRIDGE_IN,
+                "USDC", "895.05", Instant.parse("2026-02-01T10:24:00Z"));
+        inbound.setMissingDataReasons(new ArrayList<>(List.of("BRIDGE_ON_CHAIN_LEG_NOT_FOUND")));
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(inbound), List.of(outbound));
+
+        int paired = service.reconcileOrphanInbounds(25);
+
+        assertThat(paired).isEqualTo(1);
+        assertThat(inbound.getCorrelationId()).isEqualTo("bridge:crossnet:" + outHash);
+    }
+
+    @Test
+    @DisplayName("FB-04: USDC OPTIMISM -> USDC BASE links as same-symbol continuity (cc=true), small value")
+    void pegStablecoinSameSymbolOptimismToBaseSmall() {
+        // anchor: OUT 0xce9a7182… OPTIMISM USDC 2.0 -> IN 0x436255b4… BASE USDC 1.998, 2s
+        String outHash = anchoredHash("ce9a7182");
+        String inHash = anchoredHash("436255b4");
+        NormalizedTransaction outbound = bridgeLeg(
+                "out", outHash, NetworkId.OPTIMISM, NormalizedTransactionType.BRIDGE_OUT,
+                "USDC", "-2.0", Instant.parse("2026-02-01T10:00:00Z"));
+        NormalizedTransaction inbound = bridgeLeg(
+                "in", inHash, NetworkId.BASE, NormalizedTransactionType.BRIDGE_IN,
+                "USDC", "1.998", Instant.parse("2026-02-01T10:00:02Z"));
+        inbound.setMissingDataReasons(new ArrayList<>(List.of("BRIDGE_ON_CHAIN_LEG_NOT_FOUND")));
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(inbound), List.of(outbound));
+
+        int paired = service.reconcileOrphanInbounds(25);
+
+        assertThat(paired).isEqualTo(1);
+        assertThat(outbound.getCorrelationId()).isEqualTo("bridge:crossnet:" + outHash);
+        assertThat(inbound.getCorrelationId()).isEqualTo("bridge:crossnet:" + outHash);
+        assertThat(outbound.getContinuityCandidate()).isTrue();
+        assertThat(inbound.getContinuityCandidate()).isTrue();
+        assertThat(outbound.getFlows().getFirst().getRole()).isEqualTo(NormalizedLegRole.TRANSFER);
+        assertThat(inbound.getFlows().getFirst().getRole()).isEqualTo(NormalizedLegRole.TRANSFER);
+    }
+
+    @Test
+    @DisplayName("FB-04: USDC OPTIMISM -> USDC BASE links for a larger 6m-apart pair (cc=true)")
+    void pegStablecoinSameSymbolOptimismToBaseLarge() {
+        // anchor: OUT 0x3acfa497… OPTIMISM USDC 896.03 -> IN 0xc17de389… BASE USDC 895.98, 6m
+        String outHash = anchoredHash("3acfa497");
+        String inHash = anchoredHash("c17de389");
+        NormalizedTransaction outbound = bridgeLeg(
+                "out", outHash, NetworkId.OPTIMISM, NormalizedTransactionType.BRIDGE_OUT,
+                "USDC", "-896.03", Instant.parse("2026-02-01T10:00:00Z"));
+        NormalizedTransaction inbound = bridgeLeg(
+                "in", inHash, NetworkId.BASE, NormalizedTransactionType.BRIDGE_IN,
+                "USDC", "895.98", Instant.parse("2026-02-01T10:06:00Z"));
+        inbound.setMissingDataReasons(new ArrayList<>(List.of("BRIDGE_ON_CHAIN_LEG_NOT_FOUND")));
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(inbound), List.of(outbound));
+
+        int paired = service.reconcileOrphanInbounds(25);
+
+        assertThat(paired).isEqualTo(1);
+        assertThat(inbound.getCorrelationId()).isEqualTo("bridge:crossnet:" + outHash);
+        assertThat(inbound.getContinuityCandidate()).isTrue();
+    }
+
+    @Test
+    @DisplayName("FB-04 guardrail: value-mismatched stablecoin pair (37x) abstains — no mislink")
+    void pegStablecoinValueMismatchAbstains() {
+        NormalizedTransaction outbound = bridgeLeg(
+                "out", anchoredHash("aaaa1111"), NetworkId.OPTIMISM, NormalizedTransactionType.BRIDGE_OUT,
+                "USDC", "-1.0", Instant.parse("2026-02-01T10:00:00Z"));
+        NormalizedTransaction inbound = bridgeLeg(
+                "in", anchoredHash("bbbb2222"), NetworkId.BASE, NormalizedTransactionType.BRIDGE_IN,
+                "USDC", "37.0", Instant.parse("2026-02-01T10:00:02Z"));
+        inbound.setMissingDataReasons(new ArrayList<>(List.of("BRIDGE_ON_CHAIN_LEG_NOT_FOUND")));
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(inbound), List.of(outbound));
+
+        int paired = service.reconcileOrphanInbounds(25);
+
+        assertThat(paired).isZero();
+        verify(normalizedTransactionRepository, never()).saveAll(any());
+    }
+
+    @Test
+    @DisplayName("FB-04 guardrail: stablecoin pair outside the 2h window abstains")
+    void pegStablecoinOutsideTwoHourWindowAbstains() {
+        NormalizedTransaction outbound = bridgeLeg(
+                "out", anchoredHash("cccc3333"), NetworkId.OPTIMISM, NormalizedTransactionType.BRIDGE_OUT,
+                "USDT0", "-895.04", Instant.parse("2026-02-01T07:00:00Z"));
+        NormalizedTransaction inbound = bridgeLeg(
+                "in", anchoredHash("dddd4444"), NetworkId.UNICHAIN, NormalizedTransactionType.BRIDGE_IN,
+                "USDC", "895.05", Instant.parse("2026-02-01T10:00:00Z"));
+        inbound.setMissingDataReasons(new ArrayList<>(List.of("BRIDGE_ON_CHAIN_LEG_NOT_FOUND")));
+
+        when(mongoOperations.find(any(Query.class), eq(NormalizedTransaction.class)))
+                .thenReturn(List.of(inbound), List.of(outbound));
+
+        int paired = service.reconcileOrphanInbounds(25);
+
+        assertThat(paired).isZero();
+        verify(normalizedTransactionRepository, never()).saveAll(any());
+    }
+
+    private static String anchoredHash(String prefix) {
+        StringBuilder builder = new StringBuilder("0x").append(prefix.toLowerCase());
+        while (builder.length() < 66) {
+            builder.append('0');
+        }
+        return builder.toString();
+    }
+
     private static NormalizedTransaction bridgeLegWithUsd(
             String id,
             String txHash,
